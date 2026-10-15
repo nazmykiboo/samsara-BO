@@ -1,0 +1,81 @@
+# Compose file untuk production di VPS. HANYA berisi service aplikasi (api, web) --
+# SENGAJA TIDAK membuat service Postgres baru: CLAUDE.md (§ Rencana infra VPS) sudah
+# memutuskan pakai INSTANCE Postgres yang SUDAH JALAN di VPS (container `postgres:16`
+# existing, punya n8n juga), database baru `samsara` dibuat DI DALAM instance itu --
+# bukan instance terpisah. Begitu juga n8n dan VNC desktop (dorowu/ubuntu-desktop-lxde-vnc)
+# TIDAK disentuh sama sekali oleh file ini.
+#
+# !! BELUM DIVERIFIKASI LANGSUNG DI VPS !! -- ditulis tanpa akses SSH ke VPS (lihat
+# laporan sesi ini). SEBELUM `docker compose -f docker-compose.prod.yml up -d`:
+#   1. Cek nama network Docker yang dipakai container Postgres existing:
+#      `docker inspect <nama-container-postgres> | grep -A5 Networks`
+#      Ganti nilai `EXISTING_NETWORK_NAME` di bawah (atau isi env var itu di shell)
+#      supaya cocok PERSIS -- kalau beda, container app ini tidak akan bisa
+#      menjangkau Postgres sama sekali.
+#   2. Cek nama/hostname container Postgres itu sendiri (dipakai sebagai DB_HOST),
+#      ganti default "postgres" di bawah kalau beda.
+#   3. Pastikan database `samsara` SUDAH dibuat di instance itu (lihat langkah
+#      terpisah "buat database baru" di laporan) SEBELUM container `api` start --
+#      migrate.ts akan gagal connect kalau database-nya belum ada.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: samsara-api:latest
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-samsara}
+      PORT: 4000
+    networks:
+      - default
+      - existing_vps_network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: samsara-web:latest
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      # Cuma web yang perlu nyambung ke luar (lewat Nginx Proxy Manager) -- api
+      # TIDAK di-expose ke luar sama sekali, cuma bisa diakses dari network internal
+      # compose ini (lewat proxy /api di nginx.conf milik image web).
+      - "127.0.0.1:8080:80"
+    networks:
+      - default
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+        reservations:
+          memory: 32M
+
+networks:
+  default:
+  # Network Docker yang SUDAH ADA di VPS, dipakai container Postgres existing --
+  # HARUS diganti ke nama sebenarnya (lihat catatan di atas), ini CUMA placeholder.
+  existing_vps_network:
+    external: true
+    name: ${EXISTING_NETWORK_NAME:-vps_default}
