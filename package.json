@@ -1,0 +1,25 @@
+{
+  "name": "samsara-backoffice",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Backoffice modular untuk Samsara (F&B) — modul pertama: Inventory.",
+  "workspaces": [
+    "core",
+    "modules/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w apps/api",
+    "migrate": "npm run migrate -w apps/api",
+    "import:harga-jual": "npm run import:harga-jual -w apps/api --",
+    "seed:owner": "npm run seed:owner -w apps/api",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,10 @@
+# Local dev. Database TIDAK di sini — keputusan final: PostgreSQL native yang
+# terinstal langsung di mesin (Homebrew, lokal di localhost:5432), bukan
+# Docker. Lihat CLAUDE.md § 3 dan docs/architecture-decisions.md § 1 untuk
+# alasannya.
+#
+# File ini disiapkan untuk service pendukung lain di masa depan (bukan
+# database) yang memang lebih praktis dijalankan via container di lokal.
+# Belum ada service yang didaftarkan di sini.
+
+services: {}

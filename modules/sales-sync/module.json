@@ -1,0 +1,71 @@
+{
+  "name": "sales-sync",
+  "version": "0.1.0",
+  "description": "Arsip data sinkronisasi penjualan dari platform delivery (Shopee/GrabFood/GoFood) dan POS Majoo, lalu pemetaan ke menu internal Samsara.",
+  "enabled": true,
+  "dependsOn": [],
+  "tablePrefix": "salessync_",
+  "tables": [
+    "salessync_log_penjualan",
+    "salessync_transaksi",
+    "salessync_raw_majoo",
+    "salessync_biaya_platform",
+    "salessync_item_mapping",
+    "salessync_platform_channel_map",
+    "salessync_settings"
+  ],
+  "api": {
+    "basePath": "/api/sales-sync",
+    "endpoints": [
+      {
+        "method": "POST",
+        "path": "/import/log-penjualan",
+        "description": "Import export harian log penjualan per baris item ke arsip salessync_log_penjualan. Body BUKAN JSON: teks CSV MENTAH dengan header Content-Type: text/csv (body parser express.text() dipasang khusus di route ini, limit 15mb -- limit express.json() global 100kb di core/src/server/build-server.ts SENGAJA tidak dinaikkan supaya tidak berdampak ke modul lain, dan repo ini tidak pakai multer). Header CSV wajib: transaction_date (M/D/YYYY, diubah ke YYYY-MM-DD sebagai STRING tanpa objek Date supaya tidak kena geser timezone), transaction_time (H:MM -> HH:MM:00), platform, order_id, item_name, menu_id, quantity, item_type, parent_item, unique_key, inv_status. Upsert per baris ON CONFLICT (unique_key); processed_at SENGAJA tidak ikut di-overwrite supaya import ulang file yang sama tidak mereset status sudah-diproses. Satu baris gagal (mis. quantity bukan angka) TIDAK menghentikan baris lain -- tiap insert dilindungi SAVEPOINT, kegagalan dicatat di errors[] dengan nomor baris CSV-nya. Setelah semua baris selesai, antrian salessync_item_mapping otomatis disegarkan dari arsip log (kombinasi platform + menu_id baru masuk sebagai status 'belum_dipetakan', baris log tanpa menu_id dilewati). Response: {dibuat, diperbarui, dilewati, errors[{baris, pesan}]} -- 'dilewati' = baris yang isinya identik persis dengan yang sudah ada (dibedakan lewat trik xmax Postgres, bukan cuma tebakan).",
+        "permission": { "action": "sales_sync.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "POST",
+        "path": "/import/transaksi",
+        "description": "Import laporan rekonsiliasi transaksi per platform (income/fee) ke arsip salessync_transaksi. Body teks CSV mentah, Content-Type: text/csv (sama seperti /import/log-penjualan). Hanya 13 kolom BERNAMA yang diproses: platform, platform_order_number, platform_transaction_id, order_time, settled_time, status, gross_amount, total_fees, net_revenue, currency, source, source_id, raw_payload -- 2 kolom TANPA NAMA di akhir header file sumber (artefak export spreadsheet) diabaikan total, lihat COMMENT ON TABLE salessync_transaksi. Angka (gross_amount/total_fees/net_revenue) di sumber pakai pemisah ribuan koma dan dibuang dulu sebelum parseFloat. Waktu (order_time/settled_time) formatnya bervariasi: yang sudah punya offset eksplisit (+07:00 / Z) dipakai apa adanya, yang tanpa offset dianggap waktu lokal Asia/Jakarta dan ditambahi +07:00 eksplisit. raw_payload adalah kolom PENDUKUNG: kalau bukan JSON valid disimpan NULL dan barisnya TETAP diproses (bukan alasan menggagalkan baris). Upsert ON CONFLICT (source_id, platform_order_number) -- BUKAN source_id sendirian: satu source_id = satu email laporan harian berisi banyak order, lihat COMMENT ON COLUMN salessync_transaksi.source_id. Response sama seperti /import/log-penjualan.",
+        "permission": { "action": "sales_sync.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "POST",
+        "path": "/import/raw-majoo",
+        "description": "Import export transaksi mentah dari API Majoo POS ke arsip salessync_raw_majoo. Body teks CSV mentah, Content-Type: text/csv. Kolom id dari Majoo dipakai apa adanya sebagai primary key (bukan identity) dan WAJIB bilangan bulat valid -- baris tanpa id valid masuk errors[] dan dilewati. Kolom waktu (transaction_date, payment_date, refund_date) di sumber sudah berakhiran Z (UTC eksplisit, tidak ambigu) jadi dipakai apa adanya. Kolom angka di sumber ini POLOS tanpa pemisah ribuan (beda dari /import/transaksi). is_paid: '1'/'0' dari sumber dicast ke boolean. Nama kolom sumber hasMore/nextPage/_empty dipetakan ke kolom tabel has_more/next_page/empty_field (lihat COMMENT ON COLUMN masing-masing). Upsert ON CONFLICT (id). Response sama seperti /import/log-penjualan.",
+        "permission": { "action": "sales_sync.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "POST",
+        "path": "/import/biaya-platform",
+        "description": "Import rincian biaya/potongan platform (iklan, komisi, adjustment, dll) ke arsip salessync_biaya_platform. Body teks CSV mentah, Content-Type: text/csv. tanggal_closing formatnya bervariasi: yang sudah ada offset (+07:00) dipakai apa adanya, yang cuma tanggal polos (YYYY-MM-DD) disusun jadi tengah malam Asia/Jakarta (T00:00:00+07:00) -- bukan tengah malam UTC yang akan salah geser 7 jam. create_time/synced_at: dipakai apa adanya kalau sudah ada offset/Z, nullable kalau kosong. amount boleh desimal dan boleh NEGATIF (potongan), tanpa pemisah ribuan. transaction_type_raw selalu disimpan sebagai STRING walau isinya kadang cuma angka (di sumber kolom ini campuran angka-sebagai-string dan teks bebas). Upsert ON CONFLICT (id_platform); baris yang id_platform-nya KOSONG di-INSERT biasa TANPA ON CONFLICT dan selalu dihitung 'dibuat' -- Postgres tidak menganggap NULL sama dengan NULL lain di kolom UNIQUE, jadi baris historis tanpa id platform memang tidak bisa di-dedup (lihat COMMENT ON COLUMN salessync_biaya_platform.id_platform). Response sama seperti /import/log-penjualan.",
+        "permission": { "action": "sales_sync.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/item-mapping",
+        "description": "Daftar pemetaan item/kode eksternal platform ke kode_menu internal Samsara, terbaru dulu. Query opsional: status ('belum_dipetakan' | 'dipetakan'), tanpa query = semua baris. KHUSUS status = 'belum_dipetakan': hanya kode eksternal yang punya minimal SATU baris log dengan inv_status = 'OK' yang dimunculkan (filter EXISTS) -- kode eksternal yang cuma muncul di baris historis/SKIP-HISTORIS tidak perlu dipetakan karena tidak akan pernah diproses ke transaksi Penjualan oleh POST /proses. Filter status lain dan daftar tanpa filter TIDAK terpengaruh (tetap apa adanya dari tabel pemetaan). Antrian ini TIDAK diisi manual: sebelum membaca, endpoint menyegarkan dulu antriannya dari arsip salessync_log_penjualan (kombinasi platform + menu_id yang DISTINCT dan belum ada di tabel pemetaan ditambahkan sebagai 'belum_dipetakan' dengan nama item versi PALING BARU; baris log tanpa menu_id dilewati karena tidak ada yang bisa dipetakan). Operasi penyegaran itu idempoten dan TIDAK PERNAH menimpa pemetaan yang sudah dikerjakan manusia (ON CONFLICT DO NOTHING pada platform + kode_eksternal).",
+        "permission": { "action": "sales_sync.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/item-mapping/:id",
+        "description": "Tetapkan kode_menu internal untuk satu baris pemetaan (body {kodeMenu}), status jadi 'dipetakan', dipetakan_oleh/dipetakan_pada diisi dari user yang login. 400 kalau kodeMenu kosong/bukan string, 404 kalau baris pemetaan tidak ada. SENGAJA TIDAK memvalidasi bahwa kodeMenu benar-benar ada di modul Inventory (tidak ada panggilan HTTP ke Inventory di endpoint ini): validasinya terjadi implisit saat POST /proses benar-benar memanggil API Inventory, dan kode yang salah dilaporkan sebagai order 'gagal' di response proses tanpa menandai processed_at (bisa dicoba lagi setelah pemetaannya dikoreksi). Menu juga bisa dinonaktifkan kapan pun SETELAH dipetakan, jadi validasi di sini tidak akan memberi jaminan apa pun.",
+        "permission": { "action": "sales_sync.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/belum-diproses",
+        "description": "READ-ONLY. Daftar baris arsip salessync_log_penjualan yang BELUM diproses jadi transaksi Penjualan Inventory (inv_status = 'OK' DAN processed_at IS NULL) -- untuk ditampilkan sebagai histori 'belum pengaruh stok' di halaman Riwayat Transaksi. Endpoint ini TIDAK menulis apa pun: tidak mengubah processed_at baris mana pun, tidak membuat transaksi Inventory, tidak menyentuh antrian pemetaan (BEDA dari POST /proses yang menulis -- yang itu menandai processed_at dan mengurangi stok). Karena murni baca, koneksinya cuma pool.connect() + finally release(), tanpa transaksi. Kriteria barisnya IDENTIK dengan yang dibaca POST /proses, jadi isi daftar ini = himpunan yang akan ikut kalau proses dijalankan. Query opsional: tanggal_mulai & tanggal_selesai (YYYY-MM-DD, inklusif, filter ke transaction_date). KEDUANYA OPSIONAL -- BEDA dari POST /proses yang MEWAJIBKAN tanggalMulai: pengaman wajib-tanggal di sana ada karena /proses bisa memicu pengurangan stok untuk seluruh riwayat sekaligus, sedangkan endpoint ini tidak punya risiko itu. Tanpa query sama sekali, SELURUH baris belum-diproses dikembalikan tanpa batas tanggal -- juga BEDA dari GET /api/inventory/transaksi/penjualan yang default 30 hari terakhir, karena tujuannya beda: endpoint Inventory itu untuk operasional harian, yang ini untuk visibilitas arsip yang mungkin sengaja ditahan lama (mis. order sebelum tanggal go-live), justru baris tua itulah yang perlu terlihat. transaction_date dikembalikan lewat to_char(...,'YYYY-MM-DD') sebagai STRING, bukan kolom DATE mentah (driver pg mengubah DATE jadi objek Date yang bisa menggeser tanggal kalender) -- alasan sama seperti di POST /proses. Response FLAT PER BARIS log, TIDAK dikelompokkan per order: [{platform, orderId, tanggal, menuId, itemName, quantity}], urut transaction_date DESC lalu platform, order_id. Satu order berisi 2 baris menu = 2 objek response; pengelompokan per order diserahkan ke frontend kalau tampilannya perlu.",
+        "permission": { "action": "sales_sync.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "POST",
+        "path": "/proses",
+        "description": "Ubah arsip log penjualan jadi transaksi Penjualan di modul Inventory. Body JSON {tanggalMulai: \"YYYY-MM-DD\"} WAJIB diisi (cukup express.json() global, tidak pakai body parser khusus seperti endpoint import CSV): kalau kosong atau formatnya salah, request DITOLAK 400 dengan pesan 'Isi tanggal mulai untuk menghindari memproses seluruh data historis ke stok sekaligus.' SEBELUM satu query pun dijalankan. Pengaman ini wajib karena arsip log berisi ribuan baris penjualan historis -- tanpa batas tanggal, satu klik 'Proses Sinkronisasi' bisa memicu transaksi Penjualan (dan pengurangan stok) untuk seluruh riwayat sekaligus. Order yang transaction_date-nya < tanggalMulai DILEWATI dari pengurangan stok (masuk kategori dilewatiSebelumTanggalMulai di response) dan processed_at-nya TIDAK ditandai (tetap NULL) -- bisa ditangkap lagi di panggilan /proses berikutnya kalau tanggalMulai dipilih lebih awal, jadi kesalahan pilih tanggal bisa dikoreksi, bukan keputusan satu arah. Konsekuensinya: order sebelum tanggalMulai akan terus terbaca ulang di tiap panggilan /proses (overhead kecil, arsip ini historis dan terbatas, bukan tumbuh terus setelah go-live). Cek tanggal ini dilakukan PALING PERTAMA, sebelum cek pemetaan item dan cek channel. Mengambil baris salessync_log_penjualan dengan inv_status = 'OK' DAN processed_at IS NULL, dikelompokkan per order (platform + transaction_date + order_id). Lokasi tujuan diambil dari salessync_settings.default_location_id (BUKAN dari request -- tidak ada parameter lokasi di endpoint ini), sumber transaksi diambil dari salessync_platform_channel_map, no_referensi = order_id platform. Pemanggilan ke Inventory lewat HTTP (POST /api/inventory/transaksi/penjualan) memakai Authorization header request ini, BUKAN import domain function -- aturan isolasi antar modul di CLAUDE.md. BUKAN TRANSAKSI ATOMIK: satu transaksi database TERPISAH per order, sekuensial; order yang gagal TIDAK menghentikan order lain dan TIDAK menandai processed_at (otomatis ikut lagi di proses berikutnya). Order dilewati UTUH (tidak sebagian) kalau ada minimal 1 baris yang menu_id-nya kosong atau belum terpetakan -> dilewatiBelumTerpetakan; atau kalau platform mentahnya belum ada di salessync_platform_channel_map -> channelTidakDikenal (kategori terpisah). Order yang sukses ditandai processed_at = now() dan dapat 1 baris core_audit_log (table_name inventory_transaksi_penjualan, field_name 'created_via', new_value 'sales-sync', user_id = pemicu proses) -- meniru precedent POST /pengajuan-libur/override di modul HR. KETERBATASAN YANG DIKETAHUI: baris item_type = 'refund' yang kebetulan inv_status-nya 'OK' dan sudah terpetakan akan tetap MENGURANGI stok seperti penjualan biasa, karena modul Inventory tidak punya konsep refund/retur (createPenjualan hanya pernah mengurangi stok). Dibiarkan apa adanya dengan sengaja -- memperbaikinya butuh domain logic baru di Inventory. Response: {transaksiDibuat, barisDiproses, dilewatiSebelumTanggalMulai[{platform, orderId, tanggal}] (field BARU), dilewatiBelumTerpetakan[{platform, orderId, tanggal}], channelTidakDikenal[...], gagal[{platform, orderId, tanggal, pesan}]}.",
+        "permission": { "action": "sales_sync.manage", "roles": ["owner", "manajer_ops"] }
+      }
+    ]
+  },
+  "migrationsDir": "src/db/migrations"
+}

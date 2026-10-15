@@ -1,0 +1,477 @@
+{
+  "name": "inventory",
+  "version": "0.9.0",
+  "description": "Manajemen stok, resep, HPP, dan transaksi bahan baku untuk outlet Samsara.",
+  "enabled": true,
+  "dependsOn": [],
+  "tablePrefix": "inventory_",
+  "tables": [
+    "inventory_items",
+    "inventory_sales_channel",
+    "inventory_settings",
+    "inventory_kategori_item",
+    "inventory_satuan",
+    "inventory_resep_produksi",
+    "inventory_resep_produksi_baris",
+    "inventory_menu",
+    "inventory_menu_resep_baris",
+    "inventory_paket_menu_baris",
+    "inventory_stock_ledger",
+    "inventory_transaksi_pembelian",
+    "inventory_transaksi_pembelian_baris",
+    "inventory_transaksi_produksi",
+    "inventory_transaksi_penjualan",
+    "inventory_transaksi_penjualan_baris",
+    "inventory_transaksi_transfer",
+    "inventory_transaksi_transfer_baris",
+    "inventory_transaksi_mutasi_lain",
+    "inventory_transaksi_mutasi_lain_baris",
+    "inventory_transaksi_opname",
+    "inventory_transaksi_opname_baris",
+    "inventory_min_stok_lokasi",
+    "inventory_permintaan_transfer",
+    "inventory_channel_komisi",
+    "inventory_menu_harga_channel",
+    "inventory_kategori_menu",
+    "inventory_menu_lokasi",
+    "inventory_menu_channel_visibilitas",
+    "inventory_modifier_grup",
+    "inventory_modifier_opsi",
+    "inventory_menu_modifier_grup",
+    "inventory_insight_rules"
+  ],
+  "api": {
+    "basePath": "/api/inventory",
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/status",
+        "description": "Health check modul. Butuh login, semua role boleh.",
+        "permission": { "action": "inventory.status", "roles": ["owner", "manajer_ops", "supervisor", "staf"] }
+      },
+      {
+        "method": "GET",
+        "path": "/items/:kode/hpp",
+        "description": "Biaya per satuan resep untuk satu item (rekursif untuk setengah_jadi). Semua role login boleh akses; field biaya di-strip untuk supervisor/staf (permission hpp.lihat_harga). Metode HPP: ?metode= cuma dipakai kalau role owner/manajer_ops (resolveHppMethod), role lain selalu pakai default global (lihat pengaturan.manage)."
+      },
+      {
+        "method": "GET",
+        "path": "/menu/:kode/hpp",
+        "description": "HPP per porsi, food_cost_pct, margin untuk satu menu (dasar/paket), PLUS breakdown 'channels' (array {channel, hargaJual, foodCostPct, markupPct, marginPct, status, isVisible}) untuk SEMUA channel penjualan aktif, termasuk yang belum diisi harga (status 'belum_diisi'). status 'pending_data' kalau ada bahan datanya belum lengkap -- field pct per channel ikut null tapi hargaJual tetap tampil. Field hpp_per_porsi/food_cost_pct/margin (top-level, legacy, diisi dari channel Offline) dan foodCostPct/markupPct/marginPct per channel di-strip untuk supervisor/staf -- harga_jual/hargaJual TETAP tampil semua role. Field isVisible per channel (tayang/tidak di channel itu, sumber inventory_menu_channel_visibilitas dengan semantik 'tidak ada baris = tayang') TETAP tampil semua role -- itu info operasional, bukan data harga."
+      },
+      {
+        "method": "PATCH",
+        "path": "/menu/:kode/harga-jual",
+        "description": "LEGACY: ubah harga jual satu menu di kolom global inventory_menu.harga_jual (belum per-channel). Owner saja. Dicatat ke core_audit_log.",
+        "permission": { "action": "harga_jual.edit", "roles": ["owner"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/menu/:kode/harga-channel",
+        "description": "Upsert harga jual satu menu untuk satu channel penjualan (body {channel, hargaJual}). Channel harus channel aktif di inventory_sales_channel. Owner saja. Dicatat ke core_audit_log (table inventory_menu_harga_channel).",
+        "permission": { "action": "harga_jual.edit", "roles": ["owner"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/menu/harga-channel/batch",
+        "description": "Simpan harga jual BANYAK pasangan menu+channel sekaligus (body {baris: [{kodeMenu, channel, hargaJual}, ...]}), untuk tombol 'Simpan Semua' di grid edit harga. ATOMIK SUNGGUHAN: kalau SATU baris gagal (menu tidak ada / channel nonaktif / harga tidak valid), SELURUH batch di-ROLLBACK dan TIDAK ADA satu pun baris yang tersimpan; response 400 menyebut baris ke-berapa yang gagal ('Baris ke-N (KODE / Channel): <alasan>'). PERHATIAN -- ini SENGAJA BEDA dari pola batch lain di repo ini: POST /jadwal/batch (modul HR) dan endpoint import CSV sales-sync memakai 'transaksi independen per item' (satu item gagal tidak membatalkan item lain), sedangkan endpoint INI all-or-nothing karena diminta owner eksplisit ('simpan semua dalam satu transaksi') -- kalau sebagian tersimpan dan sebagian tidak, user grid tidak tahu bagian mana yang berhasil. JANGAN disamakan dengan pola HR/sales-sync. Body 'baris' wajib array dan tidak boleh kosong (400). Tiap baris divalidasi & dicatat ke core_audit_log oleh logika yang sama dengan PATCH /menu/:kode/harga-channel. Response 200 {disimpan: <jumlah baris>}. Owner saja.",
+        "permission": { "action": "harga_jual.edit", "roles": ["owner"] }
+      },
+      {
+        "method": "GET",
+        "path": "/menu/harga-channel/export",
+        "description": "Unduh SEMUA kombinasi menu aktif x channel penjualan aktif sebagai teks CSV (CROSS JOIN inventory_menu x inventory_sales_channel, LEFT JOIN inventory_menu_harga_channel), urut kode_menu lalu channel. Header 'kode_menu,channel,harga_jual'; kombinasi yang belum pernah diisi harga tetap muncul dengan harga_jual KOSONG (string kosong, bukan 0) supaya kelihatan mana yang belum diisi. Response-nya BODY MENTAH text/csv (Content-Type: text/csv; charset=utf-8 + Content-Disposition attachment), BUKAN JSON. Read-only, tidak menyimpan apa pun. Dipakai sebagai template untuk diedit di spreadsheet lalu dikirim balik ke POST /menu/harga-channel/import. Owner saja.",
+        "permission": { "action": "harga_jual.edit", "roles": ["owner"] }
+      },
+      {
+        "method": "POST",
+        "path": "/menu/harga-channel/import",
+        "description": "PREVIEW import CSV harga per channel -- READ-ONLY, TIDAK MENYIMPAN APA PUN (POST dipakai karena CSV dikirim di body, bukan karena ada perubahan data; tidak ada transaksi DB, cuma SELECT + bandingkan). Body = teks CSV mentah dengan header Content-Type: text/csv (body-parser express.text() khusus route ini, limit 5mb, pola sama seperti endpoint import sales-sync; Content-Type lain -> 400). CSV wajib punya kolom kode_menu, channel, harga_jual di baris header (kalau tidak -> 400). Response 200 array {baris, kodeMenu, channel, hargaLama (null kalau belum pernah diisi), hargaBaru, status, pesan?} -- status 'baru' (belum ada harga), 'berubah', 'sama', atau 'error'. SEMUA baris CSV diproses: baris tidak valid (menu tidak ada, channel nonaktif, harga bukan angka positif) ikut muncul dengan status 'error' + pesan, TIDAK menghentikan baris lain -- sengaja, supaya user lihat seluruh masalah sekali jalan. Harga 0 dianggap error di sini (lebih ketat dari PATCH /menu/:kode/harga-channel yang mengizinkan >= 0) karena di CSV massal 0 nyaris selalu salah ketik. Penyimpanan sungguhan = panggilan TERPISAH ke PATCH /menu/harga-channel/batch (frontend memfilter baris status 'error'/'sama' lebih dulu); kedua endpoint ini TIDAK saling memanggil di sisi backend. Owner saja.",
+        "permission": { "action": "harga_jual.edit", "roles": ["owner"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/menu/:kode/channel/:channel/visibilitas",
+        "description": "Tayangkan/sembunyikan satu menu di satu channel penjualan (body {aktif: boolean}; true = tayang, false = sembunyikan). Channel harus channel aktif di inventory_sales_channel, menu harus ada (404). Upsert ke inventory_menu_channel_visibilitas -- tabel PENGECUALIAN: tidak ada baris = menu TAYANG, jadi aktif=true setara dengan tidak ada baris (barisnya tetap disimpan sebagai jejak diubah_oleh/diubah_pada). TIDAK menyentuh harga jual sama sekali (baik inventory_menu.harga_jual legacy maupun inventory_menu_harga_channel) -- tabel & endpoint harga memang sengaja dipisah dari visibilitas. Perubahan nilai dicatat ke core_audit_log (field 'aktif'). Permission TERPISAH dan LEBIH SEMPIT dari harga_jual.edit/master_menu.edit: owner SAJA, manajer_ops DITOLAK 403 (diminta owner eksplisit).",
+        "permission": { "action": "menu_visibilitas.edit", "roles": ["owner"] }
+      },
+      {
+        "method": "GET",
+        "path": "/menu/:kode/rekomendasi-harga",
+        "description": "Saran harga jual per channel supaya food cost % menu ketemu target (query opsional ?target_food_cost=, default dari pengaturan target_food_cost_persen; ?metode= HPP sama aturan dengan GET .../hpp). Read-only, tidak menyimpan apa pun. HPP pending_data -> hppPerPorsi/hargaDasar null, rekomendasi []. Rumus: hargaDasar = HPP/(target%/100); per channel = (hargaDasar + potongan_tetap)/(1 - persen_komisi/100)."
+      },
+      {
+        "method": "GET",
+        "path": "/stok",
+        "description": "Stok saat ini untuk satu item di satu lokasi. Query wajib: ?item=<kode>&location=<id>.",
+        "permission": {
+          "action": "stok.lihat",
+          "roles": ["owner", "manajer_ops", "supervisor", "staf"],
+          "locationScope": { "supervisor": "own", "staf": "own" }
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/transaksi/pembelian",
+        "description": "Catat pembelian; qty diinput satuan beli, dikonversi otomatis ke satuan resep, stok bertambah.",
+        "permission": {
+          "action": "pembelian.create",
+          "roles": ["owner", "manajer_ops", "supervisor"],
+          "locationScope": { "supervisor": "own" }
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/transaksi/produksi",
+        "description": "Catat produksi; bahan terpakai dari resep x qty_batch, hasil yang masuk stok = hasil_aktual (bukan yield teoretis).",
+        "permission": {
+          "action": "produksi.create",
+          "roles": ["owner", "manajer_ops", "supervisor"],
+          "locationScope": { "supervisor": "own" }
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/transaksi/penjualan",
+        "description": "Catat penjualan; bahan dikurangi sesuai resep menu, paket dipecah ke komponen. Dikonfirmasi owner (2026-09-29): permission mengikuti pola pembelian/produksi. Body menerima field OPSIONAL 'jam' (string 'HH:MM' atau 'HH:MM:SS', kolom TIME dari migrasi 0026, untuk fitur heatmap jam ramai): kalau tidak dikirim disimpan NULL (bukan error, bukan default jam INSERT -- data historis juga NULL). Formatnya TIDAK divalidasi di domain layer, tipe TIME Postgres yang menolak nilai rusak.",
+        "permission": {
+          "action": "penjualan.create",
+          "roles": ["owner", "manajer_ops", "supervisor"],
+          "locationScope": { "supervisor": "own" }
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/transaksi/transfer",
+        "description": "TAHAP 1 (kirim): stok lokasi asal langsung berkurang; qty_terima belum diisi (barang 'dalam perjalanan', lihat GET .../dalam-perjalanan). harga_transfer_per_satuan dihitung sekarang (Skema A kalau antar_entitas). Supervisor cuma boleh kalau locationAsalId lokasi sendiri; staf TIDAK boleh kirim sama sekali.",
+        "permission": {
+          "action": "transfer.kirim",
+          "roles": ["owner", "manajer_ops", "supervisor"],
+          "locationScope": { "supervisor": "own" }
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/transaksi/transfer/:id/terima",
+        "description": "TAHAP 2 (terima): isi qty_terima, tambah stok lokasi tujuan, susut = qty_kirim - qty_terima final di sini. Transfer yang sudah 'diterima' tidak bisa diterima ulang; TIDAK ADA endpoint hapus transfer (pembatalan lewat mutasi_lain). Lingkup lokasi dicek terhadap location_tujuan_id transfer yang sudah ada (bukan dari body) -- custom check di router.ts, bukan locationScope generik.",
+        "permission": { "action": "transfer.terima", "roles": ["owner", "manajer_ops", "supervisor", "staf"] }
+      },
+      {
+        "method": "GET",
+        "path": "/transaksi/transfer/dalam-perjalanan",
+        "description": "Daftar transfer berstatus 'dikirim' (belum diterima) -- nilai barang dalam perjalanan ditampilkan terpisah dari stok. Query opsional: ?locationAsal=&locationTujuan=.",
+        "permission": {
+          "action": "stok.lihat",
+          "roles": ["owner", "manajer_ops", "supervisor", "staf"],
+          "locationScope": { "supervisor": "own", "staf": "own" }
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/transaksi/permintaan-transfer",
+        "description": "Outlet mengajukan permintaan transfer ke lokasi lain (biasanya CK). Body {locationAsalId, locationTujuanId, itemKode, qtyDiminta, tanggalDiminta, catatan?}. Kode human-readable (PT-000123) digenerate otomatis. Staf boleh mengajukan (cuma mengajukan, tidak memindahkan stok) -- beda dari transfer.kirim.",
+        "permission": {
+          "action": "permintaan_transfer.create",
+          "roles": ["owner", "manajer_ops", "supervisor", "staf"],
+          "locationScope": { "supervisor": "own", "staf": "own" }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/transaksi/permintaan-transfer",
+        "description": "Daftar permintaan transfer, dilihat dari sisi CK (permintaan masuk) maupun outlet (permintaan yang diajukan) -- query opsional ?lokasi=<id>&status=diminta|dipenuhi|dibatalkan. Filter lokasi mencocokkan lokasi asal ATAU tujuan.",
+        "permission": {
+          "action": "permintaan_transfer.lihat",
+          "roles": ["owner", "manajer_ops", "supervisor", "staf"],
+          "locationScope": { "supervisor": "own", "staf": "own" }
+        }
+      },
+      {
+        "method": "PATCH",
+        "path": "/transaksi/permintaan-transfer/:id/batalkan",
+        "description": "Batalkan permintaan transfer yang masih berstatus 'diminta' (ditolak kalau sudah 'dipenuhi'/'dibatalkan'). Lingkup lokasi untuk supervisor/staf dicek manual terhadap location_tujuan_id permintaan yang sudah ada di database.",
+        "permission": {
+          "action": "permintaan_transfer.create",
+          "roles": ["owner", "manajer_ops", "supervisor", "staf"],
+          "locationScope": { "supervisor": "own", "staf": "own" }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/laporan/harian",
+        "description": "Laporan harian satu lokasi: menu keluar (terjual) hari itu, pembelian masuk hari itu, permintaan transfer yang diajukan ke CK hari itu, dan item Central Kitchen yang stoknya di bawah min_stok (kondisi SEKARANG, independen dari tanggal/lokasi yang difilter). Query wajib: ?lokasi=<id>&tanggal=<YYYY-MM-DD>. Staf TIDAK boleh (tetap pakai halaman existing).",
+        "permission": {
+          "action": "laporan_harian.lihat",
+          "roles": ["owner", "manajer_ops", "supervisor"],
+          "locationScope": { "supervisor": "own" }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/transaksi/penjualan",
+        "description": "Daftar DETAIL transaksi penjualan per BARIS menu (satu transaksi 2 baris menu -> 2 objek), bukan ringkasan agregat seperti GET /laporan/harian. Query SEMUA opsional: ?tanggal_mulai=&tanggal_selesai= (YYYY-MM-DD, filter h.tanggal BETWEEN; default 30 hari terakhir -- tanggal_selesai kosong = hari ini (CURRENT_DATE), tanggal_mulai kosong = 30 hari sebelum tanggal_selesai), ?channel= (cocok PERSIS/case-sensitive ke kolom sumber, tidak divalidasi ke inventory_sales_channel karena kolom sumber tidak punya FK ke sana), ?kode_menu=, ?lokasi=. Field sumberPencatatan ('manual'|'sinkronisasi') DITURUNKAN dari core_audit_log (field_name 'created_via', new_value 'sales-sync' yang ditulis modul sales-sync) lewat subquery EXISTS, default 'manual' kalau tidak ada jejaknya. Maksimal 200 baris per request (LIMIT tetap, belum ada pola pagination di repo ini). Permission DIPAKAI ULANG dari GET /laporan/harian (laporan_harian.lihat, staf TIDAK boleh); supervisor selalu dibatasi ke lokasinya sendiri walau ?lokasi= tidak dikirim (dipaksa di domain layer, pola sama dengan listJadwalShift di modul hr).",
+        "permission": {
+          "action": "laporan_harian.lihat",
+          "roles": ["owner", "manajer_ops", "supervisor"],
+          "locationScope": { "supervisor": "own" }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/analitik/penjualan",
+        "description": "Analitik penjualan MINGGU INI vs MINGGU LALU per menu. Query SEMUA opsional: ?periode=<YYYY-MM-DD> (tanggal MANA PUN dalam minggu target, Senin-nya dihitung backend -- pola sama dengan ?minggu= di GET /jadwal modul hr; kosong = hari ini menurut CURRENT_DATE database, timezone Asia/Jakarta) dan ?lokasi=<id> (kosong = agregat semua lokasi). Yang dibandingkan QTY PORSI, bukan rupiah (baris penjualan tidak menyimpan nilai uang). Response: {mingguIni, mingguLalu, totalQtyMingguIni, totalQtyMingguLalu, topProduk[], bottomProduk[], heatmapJam, insight[]}. topProduk = 10 teratas by qty minggu ini (cuma yang qty > 0); bottomProduk = 10 terendah dari menu yang punya qty > 0 di salah satu minggu -- menu yang 0 porsi di KEDUA minggu tidak masuk daftar mana pun. persenPerubahan per menu = null (bukan 0/Infinity) kalau qty minggu lalu 0, karena persentase dari nol tidak terdefinisi. insight[] berisi kalimat Bahasa Indonesia siap tampil (urutan: menu turun signifikan, menu naik signifikan, lalu yang masuk/keluar 5 besar terlaris); ambang 'signifikan' DIBACA dari tabel inventory_insight_rules (kode turun_signifikan_persen / naik_signifikan_persen, default 20%, cuma baris aktif = true) -- tidak di-hardcode, owner bisa ubah lewat data. insight = [] kalau semua stabil (teks 'tidak ada perubahan signifikan' itu urusan frontend). heatmapJam = heatmap 'jam ramai' {totalTransaksiMingguIni, transaksiDenganJam, data[]}, scope MINGGU INI SAJA (rentang mingguIni, BUKAN dua minggu seperti field lain di response ini) dan ikut difilter ?lokasi= kalau diisi. data[] SELALU 24 entri {jam, offline, online} untuk jam 0..23 BERURUTAN -- jam tanpa transaksi dikirim bernilai 0, bukan entri hilang, supaya grafik frontend tidak bolong (termasuk jam di luar jam operasional 06.00-21.00). Angkanya QTY TERJUAL (SUM qty baris menu) per jam, dipisah offline vs online berdasarkan kolom `sumber` header: 'Offline' = satu-satunya channel offline (migrasi 0011), semua nilai lain (GrabFood/GoFood/ShopeeFood, dan channel delivery baru di masa depan) masuk 'online'. Sumber jam = kolom jam (TIME, nullable) dari migrasi 0026; baris dengan jam IS NULL TIDAK ikut ke data[] -- artinya SELURUH data historis sebelum migrasi 0026 otomatis tidak muncul di heatmap, dan itu DISENGAJA: jam tidak boleh diperkirakan dari created_at (jam INPUT/INSERT kasir, bukan jam transaksi). Untuk transparansi cakupan itu, totalTransaksiMingguIni = COUNT semua HEADER transaksi minggu ini (bukan baris menu, termasuk yang jam-nya NULL) dan transaksiDenganJam = bagian yang jam-nya terisi, jadi UI bisa menampilkan 'baru X dari Y transaksi yang tercatat jamnya'. Dua angka itu BUKAN gerbang: heatmap tetap dikirim apa adanya walau transaksiDenganJam masih kecil atau 0 (data jam baru mulai terkumpul dari form manual + sales-sync) -- isi nol semua itu kondisi valid, bukan error.",
+        "permission": { "action": "analitik.lihat", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/analitik/operasional",
+        "description": "Tren operasional 8 MINGGU TERAKHIR yang berakhir di minggu ?periode= (indeks 0 = minggu paling lama, indeks terakhir = minggu periode) -- 8 minggu dipilih karena ~2 bulan cukup untuk melihat arah tren dan tetap memuat streak terpanjang yang masuk akal dari inventory_insight_rules. Query opsional ?periode= & ?lokasi= (semantik sama dengan GET /analitik/penjualan). Response {wasteTren[], opnameSelisihTren[], transferSusutTren[], insight[]}: (1) wasteTren per minggu {nilaiTotal, perLokasi[]} -- cuma baris Mutasi Lain dengan qty_change < 0 DAN jenis IN ('waste_rusak','hilang_tidak_diketahui') (kolom jenis, migrasi 0026); jenis staff_meal/sampel/retur_supplier qty-nya juga berkurang tapi BUKAN waste jadi TIDAK ikut dihitung -- ini koreksi dari versi sebelumnya yang menghitung SEMUA qty_change negatif tanpa pandang jenis. Baris historis dengan jenis NULL (sebelum migrasi 0026) otomatis tidak ikut karena tidak match IN (...), disengaja. Nilai rupiah =ABS(qty_change) x inventory_items.harga_master dengan harga_master NULL diperlakukan 0 (baris item pending_data tetap ikut dihitung sebagai nilai 0, tidak error, tidak dibuang); perLokasi selalu di-GROUP BY lokasi juga, jadi kalau ?lokasi= diisi isinya otomatis cuma 1 entri. (2) opnameSelisihTren per lokasi, satu entri siklus per header opname, selisihTotal = SUM(qty_fisik - qty_sistem) dihitung saat query (tidak ada kolom selisih tersimpan), HANYA siklus status 'disetujui' (opname 2 tahap, migrasi 0017 -- draft/ditolak belum/tidak pernah masuk ledger jadi bukan fakta stok), difilter & diurut kronologis ASC pakai diputuskan_at (saat selisih diposting) dan field 'tanggal' di response = tanggal keputusan itu. (3) transferSusutTren per minggu, susutTotal = SUM(qty_kirim - qty_terima) transfer arah CK -> Outlet (core_locations.entitas samsara_ck -> samsara_outlet), HANYA status 'diterima' (transfer 2 tahap, migrasi 0016 -- selama masih 'dikirim' qty_terima NULL, barisnya dikecualikan, BUKAN dianggap susut 0); tren ini sengaja TIDAK ikut difilter ?lokasi= karena satu transfer menyentuh dua lokasi (asal vs tujuan ambigu). insight[] berisi kalimat siap tampil: peringatan waste naik N minggu berturut-turut (ambang waste_streak_minggu, default 3; dicek dari N titik data paling akhir, harus strictly naik dan nilai terakhir > 0) dan selisih opname negatif N siklus berturut-turut per lokasi (ambang opname_selisih_streak, default 2; dilewati kalau siklus yang tersedia kurang dari N -- tidak bikin insight dari data sebagian). Ambang-ambang itu dibaca dari inventory_insight_rules (cuma aktif = true), tidak di-hardcode. insight = [] kalau tidak ada pola yang memicu.",
+        "permission": { "action": "analitik.lihat", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "POST",
+        "path": "/transaksi/mutasi-lain",
+        "description": "Catat penyesuaian stok non-standar (waste, staff meal, sampel, koreksi tambah, dll). Semua role boleh. DUA field header wajib: 'alasan' (TEXT bebas, catatan manusia) DAN 'jenis' (kategori terstruktur, kolom baru migrasi 0026) -- keduanya hidup berdampingan, 'jenis' TIDAK menggantikan 'alasan'. 'jenis' harus salah satu dari 6 nilai: waste_rusak, hilang_tidak_diketahui, staff_meal, sampel, retur_supplier, koreksi_tambah (nilai terakhir ditambahkan migrasi 0027 untuk stok yang BERTAMBAH di luar jalur Pembelian/Produksi/Transfer, mis. stok awal); kosong/di luar daftar dijawab 400 (divalidasi di router DAN di domain createMutasiLain). 'jenis' juga harus KONSISTEN dengan tanda (+/-) qty semua barisnya: 5 jenis pengurangan mewajibkan SEMUA baris qty negatif, 'koreksi_tambah' mewajibkan SEMUA baris qty positif -- kalau tidak cocok dijawab 400 (termasuk otomatis menolak submission dengan baris bertanda CAMPURAN dalam satu panggilan, karena tidak ada 'jenis' yang konsisten untuk campuran). Kolomnya NULLABLE di skema hanya untuk kompatibilitas 1 baris data uji lama -- entri BARU selalu wajib. Dipakai GET /analitik/operasional untuk memisahkan waste sungguhan (waste_rusak + hilang_tidak_diketahui) dari pemakaian lain; koreksi_tambah tidak pernah ikut hitungan waste.",
+        "permission": {
+          "action": "mutasi_lain.create",
+          "roles": ["owner", "manajer_ops", "supervisor", "staf"],
+          "locationScope": { "supervisor": "own", "staf": "own" }
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/transaksi/opname",
+        "description": "TAHAP 1 (input hitungan): qty_sistem snapshot otomatis, status 'draft', stok BELUM berubah. Semua role boleh.",
+        "permission": {
+          "action": "opname.input",
+          "roles": ["owner", "manajer_ops", "supervisor", "staf"],
+          "locationScope": { "supervisor": "own", "staf": "own" }
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/transaksi/opname/:id/keputusan",
+        "description": "TAHAP 2 (keputusan): body {decision: 'setuju'|'tolak'}. 'setuju' memposting selisih ke ledger; 'tolak' tidak mengubah stok. Owner/manajer_ops saja. Draft yang sudah diputuskan tidak bisa diputuskan ulang.",
+        "permission": { "action": "opname.approve", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/transaksi/opname",
+        "description": "Daftar opname, filter opsional ?status=draft|disetujui|ditolak dan/atau ?location=<id>. Izin disamakan dengan opname.approve (dipakai untuk antrian persetujuan), bukan stok.lihat.",
+        "permission": { "action": "opname.approve", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/items",
+        "description": "Daftar SEMUA item (aktif & nonaktif). Semua role login boleh akses (dipakai juga oleh ItemPicker di form transaksi) -- field harga_master di-strip untuk role tanpa permission hpp.lihat_harga, field lain tetap tampil."
+      },
+      {
+        "method": "GET",
+        "path": "/menu",
+        "description": "Daftar SEMUA menu (aktif & nonaktif), termasuk field 'status' (ok|pending_data) dihitung dari logika HPP yang sama dengan GET /menu/:kode/hpp (metode harga_master). Field 'kategoriId' (angka|null, referensi inventory_kategori_menu) dikembalikan di tiap baris supaya frontend bisa menyusun SARAN kode menu otomatis (prefix kode kategori dari GET /kategori-menu + nomor urut, dihitung dari daftar ini) -- tidak ada logika generate kode di backend, itu disengaja. Field 'kategori' berisi NAMA kategori, dibaca dari inventory_kategori_menu lewat kategori_id (fallback ke kolom teks bebas kategori_menu yang sudah deprecated cuma untuk baris historis yang kategori_id-nya NULL). Semua role login boleh akses (sama seperti GET /items dan GET .../hpp) -- tidak ada field harga/HPP di response ini."
+      },
+      {
+        "method": "POST",
+        "path": "/items",
+        "description": "Tambah master item baru.",
+        "permission": { "action": "master_item.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "POST",
+        "path": "/menu",
+        "description": "Tambah master menu baru (header saja). Body {kode, name, kategoriId?, isActive?, lokasiIds?} -- kode & name wajib (keunikannya dijaga constraint UNIQUE database), isActive default true. PERUBAHAN KONTRAK (migrasi 0024): field lama 'kategoriMenu' (teks bebas) DIGANTI 'kategoriId' (angka, FK ke inventory_kategori_menu lewat GET /kategori-menu) -- kategori divalidasi harus ADA & AKTIF (kalau tidak: error 'Kategori menu ... tidak ditemukan atau nonaktif', dipetakan 404 oleh error handler router karena pesannya memuat 'tidak ditemukan'), dan kolom deprecated inventory_menu.kategori_menu TIDAK PERNAH lagi ditulis (dibiarkan NULL untuk menu baru). lokasiIds OPSIONAL dengan semantik tabel PENGECUALIAN inventory_menu_lokasi: tidak dikirim/kosong = menu tayang di SEMUA lokasi (tidak ada baris ditulis); dikirim sebagian = ditulis baris aktif=false untuk setiap lokasi core_locations yang TIDAK disebut; dikirim semua lokasi = tidak ada baris ditulis (sama dengan tidak dikirim). Baris resepnya diisi terpisah lewat PATCH /menu/:kode/resep, jadi menu baru berstatus 'pending_data' di GET /menu sampai resepnya ada. harga_jual (legacy) tidak disentuh endpoint ini. Dicatat ke core_audit_log (table inventory_menu, field 'created'). Permission TERPISAH dari master_item.edit karena menu entitas master yang beda dari item.",
+        "permission": { "action": "master_menu.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "POST",
+        "path": "/menu/:kode/duplikat",
+        "description": "Duplikat menu :kode jadi menu baru. Body {kodeBaru, nameBaru, kategoriId?, isActive?, lokasiIds?} -- field opsionalnya semantiknya PERSIS sama dengan POST /menu (fungsinya memang memanggil createMenu, bukan logika INSERT terpisah). Yang DISALIN cuma baris resep menu sumber (lewat updateMenuResep); yang TIDAK disalin: harga jual legacy & per-channel, visibilitas channel, komposisi paket, dan kategori/lokasi (diambil dari body, bukan dari menu sumber). Menu sumber yang belum punya baris resep tetap bisa diduplikat -- menu baru dibuat kosong, bukan error. 404 kalau :kode tidak ada ('Menu sumber ... tidak ditemukan'). Satu transaksi: kalau penyalinan resep gagal, menu baru ikut di-rollback.",
+        "permission": { "action": "master_menu.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/items/:kode",
+        "description": "Ubah master item (harga_master, purchase_to_recipe_factor, dll). Perubahan harga_master & purchase_to_recipe_factor dicatat ke core_audit_log.",
+        "permission": { "action": "master_item.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/items/:kode/nonaktifkan",
+        "description": "Soft-delete (is_active=false). Ditolak (400) kalau item masih dipakai resep produksi/menu yang AKTIF -- pesan error menyebutkan daftar resep/menu-nya.",
+        "permission": { "action": "master_item.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "PUT",
+        "path": "/min-stok",
+        "description": "Set/ubah ambang batas minimum stok untuk satu item di satu lokasi (upsert, body {itemKode, locationId, minStok}). Dicatat ke core_audit_log (table inventory_min_stok_lokasi).",
+        "permission": { "action": "master_item.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/min-stok",
+        "description": "Daftar semua ambang batas minimum stok yang sudah di-set untuk satu lokasi. Query wajib: ?location=<id>. Permission TERPISAH dari PUT /min-stok (pola view-vs-edit, sama seperti GET /resep-produksi vs POST-nya) -- semua role login boleh LIHAT ambang batas karena dipakai StokPage.tsx untuk menghitung status menipis/habis saat filter lokasi dipilih (computeStatus), termasuk oleh role staf/supervisor yang cuma punya akses baca. Ubah/upsert ambang batas tetap lewat PUT /min-stok yang dibatasi owner/manajer_ops.",
+        "permission": {
+          "action": "min_stok.lihat",
+          "roles": ["owner", "manajer_ops", "supervisor", "staf"]
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/kategori",
+        "description": "Daftar kategori item untuk dropdown master item.",
+        "permission": { "action": "master_item.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "POST",
+        "path": "/kategori",
+        "description": "Tambah kategori item baru. Body {name}.",
+        "permission": { "action": "master_item.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/kategori/:id",
+        "description": "Ubah nama/is_active kategori. Body {name?, isActive?}.",
+        "permission": { "action": "master_item.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/satuan",
+        "description": "Daftar satuan untuk dropdown satuan resep DAN satuan beli di master item (satu daftar dipakai untuk keduanya).",
+        "permission": { "action": "master_item.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "POST",
+        "path": "/satuan",
+        "description": "Tambah satuan baru. Body {name}.",
+        "permission": { "action": "master_item.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/satuan/:id",
+        "description": "Ubah nama/is_active satuan. Body {name?, isActive?}.",
+        "permission": { "action": "master_item.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/kategori-menu",
+        "description": "Daftar SEMUA kategori menu (aktif & nonaktif) dari inventory_kategori_menu, urut urutan_tampil (BUKAN alfabetis -- urutan kategori di daftar menu/kasir itu keputusan bisnis). Tiap baris {id, kode, nama, urutanTampil, aktif}. Field 'kode' (prefix UPPERCASE, mis. BURYAM/PAHE) dipakai frontend sebagai PREFIX saran kode menu otomatis -- dipasangkan dengan kategoriId dari GET /menu untuk menghitung nomor urutnya. Permission DIPAKAI ULANG dari POST /menu (master_menu.edit), bukan master_item.edit yang dipakai /kategori & /satuan (itu referensi untuk ITEM).",
+        "permission": { "action": "master_menu.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "POST",
+        "path": "/kategori-menu",
+        "description": "Tambah kategori menu baru. Body {kode, nama, urutanTampil?} -- kode & nama wajib (400 kalau kosong), urutanTampil default 0. Keunikan kode & nama dijaga constraint UNIQUE database (tidak ada pengecekan manual, pola sama seperti POST /items dan POST /menu). Dicatat ke core_audit_log (table inventory_kategori_menu, field 'created').",
+        "permission": { "action": "master_menu.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/kategori-menu/:id",
+        "description": "Ubah kategori menu. Body {kode?, nama?, urutanTampil?, aktif?} -- field yang tidak dikirim tidak berubah. 404 kalau id tidak ada. Perubahan per field dicatat ke core_audit_log. Kategori yang aktif=false ditolak dipakai di POST /menu/POST /menu/:kode/duplikat (menu lama yang sudah memakainya TIDAK ikut berubah, pola sama seperti kategori item).",
+        "permission": { "action": "master_menu.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/resep-produksi",
+        "description": "Daftar SEMUA resep produksi (aktif & nonaktif), JOIN ke item output untuk nama. Semua role login boleh akses (sama seperti GET /items dan GET /menu) -- dipakai juga oleh ProduksiForm.tsx (dropdown pilih resep di form transaksi Produksi, termasuk oleh role supervisor), bukan cuma ResepProduksiTab.tsx (halaman Master). Response (kode, outputItemKode, outputItemName, yieldQty, yieldUnit, isActive) tidak ada field harga/cost."
+      },
+      {
+        "method": "GET",
+        "path": "/resep-produksi/:kode",
+        "description": "Baris bahan resep produksi untuk satu kode resep, JOIN ke item bahan untuk nama. 404 kalau kode tidak ditemukan.",
+        "permission": { "action": "resep.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "POST",
+        "path": "/resep-produksi",
+        "description": "Tambah resep produksi baru + baris bahannya. Trigger DB 1-level (bahan cuma boleh bahan_baku/packaging) tetap berlaku.",
+        "permission": { "action": "resep.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/resep-produksi/:kode",
+        "description": "Ubah yield_qty/yield_unit/catatan, dan/atau GANTI SELURUH baris bahan (kalau field 'baris' diisi). Dicatat ke core_audit_log.",
+        "permission": { "action": "resep.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/resep-produksi/:kode/nonaktifkan",
+        "description": "Soft-delete (is_active=false), tanpa cek pemakaian (beda dari item -- lihat docs/architecture-decisions.md).",
+        "permission": { "action": "resep.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/menu/:kode/resep",
+        "description": "Baris resep menu saat ini untuk satu menu, JOIN ke item untuk nama. 404 kalau kode menu tidak ditemukan.",
+        "permission": { "action": "resep.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/menu/:kode/resep",
+        "description": "Tambah/ubah baris resep menu -- MENGGANTI SELURUH baris lama (pola sama seperti PATCH /resep-produksi/:kode). Tidak ada pembatasan tipe bahan (operasional tetap boleh, mis. kertas struk). Dicatat ke core_audit_log (field 'baris').",
+        "permission": { "action": "resep.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/menu/:kode/nonaktifkan",
+        "description": "Soft-delete menu (is_active=false). Ditolak (400) kalau menu masih jadi komponen paket yang AKTIF -- pesan error menyebutkan daftar kode paketnya.",
+        "permission": { "action": "resep.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/pengaturan/hpp-metode",
+        "description": "Lihat metode HPP default global.",
+        "permission": { "action": "pengaturan.manage", "roles": ["owner"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/pengaturan/hpp-metode",
+        "description": "Ubah metode HPP default global (harga_master|harga_beli_terakhir).",
+        "permission": { "action": "pengaturan.manage", "roles": ["owner"] }
+      },
+      {
+        "method": "GET",
+        "path": "/pengaturan/target-food-cost",
+        "description": "Lihat target food cost % global (dipakai default GET .../rekomendasi-harga).",
+        "permission": { "action": "pengaturan.manage", "roles": ["owner"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/pengaturan/target-food-cost",
+        "description": "Ubah target food cost % global (body {targetFoodCostPersen}). Ditolak (400) kalau <=0 atau >100.",
+        "permission": { "action": "pengaturan.manage", "roles": ["owner"] }
+      },
+      {
+        "method": "POST",
+        "path": "/lokasi",
+        "description": "Tambah lokasi baru (name, entitas). Catatan: tabelnya (core_locations) sekarang dimiliki core, bukan inventory lagi (2026-10-06) -- endpoint CRUD-nya sengaja dibiarkan tetap di sini (bukan dipindah ke core) supaya tidak perlu ubah frontend/URL yang sudah terintegrasi; modul lain (mis. hr) boleh FK langsung ke core_locations tanpa lewat endpoint ini.",
+        "permission": { "action": "pengaturan.manage", "roles": ["owner"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/lokasi/:id",
+        "description": "Ubah nama/entitas/status aktif lokasi (tabel core_locations, lihat catatan di POST /lokasi).",
+        "permission": { "action": "pengaturan.manage", "roles": ["owner"] }
+      },
+      {
+        "method": "POST",
+        "path": "/channel",
+        "description": "Tambah channel penjualan baru.",
+        "permission": { "action": "pengaturan.manage", "roles": ["owner"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/channel/:id",
+        "description": "Ubah nama/status aktif channel penjualan.",
+        "permission": { "action": "pengaturan.manage", "roles": ["owner"] }
+      }
+    ]
+  },
+  "permissions": [
+    {
+      "action": "hpp.lihat_harga",
+      "roles": ["owner", "manajer_ops"],
+      "_keterangan": "Dicek via hasPermission (bukan gate endpoint) di GET /items/:kode/hpp dan GET /menu/:kode/hpp untuk memutuskan field harga/HPP/margin di-strip atau tidak dari response."
+    }
+  ],
+  "migrationsDir": "src/db/migrations"
+}

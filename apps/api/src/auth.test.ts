@@ -1,0 +1,812 @@
+import "./env.js";
+import { test, before, after } from "node:test";
+import assert from "node:assert/strict";
+import type { Server } from "node:http";
+import { Router } from "express";
+import {
+  pool,
+  buildRegistry,
+  buildServer,
+  hashPassword,
+  hashPin,
+  type LoadedModule,
+} from "@samsara/core";
+import { modules } from "./modules.js";
+
+let server: Server;
+let baseUrl: string;
+
+// Fixture user yang dibuat langsung lewat SQL (bukan lewat endpoint create
+// user) supaya test tidak bergantung pada urutan/hasil test lain, dan
+// dibersihkan lagi di `after()` -- test ini COMMIT sungguhan ke database
+// dev (server HTTP mengurus transaksinya sendiri per-request, beda dari
+// pola withRollback di modules/inventory/src/domain/*.test.ts), jadi
+// pembersihan wajib eksplisit.
+const testUserIds: number[] = [];
+let ckLocationId: number;
+let outletLocationId: number;
+
+async function createTestUser(username: string, password: string, role: string, locationIds: number[] = []) {
+  const client = await pool.connect();
+  try {
+    const { rows: roleRows } = await client.query<{ id: number }>(`SELECT id FROM core_roles WHERE name = $1`, [
+      role,
+    ]);
+    const passwordHash = await hashPassword(password);
+    const { rows } = await client.query<{ id: number }>(
+      `INSERT INTO core_users (username, name, password_hash, role_id) VALUES ($1, $1, $2, $3) RETURNING id`,
+      [username, passwordHash, roleRows[0].id],
+    );
+    const userId = rows[0].id;
+    testUserIds.push(userId);
+    for (const locationId of locationIds) {
+      await client.query(`INSERT INTO core_user_lokasi (user_id, location_id) VALUES ($1, $2)`, [
+        userId,
+        locationId,
+      ]);
+    }
+    return userId;
+  } finally {
+    client.release();
+  }
+}
+
+async function login(username: string, password: string): Promise<string> {
+  const res = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  assert.equal(res.status, 200, `login ${username} harus berhasil`);
+  const body = (await res.json()) as { token: string };
+  return body.token;
+}
+
+/** Fixture staf lewat SQL langsung (role staf login PIN, bukan password -- lihat core/src/auth/users.ts). */
+async function createTestStafUser(name: string, pin: string, locationIds: number[] = []): Promise<number> {
+  const client = await pool.connect();
+  try {
+    const { rows: roleRows } = await client.query<{ id: number }>(`SELECT id FROM core_roles WHERE name = 'staf'`);
+    const pinHash = await hashPin(pin);
+    const username = `teststaf_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const { rows } = await client.query<{ id: number }>(
+      `INSERT INTO core_users (username, name, pin_hash, role_id) VALUES ($1, $2, $3, $4) RETURNING id`,
+      [username, name, pinHash, roleRows[0].id],
+    );
+    const userId = rows[0].id;
+    testUserIds.push(userId);
+    for (const locationId of locationIds) {
+      await client.query(`INSERT INTO core_user_lokasi (user_id, location_id) VALUES ($1, $2)`, [userId, locationId]);
+    }
+    return userId;
+  } finally {
+    client.release();
+  }
+}
+
+async function loginPin(userId: number, pin: string): Promise<string> {
+  const res = await fetch(`${baseUrl}/api/auth/login-pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, pin }),
+  });
+  assert.equal(res.status, 200, `login PIN user ${userId} harus berhasil`);
+  const body = (await res.json()) as { token: string };
+  return body.token;
+}
+
+/** Helper: buat owner fixture + login, dipakai banyak test di bawah yang butuh token owner untuk POST /api/auth/users. */
+async function getOwnerToken(usernameSuffix: string): Promise<string> {
+  await createTestUser(`test_owner_${usernameSuffix}`, "rahasia123", "owner");
+  return login(`test_owner_${usernameSuffix}`, "rahasia123");
+}
+
+async function createUserViaApi(
+  token: string,
+  body: Record<string, unknown>,
+): Promise<{ status: number; body: { id?: number; username?: string; generatedPin?: string; error?: string } }> {
+  const res = await fetch(`${baseUrl}/api/auth/users`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = (await res.json()) as { id?: number; username?: string; generatedPin?: string; error?: string };
+  if (json.id) testUserIds.push(json.id);
+  return { status: res.status, body: json };
+}
+
+before(async () => {
+  const client = await pool.connect();
+  try {
+    const { rows: locs } = await client.query<{ id: number; entitas: string }>(
+      `SELECT id, entitas FROM core_locations WHERE entitas IN ('samsara_ck', 'samsara_outlet')`,
+    );
+    ckLocationId = locs.find((r) => r.entitas === "samsara_ck")!.id;
+    outletLocationId = locs.find((r) => r.entitas === "samsara_outlet")!.id;
+  } finally {
+    client.release();
+  }
+
+  const ordered = buildRegistry(modules);
+  const enabled = ordered.filter((m) => m.manifest.enabled);
+  const app = buildServer(ordered, enabled);
+  server = app.listen(0);
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  baseUrl = `http://127.0.0.1:${port}`;
+});
+
+after(async () => {
+  server.close();
+  const client = await pool.connect();
+  try {
+    for (const id of testUserIds) {
+      await client.query(`DELETE FROM core_login_attempts WHERE user_id = $1`, [id]);
+      await client.query(`DELETE FROM core_user_lokasi WHERE user_id = $1`, [id]);
+      await client.query(`DELETE FROM core_users WHERE id = $1`, [id]);
+    }
+  } finally {
+    client.release();
+  }
+  await pool.end();
+});
+
+test("staf tidak bisa membuka stok lokasi lain (cuma lokasi sendiri)", async () => {
+  const userId = await createTestStafUser("Test Staf Stok", "111222", [ckLocationId]);
+  const token = await loginPin(userId, "111222");
+
+  const ownLocation = await fetch(`${baseUrl}/api/inventory/stok?item=BB-001&location=${ckLocationId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(ownLocation.status, 200, "staf boleh lihat stok lokasi sendiri");
+
+  const otherLocation = await fetch(`${baseUrl}/api/inventory/stok?item=BB-001&location=${outletLocationId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(otherLocation.status, 403, "staf DITOLAK lihat stok lokasi lain");
+
+  testUserIds.includes(userId); // no-op, hanya supaya linter tidak komplain unused
+});
+
+test("staf tidak menerima field harga/HPP/margin di response", async () => {
+  const stafId = await createTestStafUser("Test Staf Harga", "222333", [ckLocationId]);
+  const token = await loginPin(stafId, "222333");
+
+  const itemRes = await fetch(`${baseUrl}/api/inventory/items/SJ-003/hpp`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(itemRes.status, 200);
+  const itemBody = (await itemRes.json()) as Record<string, unknown>;
+  assert.equal("cost_per_recipe_unit" in itemBody, false, "field biaya tidak boleh ada di response staf");
+  assert.equal(itemBody.kode, "SJ-003");
+
+  const menuRes = await fetch(`${baseUrl}/api/inventory/menu/M-001/hpp`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(menuRes.status, 200);
+  const menuBody = (await menuRes.json()) as Record<string, unknown>;
+  assert.equal("hpp_per_porsi" in menuBody, false);
+  assert.equal("food_cost_pct" in menuBody, false);
+  assert.equal("margin" in menuBody, false);
+  assert.equal("harga_jual" in menuBody, true, "harga_jual TETAP tampil untuk staf");
+
+  // Kontrol positif: owner tetap menerima field harga.
+  await createTestUser("test_owner_harga", "rahasia123", "owner");
+  const ownerToken = await login("test_owner_harga", "rahasia123");
+  const ownerMenuRes = await fetch(`${baseUrl}/api/inventory/menu/M-001/hpp`, {
+    headers: { Authorization: `Bearer ${ownerToken}` },
+  });
+  const ownerMenuBody = (await ownerMenuRes.json()) as Record<string, unknown>;
+  assert.equal("hpp_per_porsi" in ownerMenuBody, true, "owner tetap menerima field HPP");
+});
+
+test("manajer_ops tidak bisa ubah harga jual (owner saja)", async () => {
+  await createTestUser("test_manajer_hj", "rahasia123", "manajer_ops");
+  const manajerToken = await login("test_manajer_hj", "rahasia123");
+
+  const forbidden = await fetch(`${baseUrl}/api/inventory/menu/M-048/harga-jual`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${manajerToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ hargaJual: 12000 }),
+  });
+  assert.equal(forbidden.status, 403, "manajer_ops ditolak ubah harga jual");
+
+  // Kontrol positif: owner boleh, lalu dikembalikan ke NULL supaya data seed tidak berubah permanen.
+  await createTestUser("test_owner_hj", "rahasia123", "owner");
+  const ownerToken = await login("test_owner_hj", "rahasia123");
+  const allowed = await fetch(`${baseUrl}/api/inventory/menu/M-048/harga-jual`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ hargaJual: 12000 }),
+  });
+  assert.equal(allowed.status, 200, "owner boleh ubah harga jual");
+
+  const client = await pool.connect();
+  try {
+    await client.query(`UPDATE inventory_menu SET harga_jual = NULL WHERE kode = 'M-048'`);
+    // setMenuHargaJual otomatis menulis ke core_audit_log -- ini murni efek
+    // test (bukan perubahan sungguhan), jadi dibersihkan juga.
+    await client.query(
+      `DELETE FROM core_audit_log WHERE table_name = 'inventory_menu' AND field_name = 'harga_jual'
+       AND record_id = (SELECT id FROM inventory_menu WHERE kode = 'M-048')`,
+    );
+  } finally {
+    client.release();
+  }
+});
+
+test("manajer_ops tidak bisa ubah visibilitas menu per channel (menu_visibilitas.edit = owner saja), dan toggle-nya tidak menyentuh harga", async () => {
+  await createTestUser("test_manajer_vis", "rahasia123", "manajer_ops");
+  const manajerToken = await login("test_manajer_vis", "rahasia123");
+
+  const url = `${baseUrl}/api/inventory/menu/M-048/channel/GoFood/visibilitas`;
+
+  // manajer_ops BOLEH POST /menu (master_menu.edit) tapi DITOLAK di sini --
+  // permission visibilitas sengaja lebih sempit (owner saja), bukan numpang
+  // master_menu.edit/harga_jual.edit.
+  const forbidden = await fetch(url, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${manajerToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ aktif: false }),
+  });
+  assert.equal(forbidden.status, 403, "manajer_ops ditolak ubah visibilitas channel");
+
+  // Kontrol positif: owner boleh. Harga jual menu yang sama dicatat sebelum
+  // & sesudah untuk membuktikan endpoint visibilitas tidak menyentuh harga.
+  await createTestUser("test_owner_vis", "rahasia123", "owner");
+  const ownerToken = await login("test_owner_vis", "rahasia123");
+
+  async function hargaGoFood(): Promise<string | null> {
+    const client = await pool.connect();
+    try {
+      const { rows } = await client.query<{ harga_jual: string }>(
+        `SELECT harga_jual FROM inventory_menu_harga_channel WHERE kode_menu = 'M-048' AND channel = 'GoFood'`,
+      );
+      return rows[0]?.harga_jual ?? null;
+    } finally {
+      client.release();
+    }
+  }
+
+  const hargaSebelum = await hargaGoFood();
+  try {
+    const allowed = await fetch(url, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ aktif: false }),
+    });
+    assert.equal(allowed.status, 200, "owner boleh ubah visibilitas channel");
+    assert.deepEqual(await allowed.json(), { kode: "M-048", channel: "GoFood", aktif: false });
+
+    assert.equal(await hargaGoFood(), hargaSebelum, "harga jual per channel TIDAK berubah karena toggle visibilitas");
+
+    // Terbaca kembali di GET /menu/:kode/hpp sebagai channels[].isVisible.
+    const hppRes = await fetch(`${baseUrl}/api/inventory/menu/M-048/hpp`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+    });
+    const hppBody = (await hppRes.json()) as { channels: Array<{ channel: string; isVisible: boolean }> };
+    assert.equal(hppBody.channels.find((c) => c.channel === "GoFood")?.isVisible, false);
+    assert.equal(
+      hppBody.channels.find((c) => c.channel === "Offline")?.isVisible,
+      true,
+      "channel lain tetap tayang (tidak ada baris = tayang)",
+    );
+
+    // Body non-boolean ditolak 400, bukan diterima sebagai truthy.
+    const badBody = await fetch(url, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ aktif: "ya" }),
+    });
+    assert.equal(badBody.status, 400);
+  } finally {
+    // Test ini COMMIT sungguhan -- bersihkan baris visibilitas + jejak audit
+    // log-nya supaya data dev kembali seperti semula (pola sama dengan test
+    // harga jual M-048 di atas).
+    const client = await pool.connect();
+    try {
+      await client.query(
+        `DELETE FROM core_audit_log WHERE table_name = 'inventory_menu_channel_visibilitas'
+         AND record_id IN (SELECT id FROM inventory_menu_channel_visibilitas WHERE kode_menu = 'M-048')`,
+      );
+      await client.query(`DELETE FROM inventory_menu_channel_visibilitas WHERE kode_menu = 'M-048'`);
+    } finally {
+      client.release();
+    }
+  }
+});
+
+test("modul nonaktif tetap tidak mengganggu server & auth (404, bukan 401/500)", async () => {
+  const fakeDisabled: LoadedModule = {
+    manifest: {
+      name: "fake-disabled",
+      version: "0.0.1",
+      description: "",
+      enabled: false,
+      dependsOn: [],
+      tablePrefix: "fakedisabled_",
+      tables: [],
+      api: { basePath: "/api/fake-disabled", endpoints: [] },
+      migrationsDir: "/tmp/does-not-matter",
+    },
+    createRouter: () => Router().get("/ping", (_req, res) => res.json({ ok: true })),
+    migrationsPath: "/tmp/does-not-matter",
+  };
+
+  const allModules = [...modules, fakeDisabled];
+  const ordered = buildRegistry(allModules);
+  const enabled = ordered.filter((m) => m.manifest.enabled);
+  const app = buildServer(ordered, enabled);
+  const testServer = app.listen(0);
+  await new Promise<void>((resolve) => testServer.once("listening", resolve));
+  const address = testServer.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const testBaseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    await createTestUser("test_owner_modonoff", "rahasia123", "owner");
+    const token = await login("test_owner_modonoff", "rahasia123");
+
+    const health = await fetch(`${testBaseUrl}/health`);
+    const healthBody = (await health.json()) as { modules: Array<{ name: string; enabled: boolean }> };
+    const fakeInHealth = healthBody.modules.find((m) => m.name === "fake-disabled");
+    assert.equal(fakeInHealth?.enabled, false, "modul nonaktif tetap tercatat di /health");
+
+    const pingDisabled = await fetch(`${testBaseUrl}/api/fake-disabled/ping`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(pingDisabled.status, 404, "modul nonaktif tidak ter-mount sama sekali (404, bukan diblokir auth)");
+
+    const inventoryStatus = await fetch(`${testBaseUrl}/api/inventory/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(inventoryStatus.status, 200, "modul lain (inventory) tetap jalan normal");
+  } finally {
+    testServer.close();
+  }
+});
+
+test("staf tidak bisa menyetujui/menolak opname (owner/manajer_ops saja)", async () => {
+  await createTestUser("test_owner_opname", "rahasia123", "owner");
+  const ownerToken = await login("test_owner_opname", "rahasia123");
+  const stafId = await createTestStafUser("Test Staf Opname", "333444", [ckLocationId]);
+  const stafToken = await loginPin(stafId, "333444");
+
+  // Staf input hitungan draft dulu (ini boleh -- semua role boleh input).
+  const inputRes = await fetch(`${baseUrl}/api/inventory/transaksi/opname`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${stafToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      locationId: ckLocationId,
+      tanggal: "2026-09-29",
+      baris: [{ itemKode: "BB-001", qtyFisik: 999999 }],
+    }),
+  });
+  assert.equal(inputRes.status, 201, "staf boleh input hitungan opname (draft)");
+  const opname = (await inputRes.json()) as { headerId: number };
+
+  try {
+    const stafApprove = await fetch(`${baseUrl}/api/inventory/transaksi/opname/${opname.headerId}/keputusan`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${stafToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ decision: "setuju" }),
+    });
+    assert.equal(stafApprove.status, 403, "staf DITOLAK menyetujui/menolak opname");
+
+    const ownerApprove = await fetch(`${baseUrl}/api/inventory/transaksi/opname/${opname.headerId}/keputusan`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ decision: "tolak" }), // "tolak" supaya tidak mengubah stok sungguhan
+    });
+    assert.equal(ownerApprove.status, 200, "owner boleh memutuskan opname");
+  } finally {
+    const client = await pool.connect();
+    try {
+      await client.query(`DELETE FROM inventory_transaksi_opname_baris WHERE header_id = $1`, [opname.headerId]);
+      await client.query(`DELETE FROM inventory_transaksi_opname WHERE id = $1`, [opname.headerId]);
+    } finally {
+      client.release();
+    }
+  }
+});
+
+test("PIN duplikat di lokasi sama ditolak, PIN sama di lokasi beda diterima", async () => {
+  const token = await getOwnerToken("pindup");
+
+  const staf1 = await createUserViaApi(token, {
+    name: "Test Staf Satu",
+    role: "staf",
+    locationIds: [ckLocationId],
+    pin: "135790",
+  });
+  assert.equal(staf1.status, 201, "staf pertama dengan PIN itu berhasil dibuat");
+
+  const staf2SameLocation = await createUserViaApi(token, {
+    name: "Test Staf Dua",
+    role: "staf",
+    locationIds: [ckLocationId],
+    pin: "135790",
+  });
+  assert.equal(staf2SameLocation.status, 400, "PIN sama di LOKASI SAMA ditolak");
+  assert.match(staf2SameLocation.body.error ?? "", /pin.*sudah dipakai/i);
+
+  const staf3OtherLocation = await createUserViaApi(token, {
+    name: "Test Staf Tiga",
+    role: "staf",
+    locationIds: [outletLocationId],
+    pin: "135790",
+  });
+  assert.equal(staf3OtherLocation.status, 201, "PIN sama persis tapi di LOKASI BEDA diterima");
+});
+
+test("POST /api/auth/users: PIN kosong di-generate otomatis dan dikembalikan sekali di response", async () => {
+  const token = await getOwnerToken("pingen");
+
+  const res = await createUserViaApi(token, {
+    name: "Test Staf Generate",
+    role: "staf",
+    locationIds: [ckLocationId],
+    // pin sengaja tidak diisi
+  });
+  assert.equal(res.status, 201);
+  assert.match(res.body.generatedPin ?? "", /^\d{6}$/, "PIN 6 digit di-generate dan dikembalikan di response create");
+
+  // PIN yang di-generate itu harus benar-benar valid untuk login.
+  const loginRes = await fetch(`${baseUrl}/api/auth/login-pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId: res.body.id, pin: res.body.generatedPin }),
+  });
+  assert.equal(loginRes.status, 200, "PIN yang di-generate otomatis itu bisa dipakai login sungguhan");
+});
+
+test("lockout: 5x gagal berturut-turut (gabungan password+PIN) dalam 15 menit mengunci sementara", async () => {
+  const token = await getOwnerToken("lockout");
+  const created = await createUserViaApi(token, {
+    name: "Test Staf Lockout",
+    role: "staf",
+    locationIds: [ckLocationId],
+    pin: "222444",
+  });
+  assert.equal(created.status, 201);
+  const userId = created.body.id!;
+
+  for (let i = 0; i < 5; i++) {
+    const res = await fetch(`${baseUrl}/api/auth/login-pin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, pin: "000000" }), // sengaja salah
+    });
+    assert.equal(res.status, 401, `percobaan gagal ke-${i + 1} harus 401 (PIN salah), belum terkunci`);
+  }
+
+  // Percobaan ke-6, walau PIN-nya BENAR, harus tetap ditolak karena sudah terkunci.
+  const lockedRes = await fetch(`${baseUrl}/api/auth/login-pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, pin: "222444" }),
+  });
+  assert.equal(lockedRes.status, 429, "percobaan ke-6 ditolak karena terkunci, walau PIN-nya benar");
+});
+
+test("staf tidak bisa login lewat /login (password), dan role password tidak bisa lewat /login-pin", async () => {
+  const token = await getOwnerToken("crossmethod");
+  const staf = await createUserViaApi(token, {
+    name: "Test Staf Crossmethod",
+    role: "staf",
+    locationIds: [ckLocationId],
+    pin: "919293",
+  });
+  assert.equal(staf.status, 201);
+
+  const stafViaPassword = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: staf.body.username, password: "apa-saja" }),
+  });
+  assert.equal(stafViaPassword.status, 401, "staf TIDAK BISA login lewat endpoint password biasa");
+
+  const supervisorId = await createTestUser("test_supervisor_crossmethod", "rahasia123", "supervisor", [
+    ckLocationId,
+  ]);
+
+  const passwordRoleViaPin = await fetch(`${baseUrl}/api/auth/login-pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId: supervisorId, pin: "123456" }),
+  });
+  assert.equal(passwordRoleViaPin.status, 401, "role password (supervisor) TIDAK BISA login lewat /login-pin");
+});
+
+test("GET /api/auth/staf?lokasi= cuma tampilkan staf aktif di lokasi itu, tanpa data sensitif", async () => {
+  const token = await getOwnerToken("liststaf");
+  const staf = await createUserViaApi(token, {
+    name: "Test Staf Daftar",
+    role: "staf",
+    locationIds: [outletLocationId],
+    pin: "456789",
+  });
+  assert.equal(staf.status, 201);
+
+  const res = await fetch(`${baseUrl}/api/auth/staf?lokasi=${outletLocationId}`);
+  assert.equal(res.status, 200, "endpoint ini PUBLIK (tanpa token) -- dipakai sebelum login");
+  const list = (await res.json()) as Array<Record<string, unknown>>;
+  const entry = list.find((s) => s.id === staf.body.id);
+  assert.ok(entry, "staf yang baru dibuat muncul di daftar lokasinya");
+  assert.equal(entry!.name, "Test Staf Daftar");
+  assert.equal("pin_hash" in entry!, false, "tidak boleh ada data sensitif di respons");
+  assert.equal("username" in entry!, false, "tidak boleh ada username di respons (bukan data yang relevan untuk picker PIN)");
+
+  const ckList = (await (await fetch(`${baseUrl}/api/auth/staf?lokasi=${ckLocationId}`)).json()) as Array<
+    Record<string, unknown>
+  >;
+  assert.equal(
+    ckList.some((s) => s.id === staf.body.id),
+    false,
+    "staf TIDAK muncul di daftar lokasi lain",
+  );
+});
+
+test("PATCH /api/auth/users/:id nonaktifkan user -- user nonaktif tidak bisa login lagi", async () => {
+  const token = await getOwnerToken("deactivate");
+  const staf = await createUserViaApi(token, {
+    name: "Test Staf Nonaktif",
+    role: "staf",
+    locationIds: [ckLocationId],
+    pin: "135791",
+  });
+  assert.equal(staf.status, 201);
+
+  const loginBefore = await fetch(`${baseUrl}/api/auth/login-pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId: staf.body.id, pin: "135791" }),
+  });
+  assert.equal(loginBefore.status, 200, "sebelum dinonaktifkan, login PIN berhasil");
+
+  const patchRes = await fetch(`${baseUrl}/api/auth/users/${staf.body.id}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ isActive: false }),
+  });
+  assert.equal(patchRes.status, 200);
+
+  const loginAfter = await fetch(`${baseUrl}/api/auth/login-pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId: staf.body.id, pin: "135791" }),
+  });
+  assert.equal(loginAfter.status, 401, "setelah dinonaktifkan, login PIN yang sama DITOLAK");
+});
+
+test("PATCH /api/auth/users/:id: owner tidak bisa menonaktifkan akun sendiri", async () => {
+  const ownerId = await createTestUser("test_owner_selfdeactivate", "rahasia123", "owner");
+  const token = await login("test_owner_selfdeactivate", "rahasia123");
+
+  const selfDeactivate = await fetch(`${baseUrl}/api/auth/users/${ownerId}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ isActive: false }),
+  });
+  assert.equal(selfDeactivate.status, 400, "owner DITOLAK menonaktifkan akun sendiri");
+
+  // Kontrol: owner TETAP bisa menonaktifkan akun LAIN seperti biasa.
+  const other = await createTestUser("test_owner_other_target", "rahasia123", "manajer_ops");
+  const deactivateOther = await fetch(`${baseUrl}/api/auth/users/${other}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ isActive: false }),
+  });
+  assert.equal(deactivateOther.status, 200, "owner tetap boleh menonaktifkan user lain");
+
+  // Kontrol: owner tetap bisa ubah field lain (name) di akunnya sendiri -- yang ditolak cuma isActive:false.
+  const renameSelf = await fetch(`${baseUrl}/api/auth/users/${ownerId}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Owner Baru" }),
+  });
+  assert.equal(renameSelf.status, 200, "owner tetap boleh ubah nama akun sendiri (cuma isActive:false yang ditolak)");
+});
+
+test("PATCH /api/auth/users/:id: nonaktifkan lalu aktifkan lagi berhasil, status konsisten di list dan login", async () => {
+  const token = await getOwnerToken("reactivate");
+  const targetId = await createTestUser("test_reactivate_target", "rahasia123", "manajer_ops");
+
+  // Aktif dari awal -- login harus berhasil.
+  await login("test_reactivate_target", "rahasia123");
+
+  const deactivate = await fetch(`${baseUrl}/api/auth/users/${targetId}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ isActive: false }),
+  });
+  assert.equal(deactivate.status, 200);
+
+  type ListedUser = { id: string; isActive: boolean };
+  const listAfterDeactivate = (await (
+    await fetch(`${baseUrl}/api/auth/users`, { headers: { Authorization: `Bearer ${token}` } })
+  ).json()) as ListedUser[];
+  assert.equal(
+    listAfterDeactivate.find((u) => u.id === String(targetId))?.isActive,
+    false,
+    "status nonaktif setelah dinonaktifkan",
+  );
+
+  const loginWhileInactive = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "test_reactivate_target", password: "rahasia123" }),
+  });
+  assert.equal(loginWhileInactive.status, 401, "login ditolak selagi nonaktif");
+
+  const reactivate = await fetch(`${baseUrl}/api/auth/users/${targetId}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ isActive: true }),
+  });
+  assert.equal(reactivate.status, 200, "PATCH isActive:true (arah sebaliknya) berhasil, bukan cuma satu arah");
+
+  const listAfterReactivate = (await (
+    await fetch(`${baseUrl}/api/auth/users`, { headers: { Authorization: `Bearer ${token}` } })
+  ).json()) as ListedUser[];
+  assert.equal(
+    listAfterReactivate.find((u) => u.id === String(targetId))?.isActive,
+    true,
+    "status aktif lagi setelah diaktifkan ulang",
+  );
+
+  const loginAfterReactivate = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "test_reactivate_target", password: "rahasia123" }),
+  });
+  assert.equal(loginAfterReactivate.status, 200, "login berhasil lagi setelah diaktifkan ulang");
+});
+
+test("PATCH /api/auth/users/:id: tidak bisa menonaktifkan owner terakhir yang aktif (proteksi lockout total)", async () => {
+  const ownerAId = await createTestUser("test_ownerA_lastowner", "rahasia123", "owner");
+  const ownerBId = await createTestUser("test_ownerB_lastowner", "rahasia123", "owner");
+  // Token ownerB diambil SEBELUM dinonaktifkan -- skenario: token lama masih
+  // valid secara kriptografis (sistem ini belum punya revoke token, lihat
+  // architecture-decisions.md §13.6/14) walau akunnya sudah nonaktif di DB.
+  const ownerBToken = await login("test_ownerB_lastowner", "rahasia123");
+  const ownerAToken = await login("test_ownerA_lastowner", "rahasia123");
+
+  // Setup via SQL langsung (bukan API) supaya skenario "cuma ownerA yang
+  // aktif" terkontrol -- nonaktifkan ownerB dan SEMUA owner lain (termasuk
+  // seed "owner") KECUALI ownerA. Status semua owner yang disentuh di sini
+  // dikembalikan lagi di `finally` di bawah, termasuk seed owner.
+  let previouslyActiveOwnerIds: number[] = [];
+  const setupClient = await pool.connect();
+  try {
+    const { rows } = await setupClient.query<{ id: number }>(
+      `SELECT u.id FROM core_users u JOIN core_roles r ON r.id = u.role_id
+       WHERE r.name = 'owner' AND u.is_active = true AND u.id != $1`,
+      [ownerAId],
+    );
+    previouslyActiveOwnerIds = rows.map((r) => r.id);
+    await setupClient.query(
+      `UPDATE core_users SET is_active = false
+       WHERE role_id = (SELECT id FROM core_roles WHERE name = 'owner') AND id != $1`,
+      [ownerAId],
+    );
+  } finally {
+    setupClient.release();
+  }
+
+  try {
+    // ownerA (satu-satunya owner aktif sekarang) tetap dilindungi: diuji dulu
+    // kontrol positifnya -- ownerA boleh ubah hal lain di sistem seperti biasa.
+    const sanity = await fetch(`${baseUrl}/api/auth/users`, { headers: { Authorization: `Bearer ${ownerAToken}` } });
+    assert.equal(sanity.status, 200);
+
+    // Serangan: token BASI milik ownerB (sudah nonaktif) dipakai mencoba
+    // menonaktifkan ownerA, satu-satunya owner yang masih aktif.
+    const attack = await fetch(`${baseUrl}/api/auth/users/${ownerAId}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${ownerBToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ isActive: false }),
+    });
+    assert.equal(attack.status, 400, "ditolak -- ownerA satu-satunya owner aktif tersisa");
+    const attackBody = (await attack.json()) as { error: string };
+    assert.match(attackBody.error, /owner/i);
+
+    const checkClient = await pool.connect();
+    try {
+      const { rows: checkA } = await checkClient.query<{ is_active: boolean }>(
+        `SELECT is_active FROM core_users WHERE id = $1`,
+        [ownerAId],
+      );
+      assert.equal(checkA[0].is_active, true, "ownerA tidak jadi dinonaktifkan");
+    } finally {
+      checkClient.release();
+    }
+  } finally {
+    const restoreClient = await pool.connect();
+    try {
+      if (previouslyActiveOwnerIds.length > 0) {
+        await restoreClient.query(`UPDATE core_users SET is_active = true WHERE id = ANY($1)`, [
+          previouslyActiveOwnerIds,
+        ]);
+      }
+    } finally {
+      restoreClient.release();
+    }
+  }
+});
+
+test("POST /api/auth/users/:id/reset: staf dapat PIN baru, PIN lama langsung tidak berlaku", async () => {
+  const token = await getOwnerToken("resetpin");
+  const created = await createUserViaApi(token, {
+    name: "Test Reset Pin",
+    role: "staf",
+    locationIds: [ckLocationId],
+    pin: "555666",
+  });
+  assert.equal(created.status, 201);
+  const userId = created.body.id!;
+
+  const loginOld = await fetch(`${baseUrl}/api/auth/login-pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, pin: "555666" }),
+  });
+  assert.equal(loginOld.status, 200, "PIN lama bekerja sebelum reset");
+
+  const resetRes = await fetch(`${baseUrl}/api/auth/users/${userId}/reset`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(resetRes.status, 200);
+  const resetBody = (await resetRes.json()) as { role: string; generatedPin?: string };
+  assert.equal(resetBody.role, "staf");
+  assert.match(resetBody.generatedPin ?? "", /^\d{6}$/, "PIN baru 6 digit dikembalikan sekali di response");
+
+  const loginOldAfter = await fetch(`${baseUrl}/api/auth/login-pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, pin: "555666" }),
+  });
+  assert.equal(loginOldAfter.status, 401, "PIN LAMA tidak bisa dipakai login lagi setelah reset");
+
+  const loginNew = await fetch(`${baseUrl}/api/auth/login-pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, pin: resetBody.generatedPin }),
+  });
+  assert.equal(loginNew.status, 200, "PIN BARU hasil reset berhasil dipakai login");
+});
+
+test("POST /api/auth/users/:id/reset: manajer_ops/supervisor dapat password baru, password lama langsung tidak berlaku", async () => {
+  const token = await getOwnerToken("resetpw");
+  const targetId = await createTestUser("test_resetpw_target", "password-lama-123", "manajer_ops");
+
+  await login("test_resetpw_target", "password-lama-123");
+
+  const resetRes = await fetch(`${baseUrl}/api/auth/users/${targetId}/reset`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(resetRes.status, 200);
+  const resetBody = (await resetRes.json()) as { role: string; generatedPassword?: string };
+  assert.equal(resetBody.role, "manajer_ops");
+  assert.ok(
+    resetBody.generatedPassword && resetBody.generatedPassword.length >= 8,
+    "password baru dikembalikan sekali di response",
+  );
+
+  const loginOldAfter = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "test_resetpw_target", password: "password-lama-123" }),
+  });
+  assert.equal(loginOldAfter.status, 401, "password LAMA tidak bisa dipakai login lagi setelah reset");
+
+  const loginNew = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "test_resetpw_target", password: resetBody.generatedPassword }),
+  });
+  assert.equal(loginNew.status, 200, "password BARU hasil reset berhasil dipakai login");
+});

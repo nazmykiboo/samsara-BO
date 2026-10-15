@@ -1,0 +1,23 @@
+{
+  "name": "@samsara/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "migrate": "tsx src/migrate.ts",
+    "import:harga-jual": "tsx src/import-harga-jual.ts",
+    "seed:owner": "tsx src/seed-owner.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@samsara/core": "*",
+    "@samsara/hr": "*",
+    "@samsara/inventory": "*",
+    "@samsara/sales-sync": "*",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.1"
+  }
+}

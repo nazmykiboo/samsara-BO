@@ -1,0 +1,117 @@
+{
+  "name": "hr",
+  "version": "0.1.0",
+  "description": "Jadwal shift dan pengajuan libur staf Samsara.",
+  "enabled": true,
+  "dependsOn": [],
+  "tablePrefix": "hr_",
+  "tables": ["hr_jadwal_shift", "hr_pengajuan_libur", "hr_shift_template", "hr_settings"],
+  "api": {
+    "basePath": "/api/hr",
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/status",
+        "description": "Health check modul. Butuh login, semua role boleh.",
+        "permission": { "action": "hr.status", "roles": ["owner", "manajer_ops", "supervisor", "staf"] }
+      },
+      {
+        "method": "GET",
+        "path": "/jadwal-shift",
+        "description": "Daftar jadwal shift (baris datar, dipakai form CRUD di halaman Jadwal & Izin). Query: lokasiId, dari, sampai (wajib, YYYY-MM-DD), userId (opsional). owner/manajer_ops bebas pilih lokasiId/userId manapun (allLocations). supervisor/staf: lokasiId yang dikirim DIABAIKAN -- selalu dipaksa ke lokasi yang ditugaskan ke user itu (user.locationIds), sehingga hasilnya SEMUA staf di lokasi yang sama (bukan cuma diri sendiri lagi sejak kebutuhan 'siapa teman se-shift'); userId tetap dihormati untuk role ini sekadar mempersempit hasil yang sudah lokasi-scoped. Tiap baris menyertakan konflikCuti (boolean): staf itu punya pengajuan libur berstatus 'disetujui' yang mencakup tanggal jadwal ini -- dijadwalkan padahal sedang cuti. Dihitung ulang tiap baca, peringatan saja (jadwal tetap valid dan tersimpan).",
+        "permission": { "action": "jadwal.lihat", "roles": ["owner", "manajer_ops", "supervisor", "staf"] }
+      },
+      {
+        "method": "GET",
+        "path": "/jadwal",
+        "description": "Jadwal terstruktur per hari x shift untuk SATU lokasi dalam satu minggu (grid 'siapa teman se-shift', beda dari /jadwal-shift yang baris datar). Query: lokasi (id, wajib untuk owner/manajer_ops; untuk supervisor/staf dihormati HANYA kalau ada di locationIds sendiri, selain itu diabaikan dan dipaksa ke lokasi pertama yang ditugaskan), minggu (wajib, YYYY-MM-DD, tanggal mana pun dalam minggu target -- dihitung Senin-Minggu). Baris shift selalu ada untuk tiap shift template aktif walau selnya kosong (bukan baris hilang). Tiap staf di dalam sel menyertakan konflikCuti (boolean, lihat GET /jadwal-shift) supaya grid bisa menandai nama staf yang sedang cuti disetujui.",
+        "permission": { "action": "jadwal.lihat", "roles": ["owner", "manajer_ops", "supervisor", "staf"] }
+      },
+      {
+        "method": "POST",
+        "path": "/jadwal-shift",
+        "description": "Buat 1 baris jadwal shift (userId, lokasiId, tanggal, shiftTemplateId). Owner/manajer_ops saja. Jam diambil dari shift template terpilih (bukan input manual lagi sejak migrasi 0002), diduplikasi ke kolom jam_mulai/jam_selesai yang DEPRECATED. dibuat_oleh diisi dari user yang login. Response: {id, konflikCuti} -- bentrok dengan cuti yang sudah disetujui TIDAK memblokir (baris tetap dibuat), cuma ditandai.",
+        "permission": { "action": "jadwal.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "POST",
+        "path": "/jadwal/salin-minggu",
+        "description": "Duplikat SEMUA assignment jadwal satu lokasi dari minggu sumber ke minggu tujuan, hari-ke-hari (Senin sumber -> Senin tujuan, dst). Body: lokasiId, mingguSumber, mingguTujuan (dua-duanya tanggal MANA PUN dalam minggu target, YYYY-MM-DD -- Senin-nya dihitung sendiri). Owner/manajer_ops saja, reuse permission jadwal.manage (bukan wewenang baru -- cuma membuat banyak baris jadwal sekaligus). IDEMPOTEN: baris yang sudah identik di minggu tujuan (user + lokasi + tanggal + shift template sama) DILEWATI, tidak diduplikasi -- jadi aman dipanggil dua kali dan aman ke minggu yang sudah sebagian terisi. jam_mulai/jam_selesai diduplikasi apa adanya dari baris sumber (tidak di-lookup ulang ke template, supaya menyalin jadwal tidak diam-diam mengubah jam baris lama). Response: {disalin, dilewati}.",
+        "permission": { "action": "jadwal.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "POST",
+        "path": "/jadwal/batch",
+        "description": "Assign BANYAK staf sekaligus ke satu sel jadwal (lokasi + tanggal + shift yang SAMA) dalam satu panggilan API. Body: lokasiId, tanggal (YYYY-MM-DD), shiftTemplateId, userIds (array id staf, WAJIB tidak kosong -- 400 kalau bukan array atau kosong). Owner/manajer_ops saja, reuse permission jadwal.manage (bukan wewenang baru -- cuma memanggil POST /jadwal-shift berkali-kali, alasan sama seperti /jadwal/salin-minggu). BUKAN TRANSAKSI ATOMIK: tiap userId diproses independen dalam transaksi database TERPISAH, sekuensial (bukan paralel) -- item yang GAGAL (mis. userId tidak ada) TIDAK membatalkan dan TIDAK menghentikan item lain, dan item yang sukses tetap tersimpan. Karena itu response SELALU status 200 (bukan 400/403) selama body-nya valid: request-nya sendiri berhasil DIPROSES, keberhasilan per item dibaca frontend dari array hasil, bukan dari exception. Response: array hasil dengan urutan SAMA PERSIS dengan userIds yang dikirim, tiap elemen {userId, success, id?, konflikCuti?, error?} -- id + konflikCuti terisi kalau success true (konflikCuti = staf itu sedang cuti disetujui di tanggal itu; penanda saja, tidak memblokir, lihat POST /jadwal-shift), error berisi pesan kegagalan kalau success false. Satu-satunya pengecekan per user adalah konflikCuti dari createJadwalShift -- TIDAK ADA konsep kuota untuk pembuatan jadwal shift (kuota bulanan/harian lokasi itu domain pengajuan libur, bukan jadwal).",
+        "permission": { "action": "jadwal.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "POST",
+        "path": "/jadwal/batch-hapus",
+        "description": "Hapus BANYAK baris jadwal shift sekaligus dalam satu panggilan API (hard delete per baris, sama seperti DELETE /jadwal-shift/:id). Body: ids (array id baris jadwal, WAJIB tidak kosong -- 400 kalau bukan array atau kosong). Owner/manajer_ops saja, reuse permission jadwal.manage (bukan wewenang baru). BUKAN TRANSAKSI ATOMIK: pola identik dengan POST /jadwal/batch -- tiap id diproses independen dalam transaksi database TERPISAH, sekuensial; id yang GAGAL (mis. baris sudah terhapus / tidak ada) TIDAK membatalkan dan TIDAK menghentikan penghapusan id lain. Response SELALU status 200 selama body-nya valid: array hasil dengan urutan SAMA dengan ids yang dikirim, tiap elemen {id, success, error?} -- error berisi pesan kegagalan kalau success false.",
+        "permission": { "action": "jadwal.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/jadwal-shift/:id",
+        "description": "Ubah 1 baris jadwal shift yang sudah ada (lokasiId?, tanggal?, shiftTemplateId? -- user_id TIDAK bisa diubah lewat endpoint ini, pindah staf = hapus + buat baru). Owner/manajer_ops saja. Response: {id, konflikCuti} -- konflikCuti dihitung ulang terhadap tanggal BARU setelah perubahan (lihat GET /jadwal-shift), tidak memblokir update.",
+        "permission": { "action": "jadwal.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "DELETE",
+        "path": "/jadwal-shift/:id",
+        "description": "Hapus 1 baris jadwal shift (hard delete -- tidak ada status nonaktif untuk jadwal, beda dari master data Inventory). Owner/manajer_ops saja.",
+        "permission": { "action": "jadwal.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/pengajuan-libur",
+        "description": "Daftar pengajuan libur. Query opsional: status, userId. owner/manajer_ops lihat semua (antrian approval). supervisor/staf: userId yang dikirim DIABAIKAN, selalu dipaksa ke user_id milik sendiri (riwayat pengajuan sendiri saja -- beda dari jadwal.lihat yang sekarang lokasi-scoped, kuota/alasan cuti tetap privat per orang). Tiap baris menyertakan melebihiKuota (boolean) dan selisihKuota (jumlah hari kelebihan, 0 kalau tidak melebihi) -- dihitung ulang tiap baca terhadap cuti_kuota_bulanan, dipakai badge 'Melebihi kuota' di antrian approval manajer -- plus kuotaHarianPenuh (boolean): di lokasi staf itu sudah ada cuti LAIN berstatus 'disetujui' yang tanggalnya overlap (aturan maksimal 1 cuti disetujui per lokasi per tanggal, supaya outlet tidak kehilangan >1 staf di hari yang sama). kuotaHarianPenuh juga dihitung ulang tiap baca dan ikut dikembalikan untuk SEMUA role (staf melihatnya di riwayatnya sendiri, tidak di-strip berdasarkan role). Untuk user tanpa lokasi tetap di core_user_lokasi (owner/manajer_ops, allLocations) kuota harian lokasi tidak relevan -- selalu false.",
+        "permission": { "action": "pengajuan_libur.lihat", "roles": ["owner", "manajer_ops", "supervisor", "staf"] }
+      },
+      {
+        "method": "GET",
+        "path": "/pengajuan-libur/kuota",
+        "description": "Sisa kuota cuti BULAN KALENDER INI untuk user yang login (bulan, kuotaBulanan, terpakai, sisa -- sisa bisa negatif kalau sudah melebihi). Dipakai tampilan 'Sisa cuti bulan ini: X dari Y hari' di tab Pengajuan Libur. Semua role (masing-masing lihat kuota sendiri, tidak ada parameter userId).",
+        "permission": { "action": "pengajuan_libur.lihat", "roles": ["owner", "manajer_ops", "supervisor", "staf"] }
+      },
+      {
+        "method": "POST",
+        "path": "/pengajuan-libur",
+        "description": "Ajukan libur untuk DIRI SENDIRI (user_id selalu dari token login, tidak pernah dari body -- tidak bisa mengajukan atas nama orang lain). Semua role boleh (termasuk owner/manajer_ops, bukan cuma staf). Body: tanggalMulai, tanggalSelesai, alasan?. Status awal selalu 'diajukan'. WAJIB H-2: kalau tanggalMulai kurang dari 2 hari dari hari ini, pengajuan DITOLAK (400) tanpa disimpan sama sekali -- berlaku untuk SEMUA role karena ini satu jalur bersama; jalur darurat yang menembusnya cuma POST /pengajuan-libur/override, dan itu khusus untuk mengajukan atas nama ORANG LAIN. Response menyertakan melebihiKuota/selisih dan kuotaHarianPenuh (lihat GET /pengajuan-libur) -- kuota (bulanan maupun harian lokasi) TIDAK PERNAH menolak pengajuan, cuma menandai sebagai peringatan untuk manajer.",
+        "permission": { "action": "pengajuan_libur.create", "roles": ["owner", "manajer_ops", "supervisor", "staf"] }
+      },
+      {
+        "method": "POST",
+        "path": "/pengajuan-libur/override",
+        "description": "Jalur DARURAT: owner/manajer_ops MEMBUATKAN cuti untuk staf LAIN, langsung berstatus 'disetujui' dalam satu langkah (bukan 'diajukan' lalu diputuskan terpisah) dan MENEMBUS aturan H-2. Reuse permission pengajuan_libur.approve (yang boleh override memang persis yang boleh menyetujui -- bukan action baru). Body: userId (staf yang dibuatkan), tanggalMulai, tanggalSelesai, alasan?, penggantiNama?. DITOLAK kalau: userId = user yang login (konflik kepentingan, pola sama seperti PATCH /pengajuan-libur/:id/keputusan -- owner/manajer_ops yang mau cuti untuk dirinya sendiri tetap lewat jalur normal + H-2), userId tidak ada, ATAU kuota harian cuti lokasi sudah penuh tapi penggantiNama kosong (satu outlet boleh kehilangan staf kedua di hari yang sama HANYA kalau sudah jelas penggantinya). Selain itu aturan yang ditembus tidak memblokir, cuma dicatat: response {id, level, aturanDilanggar} dengan aturanDilanggar berisi kombinasi 'h2_minimum' / 'kuota_harian_lokasi' / 'kuota_bulanan_staf' dan level = jumlahnya (0-3) sebagai severity. Baris hasilnya ditandai dibuat_via_override = true dan detail pelanggarannya tercatat di core_audit_log (field_name created_via_override, user_id = pelaku override).",
+        "permission": { "action": "pengajuan_libur.approve", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/pengajuan-libur/:id/keputusan",
+        "description": "Setujui/tolak pengajuan libur (body {keputusan: 'disetujui'|'ditolak'}). Owner/manajer_ops saja, DAN tidak bisa memutuskan pengajuan milik diri sendiri (konflik kepentingan -- pola sama seperti owner tidak bisa menonaktifkan akun sendiri di core). Ditolak kalau pengajuan sudah diputuskan sebelumnya (tidak bisa diputuskan ulang).",
+        "permission": { "action": "pengajuan_libur.approve", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/shift-template",
+        "description": "Daftar SEMUA shift template (aktif & nonaktif -- caller/UI yang filter). Dipakai halaman Pengaturan > Shift (kelola) dan dropdown 'buat jadwal' di Jadwal & Izin (cuma yang aktif). Owner/manajer_ops saja -- staf/supervisor tidak pernah buat jadwal jadi tidak perlu akses daftar ini.",
+        "permission": { "action": "shift_template.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "POST",
+        "path": "/shift-template",
+        "description": "Tambah shift template baru (kode, nama, jamMulai, jamSelesai, urutanTampil?). Owner/manajer_ops saja.",
+        "permission": { "action": "shift_template.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/shift-template/:id",
+        "description": "Ubah shift template (nama?, jamMulai?, jamSelesai?, aktif?, urutanTampil?) -- field aktif dua arah (nonaktifkan/aktifkan lagi), bukan endpoint nonaktifkan terpisah, pola sama seperti master kategori/satuan di modul Inventory. Owner/manajer_ops saja.",
+        "permission": { "action": "shift_template.manage", "roles": ["owner", "manajer_ops"] }
+      }
+    ]
+  },
+  "migrationsDir": "src/db/migrations"
+}

@@ -1,0 +1,97 @@
+import { Navigate, Route, Routes } from "react-router-dom";
+import { AuthProvider, useAuth } from "./auth/AuthContext";
+import { RequireAuth } from "./auth/RequireAuth";
+import { bisaLihatLaporanHarian } from "./auth/permissions";
+import { AppLayout } from "./layout/AppLayout";
+import { LoginPage } from "./pages/LoginPage";
+import { MenuHppPage } from "./pages/MenuHppPage";
+import { StokPage } from "./pages/StokPage";
+import { LaporanHarianPage } from "./pages/LaporanHarianPage";
+import { TransaksiIndexPage } from "./pages/transaksi/TransaksiIndexPage";
+import { MasterIndexPage } from "./pages/master/MasterIndexPage";
+import { PengaturanPage } from "./pages/PengaturanPage";
+import { JadwalIzinPage } from "./pages/JadwalIzinPage";
+import { PanduanPage } from "./pages/PanduanPage";
+import { SinkronisasiPenjualanPage } from "./pages/sales-sync/SinkronisasiPenjualanPage";
+import { AnalitikPage } from "./pages/analitik/AnalitikPage";
+
+/** Redirect halaman utama setelah login: owner/manajer_ops/supervisor -> Laporan Harian
+ * (ringkasan operasional harian), staf -> tetap ke Menu & HPP seperti sebelumnya (jangan
+ * ubah pengalaman staf). Perlu komponen terpisah karena <Navigate> butuh tahu role dari
+ * useAuth(), tidak bisa dibaca langsung di definisi <Route> JSX statis. */
+function BerandaRedirect() {
+  const { user } = useAuth();
+  if (user && bisaLihatLaporanHarian(user.role)) {
+    return <Navigate to="/laporan-harian" replace />;
+  }
+  return <Navigate to="/menu" replace />;
+}
+
+export function App() {
+  return (
+    <AuthProvider>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+
+        <Route
+          element={
+            <RequireAuth>
+              <AppLayout />
+            </RequireAuth>
+          }
+        >
+          <Route index element={<BerandaRedirect />} />
+          <Route path="/menu" element={<MenuHppPage />} />
+          <Route path="/stok" element={<StokPage />} />
+          <Route path="/transaksi" element={<TransaksiIndexPage />} />
+          <Route path="/jadwal-izin" element={<JadwalIzinPage />} />
+          <Route path="/panduan" element={<PanduanPage />} />
+          <Route
+            path="/laporan-harian"
+            element={
+              <RequireAuth roles={["owner", "manajer_ops", "supervisor"]}>
+                <LaporanHarianPage />
+              </RequireAuth>
+            }
+          />
+          {/* Analitik LEBIH SEMPIT dari Laporan Harian: supervisor tidak ikut (permission
+              `analitik.lihat` di backend cuma owner/manajer_ops). */}
+          <Route
+            path="/analitik"
+            element={
+              <RequireAuth roles={["owner", "manajer_ops"]}>
+                <AnalitikPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/sinkronisasi-penjualan"
+            element={
+              <RequireAuth roles={["owner", "manajer_ops"]}>
+                <SinkronisasiPenjualanPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/master"
+            element={
+              <RequireAuth roles={["owner", "manajer_ops"]}>
+                <MasterIndexPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/pengaturan"
+            element={
+              <RequireAuth roles={["owner", "manajer_ops"]}>
+                <PengaturanPage />
+              </RequireAuth>
+            }
+          />
+        </Route>
+
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </AuthProvider>
+  );
+}

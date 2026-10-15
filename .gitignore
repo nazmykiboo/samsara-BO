@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+
+# backup pg_dump (lihat scripts/backup-db.sh) -- jangan pernah ikut ter-commit,
+# bisa berisi data pelanggan/transaksi sungguhan.
+*.sql.gz
+backups/
