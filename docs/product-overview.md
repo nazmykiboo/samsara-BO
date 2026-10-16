@@ -256,16 +256,11 @@ Daftar murni fakta ketiadaan di kode saat ini, bukan roadmap:
   (frontend & backend disajikan dari domain yang sama lewat Nginx Proxy
   Manager), bukan API yang didesain untuk diakses cross-origin.
 - **Test otomatis untuk frontend (`apps/web`)** — tidak ada. `npm test`
-  menjalankan 269 test yang semuanya lulus (core 7, hr 46, inventory 151,
-  sales-sync 41, integrasi lintas-modul di `apps/api` 24) — **tapi nol test
+  menjalankan 276 test yang semuanya lulus (core 7, hr 46, inventory 151,
+  sales-sync 41, integrasi lintas-modul di `apps/api` 31) — **tapi nol test
   otomatis untuk kode React di `apps/web`**. `npm run typecheck` lulus
   bersih untuk semua workspace termasuk `web`, tapi typecheck ≠ test
   perilaku.
-- **Mekanisme revoke/logout token sebelum kedaluwarsa** — tidak ada. JWT
-  berlaku 12 jam (`core/src/auth/jwt.ts`), stateless, tidak ada blacklist
-  token maupun endpoint logout di server. Menonaktifkan user
-  (`PATCH /auth/users/:id`) mencegah login baru, tapi token yang sudah
-  terbit sebelumnya **tetap valid** sampai kedaluwarsa alami (maks 12 jam).
 - **Payroll/rekrutmen** di modul HR — tidak ada, HR hanya menangani jadwal
   shift & pengajuan libur.
 - **Refund/retur** — tidak ada konsep ini di modul Inventory (lihat
@@ -285,6 +280,21 @@ Daftar murni fakta ketiadaan di kode saat ini, bukan roadmap:
 - **Rate-limit login**: 5 kali gagal (gabungan password+PIN) dalam 15 menit
   mengunci akun sementara, berbasis tabel `core_login_attempts` — diverifikasi
   ada test regresi khusus untuk ini (`auth.test.ts`) dan lulus.
+- **Revoke token** (migrasi 0009, `core_users.token_version`) — ✅ hidup
+  penuh & teruji, ditambahkan 2026-10-16. Setiap login menyisipkan versi
+  token user saat itu ke payload JWT; middleware `requireAuth` membandingkan
+  versi itu ke `core_users.token_version` di database pada **setiap
+  request** (query tambahan, bukan lagi fully-stateless seperti sebelumnya
+  — overhead-nya diukur <0.1 ms untuk skala pilot outlet saat ini, lihat
+  `docs/architecture-decisions.md` § 22). Versi dinaikkan otomatis saat user
+  dinonaktifkan, password/PIN di-reset, atau `locationIds`-nya diubah —
+  token lama langsung ditolak 401 ("Sesi berakhir, silakan login ulang")
+  walau belum lewat TTL 12 jam. **Perubahan role TIDAK memicu ini** karena
+  tidak ada jalur ubah-role di aplikasi sama sekali saat ini (lihat § 5).
+  Tombol Keluar di frontend tetap murni hapus token lokal (tanpa endpoint
+  logout baru); 401 di tengah sesi sekarang ditangani global oleh
+  `apps/web/src/api/client.ts` — redirect otomatis ke halaman login dengan
+  notice singkat, bukan error mentah.
 - **Audit log** (`core_audit_log`): satu baris = satu field yang berubah
   (bukan satu baris per aksi). Dipakai untuk **himpunan field sensitif yang
   terus bertambah** seiring modul berkembang — harga beli/konversi item,

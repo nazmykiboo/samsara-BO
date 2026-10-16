@@ -15,6 +15,9 @@ function fakeUser(role: AuthUser["role"], locationIds: number[] = []): AuthUser 
     role,
     allLocations: role === "owner" || role === "manajer_ops",
     locationIds,
+    // Tidak relevan di domain layer (cuma dibandingkan oleh middleware
+    // requireAuth saat request HTTP masuk) -- 0 = baseline user baru.
+    tokenVersion: 0,
   };
 }
 

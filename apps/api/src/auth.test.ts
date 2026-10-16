@@ -1146,3 +1146,218 @@ test("POST /api/auth/users/:id/reset: manajer_ops/supervisor dapat password baru
   });
   assert.equal(loginNew.status, 200, "password BARU hasil reset berhasil dipakai login");
 });
+
+// ---------------------------------------------------------------------------
+// Revoke token (`core_users.token_version`) -- lihat
+// core/src/db/migrations/0009_add_token_version_to_users.sql
+//
+// Sebelum mekanisme ini ada, token yang sudah terbit tetap sah sampai TTL 12
+// jam habis walau akunnya dinonaktifkan atau kredensialnya di-reset. Sekarang
+// `requireAuth` membandingkan `tokenVersion` di payload JWT ke kolom
+// `token_version` di database pada SETIAP request.
+//
+// Pesannya SENGAJA dibedakan dari "Token tidak valid atau kedaluwarsa"
+// (signature gagal / lewat TTL) -- jadi test di bawah mengecek string-nya
+// PERSIS, bukan cuma status 401-nya.
+// ---------------------------------------------------------------------------
+
+const PESAN_SESI_BERAKHIR = "Sesi berakhir, silakan login ulang";
+
+/** Endpoint sembarang yang boleh diakses keempat role manusia (lihat modules/inventory/module.json § master_menu.lihat). */
+const ENDPOINT_UJI = "/api/inventory/menu";
+
+async function cekEndpoint(token: string, path = ENDPOINT_UJI): Promise<Response> {
+  return fetch(`${baseUrl}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+}
+
+/** Assert token masih hidup (200 di endpoint biasa). */
+async function assertTokenHidup(token: string, catatan: string): Promise<void> {
+  const res = await cekEndpoint(token);
+  assert.equal(res.status, 200, catatan);
+  await res.json();
+}
+
+/** Assert token sudah dibasikan -- 401 DENGAN pesan revoke yang spesifik, bukan pesan generik. */
+async function assertTokenBasi(token: string, catatan: string): Promise<void> {
+  const res = await cekEndpoint(token);
+  assert.equal(res.status, 401, catatan);
+  const body = (await res.json()) as { error: string };
+  assert.equal(body.error, PESAN_SESI_BERAKHIR, `pesan 401 harus spesifik "sesi berakhir": ${catatan}`);
+}
+
+test("revoke token: token user yang baru dinonaktifkan LANGSUNG ditolak 401 (tidak menunggu TTL 12 jam)", async () => {
+  const ownerToken = await getOwnerToken("revokedeact");
+  const targetId = await createTestUser("test_revoke_deact", "rahasia123", "manajer_ops");
+  const tokenA = await login("test_revoke_deact", "rahasia123");
+
+  await assertTokenHidup(tokenA, "token A bekerja normal sebelum user dinonaktifkan");
+
+  const patch = await fetch(`${baseUrl}/api/auth/users/${targetId}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ isActive: false }),
+  });
+  assert.equal(patch.status, 200);
+
+  await assertTokenBasi(tokenA, "token A DITOLAK begitu usernya dinonaktifkan");
+});
+
+test("revoke token: token lama ditolak setelah reset password, token hasil login ulang bekerja normal", async () => {
+  const ownerToken = await getOwnerToken("revokeresetpw");
+  const targetId = await createTestUser("test_revoke_resetpw", "password-lama-123", "supervisor", [ckLocationId]);
+  const tokenA = await login("test_revoke_resetpw", "password-lama-123");
+
+  await assertTokenHidup(tokenA, "token A bekerja normal sebelum reset");
+
+  const resetRes = await fetch(`${baseUrl}/api/auth/users/${targetId}/reset`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ownerToken}` },
+  });
+  assert.equal(resetRes.status, 200);
+  const { generatedPassword } = (await resetRes.json()) as { generatedPassword?: string };
+  assert.ok(generatedPassword, "password baru dikembalikan sekali di response reset");
+
+  await assertTokenBasi(tokenA, "token A DITOLAK setelah password user di-reset");
+
+  const tokenB = await login("test_revoke_resetpw", generatedPassword!);
+  await assertTokenHidup(tokenB, "token B (login pakai password BARU) bekerja normal");
+});
+
+test("revoke token: token lama staf ditolak setelah reset PIN, PIN baru dipakai login ulang normal", async () => {
+  const ownerToken = await getOwnerToken("revokeresetpin");
+  const stafId = await createTestStafUser("Test Revoke Reset Pin", "616263", [ckLocationId]);
+  const tokenA = await loginPin(stafId, "616263");
+
+  await assertTokenHidup(tokenA, "token A staf bekerja normal sebelum reset PIN");
+
+  const resetRes = await fetch(`${baseUrl}/api/auth/users/${stafId}/reset`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ownerToken}` },
+  });
+  assert.equal(resetRes.status, 200);
+  const { generatedPin } = (await resetRes.json()) as { generatedPin?: string };
+  assert.match(generatedPin ?? "", /^\d{6}$/);
+
+  await assertTokenBasi(tokenA, "token A staf DITOLAK setelah PIN di-reset");
+
+  const tokenB = await loginPin(stafId, generatedPin!);
+  await assertTokenHidup(tokenB, "token B (login pakai PIN BARU) bekerja normal");
+});
+
+test("revoke token: counter per-USER -- deactivate/reset satu user tidak mengganggu token user LAIN", async () => {
+  const ownerToken = await getOwnerToken("revokeisolasi");
+
+  const korbanId = await createTestUser("test_revoke_korban", "rahasia123", "supervisor", [ckLocationId]);
+  const penontonId = await createTestUser("test_revoke_penonton", "rahasia123", "supervisor", [ckLocationId]);
+  const tokenKorban = await login("test_revoke_korban", "rahasia123");
+  const tokenPenonton = await login("test_revoke_penonton", "rahasia123");
+
+  // Reset kredensial korban -- cuma token_version KORBAN yang naik.
+  const resetRes = await fetch(`${baseUrl}/api/auth/users/${korbanId}/reset`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ownerToken}` },
+  });
+  assert.equal(resetRes.status, 200);
+
+  await assertTokenBasi(tokenKorban, "token korban dibasikan oleh reset-nya sendiri");
+  await assertTokenHidup(tokenPenonton, "token user LAIN TIDAK terganggu (bukan counter global)");
+
+  // Lalu nonaktifkan korban -- penonton tetap tidak terganggu.
+  const patch = await fetch(`${baseUrl}/api/auth/users/${korbanId}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ isActive: false }),
+  });
+  assert.equal(patch.status, 200);
+
+  await assertTokenHidup(tokenPenonton, "token user LAIN tetap hidup setelah korban dinonaktifkan juga");
+  assert.ok(penontonId, "penonton memang user terpisah dari korban");
+});
+
+test("revoke token: token lama ditolak setelah locationIds user diubah, login ulang membawa lokasi BARU", async () => {
+  const ownerToken = await getOwnerToken("revokelokasi");
+  const targetId = await createTestUser("test_revoke_lokasi", "rahasia123", "supervisor", [ckLocationId]);
+
+  const loginA = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "test_revoke_lokasi", password: "rahasia123" }),
+  });
+  assert.equal(loginA.status, 200);
+  const bodyA = (await loginA.json()) as { token: string; user: { locationIds: number[] } };
+  // `Number(...)`: `ckLocationId` dibaca dari `core_locations.id` (BIGINT ->
+  // STRING lewat driver pg, pola yang sama dicatat di auth/types.ts), sedangkan
+  // `locationIds` di payload token sudah dinormalkan ke number oleh
+  // `getUserLocationIds` -- tanpa cast, deepEqual-nya membandingkan '1' vs 1.
+  assert.deepEqual(bodyA.user.locationIds, [Number(ckLocationId)], "token A membawa locationIds LAMA");
+
+  await assertTokenHidup(bodyA.token, "token A bekerja normal sebelum locationIds diubah");
+
+  const patch = await fetch(`${baseUrl}/api/auth/users/${targetId}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ locationIds: [outletLocationId] }),
+  });
+  assert.equal(patch.status, 200);
+
+  await assertTokenBasi(bodyA.token, "token A DITOLAK karena masih mengklaim locationIds LAMA");
+
+  const loginB = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "test_revoke_lokasi", password: "rahasia123" }),
+  });
+  assert.equal(loginB.status, 200, "login ulang berhasil (locationIds bukan kredensial)");
+  const bodyB = (await loginB.json()) as { token: string; user: { locationIds: number[] } };
+  assert.deepEqual(bodyB.user.locationIds, [Number(outletLocationId)], "token B membawa locationIds BARU");
+  await assertTokenHidup(bodyB.token, "token B bekerja normal");
+});
+
+test("revoke token: akun integrasi tetap login & pakai keempat endpoint import seperti biasa (tidak ada regresi)", async () => {
+  await createTestUser("test_revoke_integrasi", "rahasia-bot-123", "integrasi");
+  const token = await login("test_revoke_integrasi", "rahasia-bot-123");
+  assert.ok(token.length > 0, "login role integrasi tetap mengembalikan token");
+
+  try {
+    for (const path of PATH_IMPORT) {
+      const res = await postImport(path, token);
+      assert.equal(res.status, 200, `integrasi TETAP boleh POST /api/sales-sync${path} setelah requireAuth query DB`);
+      await res.json();
+    }
+  } finally {
+    await bersihkanFixtureSalesSync();
+  }
+});
+
+test("revoke token: kontrol positif -- token BARU semua role (4 role manusia + integrasi) langsung dipakai normal", async () => {
+  // Jalur NORMAL (token_version MATCH) harus tetap lolos untuk setiap role,
+  // bukan cuma jalur mismatch yang dites di atas.
+  await createTestUser("test_tv_owner", "rahasia123", "owner");
+  await createTestUser("test_tv_manajer", "rahasia123", "manajer_ops");
+  await createTestUser("test_tv_supervisor", "rahasia123", "supervisor", [ckLocationId]);
+  const stafId = await createTestStafUser("Test TV Staf", "717273", [ckLocationId]);
+
+  for (const [role, username] of [
+    ["owner", "test_tv_owner"],
+    ["manajer_ops", "test_tv_manajer"],
+    ["supervisor", "test_tv_supervisor"],
+  ] as const) {
+    const token = await login(username, "rahasia123");
+    await assertTokenHidup(token, `token baru role ${role} langsung bisa dipakai (token_version match)`);
+  }
+
+  const stafToken = await loginPin(stafId, "717273");
+  await assertTokenHidup(stafToken, "token baru role staf (login PIN) langsung bisa dipakai");
+
+  // `integrasi` ditolak 403 di ENDPOINT_UJI (whitelist permission), jadi
+  // kontrol positifnya lewat salah satu endpoint import yang memang haknya.
+  await createTestUser("test_tv_integrasi", "rahasia-bot-123", "integrasi");
+  const integrasiToken = await login("test_tv_integrasi", "rahasia-bot-123");
+  try {
+    const res = await postImport(PATH_IMPORT[0], integrasiToken);
+    assert.equal(res.status, 200, "token baru role integrasi langsung bisa dipakai di endpoint import");
+    await res.json();
+  } finally {
+    await bersihkanFixtureSalesSync();
+  }
+});

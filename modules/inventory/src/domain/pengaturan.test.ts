@@ -13,7 +13,16 @@ import { withRollback } from "./test-helpers.js";
 after(() => pool.end());
 
 function fakeUser(role: AuthUser["role"]): AuthUser {
-  return { id: 1, username: "test", role, allLocations: role === "owner" || role === "manajer_ops", locationIds: [] };
+  // `tokenVersion` tidak relevan di domain layer (cuma dipakai middleware
+  // requireAuth saat request HTTP masuk) -- 0 = baseline user baru.
+  return {
+    id: 1,
+    username: "test",
+    role,
+    allLocations: role === "owner" || role === "manajer_ops",
+    locationIds: [],
+    tokenVersion: 0,
+  };
 }
 
 test("resolveHppMethod: role owner/manajer_ops boleh override lewat query param", async () => {

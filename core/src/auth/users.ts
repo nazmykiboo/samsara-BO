@@ -129,8 +129,9 @@ export async function authenticate(client: PoolClient, username: string, passwor
     password_hash: string | null;
     is_active: boolean;
     role: Role;
+    token_version: number;
   }>(
-    `SELECT u.id, u.username, u.password_hash, u.is_active, r.name AS role
+    `SELECT u.id, u.username, u.password_hash, u.is_active, u.token_version, r.name AS role
      FROM core_users u
      JOIN core_roles r ON r.id = u.role_id
      WHERE u.username = $1`,
@@ -147,7 +148,14 @@ export async function authenticate(client: PoolClient, username: string, passwor
   const allLocations = isAllLocationsRole(row.role);
   const locationIds = allLocations ? [] : await getUserLocationIds(client, row.id);
 
-  return { id: row.id, username: row.username, role: row.role, allLocations, locationIds };
+  return {
+    id: row.id,
+    username: row.username,
+    role: row.role,
+    allLocations,
+    locationIds,
+    tokenVersion: row.token_version,
+  };
 }
 
 /** Versi PIN dari `authenticate` -- cuma role staf yang boleh lewat sini. */
@@ -158,8 +166,9 @@ export async function authenticateByPin(client: PoolClient, userId: number, pin:
     pin_hash: string | null;
     is_active: boolean;
     role: Role;
+    token_version: number;
   }>(
-    `SELECT u.id, u.username, u.pin_hash, u.is_active, r.name AS role
+    `SELECT u.id, u.username, u.pin_hash, u.is_active, u.token_version, r.name AS role
      FROM core_users u
      JOIN core_roles r ON r.id = u.role_id
      WHERE u.id = $1`,
@@ -174,7 +183,14 @@ export async function authenticateByPin(client: PoolClient, userId: number, pin:
   if (!valid) return null;
 
   const locationIds = await getUserLocationIds(client, row.id);
-  return { id: row.id, username: row.username, role: row.role, allLocations: false, locationIds };
+  return {
+    id: row.id,
+    username: row.username,
+    role: row.role,
+    allLocations: false,
+    locationIds,
+    tokenVersion: row.token_version,
+  };
 }
 
 /**
@@ -300,6 +316,19 @@ export interface UpdateUserInput {
  * runtime walau tipenya bilang number, jadi perbandingan di sini SELALU
  * lewat `String(...)` di kedua sisi, tidak pernah `===` angka langsung).
  * Dipakai untuk guard "tidak bisa menonaktifkan akun sendiri".
+ *
+ * REVOKE TOKEN (`core_users.token_version`): dinaikkan di sini untuk dua
+ * perubahan yang membuat token lama menyesatkan -- (1) user dinonaktifkan
+ * (`isActive: false`), (2) `locationIds` diubah (locationIds ikut disisipkan
+ * ke payload JWT, jadi token lama masih mengklaim daftar lokasi LAMA).
+ *
+ * TIDAK dinaikkan untuk perubahan ROLE, karena role saat ini TIDAK BISA
+ * diubah lewat endpoint mana pun di aplikasi ini (`UpdateUserInput` cuma
+ * menerima `name`, `isActive`, `locationIds` -- tidak ada jalur ubah-role
+ * sama sekali, baik di router maupun di CLI). KALAU fitur ubah-role
+ * ditambahkan nanti, `token_version` WAJIB ikut dinaikkan di situ juga --
+ * tanpa itu, token lama akan terus dipercaya membawa role LAMA sampai TTL
+ * 12 jam habis (termasuk kasus penurunan hak akses, mis. owner -> staf).
  */
 export async function updateUser(
   client: PoolClient,
@@ -349,6 +378,12 @@ export async function updateUser(
     if (input.isActive !== undefined) {
       params.push(input.isActive);
       sets.push(`is_active = $${params.length}`);
+      // Dinonaktifkan -> token yang sudah terbit harus langsung basi (jangan
+      // tunggu TTL 12 jam). Increment RELATIF di SQL (bukan baca-lalu-tulis
+      // angka dari aplikasi) supaya dua request bersamaan tidak saling
+      // menimpa versi. Diaktifkan lagi (`true`) TIDAK menaikkan apa pun --
+      // tidak ada token yang perlu dibasikan di arah itu.
+      if (input.isActive === false) sets.push(`token_version = token_version + 1`);
     }
     params.push(userId);
     await client.query(`UPDATE core_users SET ${sets.join(", ")}, updated_at = now() WHERE id = $${params.length}`, params);
@@ -363,6 +398,15 @@ export async function updateUser(
     for (const locationId of input.locationIds) {
       await client.query(`INSERT INTO core_user_lokasi (user_id, location_id) VALUES ($1, $2)`, [userId, locationId]);
     }
+    // Daftar lokasi ikut masuk payload JWT (`AuthUser.locationIds`), jadi token
+    // lama langsung dibasikan -- baik saat lokasi DITAMBAH (token lama kurang
+    // izin, user bingung kenapa masih 403) maupun DIKURANGI (token lama masih
+    // memberi akses ke lokasi yang sudah dicabut -- ini sisi keamanannya).
+    // Statement terpisah dari blok UPDATE di atas karena blok itu hanya jalan
+    // kalau `name`/`isActive` ikut dikirim; `locationIds` bisa dikirim sendiri.
+    await client.query(`UPDATE core_users SET token_version = token_version + 1, updated_at = now() WHERE id = $1`, [
+      userId,
+    ]);
   }
 }
 
@@ -413,6 +457,11 @@ export interface ResetCredentialResult {
  * sekali di sistem ini, jadi ini satu-satunya jalan pemulihan: owner
  * generate kredensial baru, kredensial LAMA langsung tidak berlaku (diganti
  * total, bukan ditambah) begitu baris ini di-UPDATE.
+ *
+ * `token_version` ikut dinaikkan di statement UPDATE yang sama: tanpa itu,
+ * kredensial lama memang mati tapi SESI lama (token yang sudah dipegang) tetap
+ * hidup sampai 12 jam -- padahal alasan utama owner me-reset kredensial justru
+ * "akunnya dipakai orang lain / HP-nya hilang".
  */
 export async function resetCredential(client: PoolClient, userId: number): Promise<ResetCredentialResult> {
   const { rows } = await client.query<{ id: number; role: Role }>(
@@ -425,10 +474,10 @@ export async function resetCredential(client: PoolClient, userId: number): Promi
   if (PASSWORD_ROLES.includes(row.role)) {
     const password = generatePassword();
     const passwordHash = await hashPassword(password);
-    await client.query(`UPDATE core_users SET password_hash = $1, updated_at = now() WHERE id = $2`, [
-      passwordHash,
-      userId,
-    ]);
+    await client.query(
+      `UPDATE core_users SET password_hash = $1, token_version = token_version + 1, updated_at = now() WHERE id = $2`,
+      [passwordHash, userId],
+    );
     return { role: row.role, generatedPassword: password };
   }
 
@@ -444,6 +493,9 @@ export async function resetCredential(client: PoolClient, userId: number): Promi
   } while (await isPinTakenAtLocations(client, pin, locationIds, row.id));
 
   const pinHash = await hashPin(pin);
-  await client.query(`UPDATE core_users SET pin_hash = $1, updated_at = now() WHERE id = $2`, [pinHash, userId]);
+  await client.query(
+    `UPDATE core_users SET pin_hash = $1, token_version = token_version + 1, updated_at = now() WHERE id = $2`,
+    [pinHash, userId],
+  );
   return { role: row.role, generatedPin: pin };
 }

@@ -2187,3 +2187,134 @@ Test membuat user fixture-nya **sendiri** lewat SQL langsung (pola
 `seed:integrasi`. Endpoint import COMMIT sungguhan, jadi baris fixture
 arsip (prefix `TEST-PERM-`, termasuk antrian `salessync_item_mapping` yang
 disegarkan otomatis oleh import log) dibersihkan eksplisit di `finally`.
+
+---
+
+## 22. Revoke token berbasis `token_version` (2026-10-16)
+
+### 22.1 Masalah
+
+Sistem auth sejak awal (§ 13.6, poin 14) murni **stateless**: `requireAuth`
+cuma verify signature JWT, tanpa query database sama sekali. Konsekuensinya,
+token yang sudah terbit tetap sah secara kriptografis sampai TTL alami
+habis (12 jam) — **walaupun** user-nya sudah dinonaktifkan, password/PIN-nya
+di-reset, atau akses lokasinya dicabut di tengah jalan. Gap ini sudah
+dilaporkan eksplisit ke owner di § 13.6/14 sebagai sesuatu yang "wajib
+diatasi sebelum Tahap 4/deploy".
+
+### 22.2 Keputusan: counter per-user, bukan tabel sesi/blacklist terpisah
+
+Dua opsi standar yang disebut di § 13.6: (a) simpan sesi di database dan
+cek tiap request, atau (b) daftar token yang dicabut (blacklist). Dipilih
+varian lebih murah dari opsi (a): satu kolom `core_users.token_version`
+(INTEGER NOT NULL DEFAULT 0, migrasi `core/src/db/migrations/0009_add_token_version_to_users.sql`),
+BUKAN tabel sesi terpisah. Alasan: jumlah user di sistem ini kecil (pilot
+outlet tunggal), satu angka per user sudah cukup untuk kebutuhan "basikan
+SEMUA token user ini sekarang juga" — tidak perlu melacak sesi individual
+per device/browser.
+
+Mekanismenya: `signAuthToken` (tidak diubah strukturnya) menyisipkan
+`tokenVersion` user APA ADANYA ke payload JWT, karena fungsi itu memang
+men-sign seluruh objek `AuthUser` yang dioper (lihat `core/src/auth/jwt.ts`).
+`authenticate()`/`authenticateByPin()` (`core/src/auth/users.ts`) membaca
+`token_version` dari DB saat login dan menyisipkannya ke objek `AuthUser`
+yang dikembalikan. `requireAuth` (`core/src/auth/permissions.ts`), SETELAH
+verify signature berhasil, query SATU baris (`SELECT token_version FROM
+core_users WHERE id = $1`) dan bandingkan ke versi di token — mismatch atau
+baris sudah tidak ada → 401 `"Sesi berakhir, silakan login ulang"` (pesan
+INI SENGAJA beda dari `"Token tidak valid atau kedaluwarsa"` yang dipakai
+untuk kegagalan verify signature/TTL alami, supaya dua skenario bisa
+dibedakan saat menelusuri keluhan user).
+
+### 22.3 Trade-off performa yang disadari & diterima
+
+`requireAuth` dipasang GLOBAL (`core/src/server/build-server.ts`), jadi
+perubahan ini mengubah middleware itu dari **nol query per request** jadi
+**satu query per request** ke SEMUA endpoint terautentikasi di modul
+manapun. Diukur langsung di DB dev (8 baris `core_users`): `EXPLAIN
+(ANALYZE, BUFFERS)` untuk query ini **0.076 ms**, full cache hit, planner
+pilih Seq Scan (wajar untuk tabel sekecil ini, index primary key tetap ada
+dan otomatis dipakai begitu tabel tumbuh). Dibandingkan biaya query domain
+lain di sistem ini (join resep berjenjang, agregasi stok ledger) atau
+`bcrypt.compare` saat login (ratusan ms, disengaja ~12 rounds) — overhead
+ini **tidak terukur** oleh pemakai untuk skala satu outlet pilot. Kalau
+nanti skalanya naik jauh (puluhan request/detik terus-menerus), opsi mitigasi
+standar sudah diketahui: cache `token_version` per user di memori dengan TTL
+pendek (mis. 5-10 detik) yang menukar "revoke instan" dengan "revoke dalam
+hitungan detik" — TIDAK dikerjakan sekarang karena belum perlu, dan
+menambah cache sebelum ada bukti nyata perlu cuma mengorbankan ketepatan
+revoke tanpa keuntungan terukur.
+
+### 22.4 Tiga titik yang menaikkan `token_version` (`core/src/auth/users.ts`)
+
+1. `updateUser()` — saat `isActive` diubah jadi `false` (menonaktifkan user).
+   Menyalakan kembali (`isActive: true`) TIDAK menaikkan apa pun — tidak ada
+   token yang perlu dibasikan ke arah itu.
+2. `updateUser()` — saat `locationIds` diubah (UPDATE terpisah dari blok
+   `name`/`isActive`, karena `locationIds` bisa dikirim sendirian).
+   `locationIds` ikut disisipkan ke JWT (`AuthUser.locationIds`), jadi token
+   lama yang masih mengklaim lokasi LAMA harus langsung basi begitu lokasi
+   di DB berubah — baik nambah maupun ngurangin akses.
+3. `resetCredential()` — reset password ATAU PIN, di statement UPDATE yang
+   sama dengan penggantian `password_hash`/`pin_hash`.
+
+Semua pakai `token_version = token_version + 1` (increment relatif di SQL),
+bukan baca-angka-dulu-dari-aplikasi, supaya aman dari race condition kalau
+ada dua request bersamaan.
+
+**Role SENGAJA tidak ada di daftar ini** — dikonfirmasi ulang saat
+implementasi: **tidak ada satu pun jalur ubah-role** di aplikasi ini
+sekarang (`UpdateUserInput` cuma terima `name`/`isActive`/`locationIds`,
+tidak ada `role`). Ditulis sebagai catatan eksplisit di JSDoc `updateUser`:
+kalau fitur ubah-role ditambahkan nanti, `token_version` WAJIB ikut
+dinaikkan di situ juga — tanpa itu, token lama akan terus dipercaya membawa
+role LAMA sampai TTL 12 jam habis, termasuk skenario penurunan hak akses
+(mis. owner diturunkan ke staf tapi tokennya masih mengaku owner).
+
+### 22.5 Frontend
+
+Tombol Keluar (`apps/web/src/auth/AuthContext.tsx`) **tidak diubah** —
+tetap murni hapus token+user dari `localStorage`, tanpa panggilan API, sesuai
+instruksi eksplisit owner (tidak perlu endpoint logout baru).
+
+401 yang muncul DI TENGAH sesi (bukan saat login) sekarang ditangani GLOBAL
+di `apps/web/src/api/client.ts` (`handleUnauthorized()`, dipanggil dari
+`request()`/`postCsv()`): hapus token+user dari `localStorage`, simpan pesan
+error ke `sessionStorage` (dibaca sekali oleh `LoginPage.tsx` lalu dihapus,
+supaya tidak nyangkut di kunjungan berikutnya), lalu `window.location.href
+= "/login"` — full reload, karena router app ini `<BrowserRouter>` biasa
+tanpa instance router yang bisa diakses dari file non-komponen. Dua guard
+anti-loop: path yang mengandung `/auth/login` di-skip total (gagal
+login/salah password BUKAN "sesi berakhir", jangan ikut redirect), dan
+tidak reload kalau sudah di `/login`.
+
+### 22.6 Verifikasi
+
+`npm run typecheck` bersih 6 workspace. `npm test` **276 test, 0 gagal**
+(269 lama + 7 baru, semua workspace termasuk `api` yang sekarang memuat
+request HTTP sungguhan lewat `requireAuth` yang sudah async+query DB).
+7 test baru di `apps/api/src/auth.test.ts`:
+
+1. Token user yang baru dinonaktifkan langsung ditolak 401 (pesan persis
+   "Sesi berakhir, silakan login ulang")
+2. Token lama ditolak setelah reset password; login dengan password baru
+   berhasil dan tokennya normal
+3. Token lama staf ditolak setelah reset PIN; PIN baru dipakai login ulang
+4. Counter per-user dibuktikan: deactivate/reset SATU user tidak mengganggu
+   token user LAIN
+5. Token lama ditolak setelah `locationIds` diubah; login ulang membawa
+   lokasi baru
+6. Akun role `integrasi` tetap bisa login ulang normal & pakai keempat
+   endpoint import (regresi dari § 21)
+7. Kontrol positif: token baru keempat role manusia + `integrasi` langsung
+   bisa dipakai normal di jalur yang sesuai permission masing-masing
+
+Diverifikasi ulang secara independen (bukan cuma dari laporan implementasi)
+lewat `curl` manual terhadap dev server sungguhan (reset PIN staf, deactivate
+manajer di tengah sesi, cek user lain tidak terganggu) DAN lewat browser:
+user staf yang sedang aktif browsing (`/menu` ter-load, PIN sudah login)
+dinonaktifkan dari sisi lain, klik menu berikutnya langsung redirect ke
+`/login` dengan banner amber "Sesi berakhir, silakan login ulang" — banner
+itu terbukti hilang lagi di kunjungan berikutnya (read-once). Semua akun QA
+yang dipakai untuk verifikasi ini (4 akun, lintas role) dihapus bersih
+setelahnya, termasuk baris `core_user_lokasi`/`core_login_attempts` terkait.

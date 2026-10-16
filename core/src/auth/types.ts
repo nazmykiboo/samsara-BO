@@ -54,4 +54,18 @@ export interface AuthUser {
   allLocations: boolean;
   /** Daftar id lokasi yang boleh diakses -- kosong & tidak relevan kalau `allLocations` true. */
   locationIds: number[];
+  /**
+   * Counter revoke token (`core_users.token_version`), disisipkan ke payload
+   * JWT saat login dan dibandingkan ke nilai TERKINI di database oleh
+   * `requireAuth` pada SETIAP request -- kalau beda, token dianggap basi (401)
+   * walau tanda tangannya masih sah dan belum kedaluwarsa. Lihat
+   * `core/src/db/migrations/0009_add_token_version_to_users.sql`.
+   *
+   * BEDA dari `id` di atas: `token_version` adalah INTEGER biasa (bukan
+   * BIGINT), dan driver `pg` memulangkan INTEGER sebagai JS `number` asli --
+   * jadi tipe `number` di sini benar secara runtime, tidak kena gotcha
+   * BIGINT-jadi-string seperti `id`. Perbandingannya karena itu boleh
+   * `!==` langsung, tanpa `String(...)`/`Number(...)` dulu.
+   */
+  tokenVersion: number;
 }

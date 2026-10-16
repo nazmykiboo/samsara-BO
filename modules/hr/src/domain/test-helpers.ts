@@ -25,6 +25,9 @@ export function fakeUser(partial: Partial<AuthUser> & Pick<AuthUser, "id" | "rol
     username: `test-${partial.id}`,
     allLocations: partial.role === "owner" || partial.role === "manajer_ops",
     locationIds: [],
+    // Tidak relevan di domain layer (cuma dibandingkan middleware requireAuth
+    // saat request HTTP masuk) -- 0 = baseline user baru.
+    tokenVersion: 0,
     ...partial,
   };
 }
