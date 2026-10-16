@@ -39,13 +39,38 @@ COMMENT ON COLUMN core_locations.entitas IS
 -- sudah ada di core_user_lokasi, soft reference) masih memegang nilai id
 -- lama. ON CONFLICT (id) DO NOTHING supaya aman kalau migrasi ini pernah
 -- dicoba jalan lagi di luar mekanisme tracking schema_migrations.
-INSERT INTO core_locations (id, name, is_active, created_at, entitas)
-OVERRIDING SYSTEM VALUE
-SELECT id, name, is_active, created_at, entitas FROM inventory_locations
-ON CONFLICT (id) DO NOTHING;
+--
+-- KOREKSI 2026-10-16 (bug nyata, ditemukan saat deploy production #1 ke
+-- database BENAR-BENAR fresh): blok ini awalnya mengasumsikan
+-- inventory_locations SUDAH ADA -- benar untuk database dev yang sudah
+-- lama berjalan (tabel itu sudah ada sejak modul Inventory 0001, jauh
+-- sebelum migrasi ini ditulis), tapi SALAH untuk database baru: runMigrations()
+-- (core/src/db/migrate.ts) selalu menjalankan SEMUA migrasi core dulu
+-- sebelum migrasi modul manapun, jadi migrasi ini jalan SEBELUM modul
+-- Inventory sempat membuat inventory_locations sama sekali -- `INSERT ...
+-- FROM inventory_locations` gagal dengan "relation does not exist" dan
+-- menggagalkan SELURUH migrate (core & modul lain ikut tidak jalan).
+-- Dibungkus IF EXISTS supaya PERILAKU TIDAK BERUBAH SAMA SEKALI di database
+-- manapun yang sudah menjalankan migrasi ini (tabelnya memang ada, blok ini
+-- tetap jalan persis seperti sebelumnya) -- cuma menambal database baru
+-- (tabelnya belum ada = memang tidak ada data lama yang perlu disalin,
+-- modul Inventory akan membuat inventory_locations kosong sendiri nanti,
+-- lalu menghapusnya lagi di modules/inventory/0023_move_locations_to_core.sql
+-- yang sudah idempotent/aman dari awal lewat DROP TABLE IF EXISTS).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'inventory_locations') THEN
+    INSERT INTO core_locations (id, name, is_active, created_at, entitas)
+    OVERRIDING SYSTEM VALUE
+    SELECT id, name, is_active, created_at, entitas FROM inventory_locations
+    ON CONFLICT (id) DO NOTHING;
+  END IF;
+END $$;
 
 -- Reset sequence identity supaya INSERT berikutnya (lokasi baru, bukan
--- hasil copy) lanjut dari nomor yang benar, bukan mulai dari 1 lagi.
+-- hasil copy) lanjut dari nomor yang benar, bukan mulai dari 1 lagi. Aman
+-- juga untuk database baru (blok di atas di-skip, core_locations kosong):
+-- COALESCE jatuh ke 1, sequence mulai dari awal seperti seharusnya.
 SELECT setval(
   pg_get_serial_sequence('core_locations', 'id'),
   COALESCE((SELECT MAX(id) FROM core_locations), 1)

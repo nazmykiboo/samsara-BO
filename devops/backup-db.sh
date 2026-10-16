@@ -21,12 +21,14 @@ RETENTION_DAYS="${RETENTION_DAYS:-7}"
 BACKUP_DIR="${BACKUP_DIR:-/root/samsara-backups}"
 
 mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
 
 STAMP=$(date +%Y-%m-%d_%H%M%S)
 OUT_FILE="$BACKUP_DIR/samsara_${STAMP}.sql.gz"
 
 docker exec -e PGPASSWORD="$DB_PASSWORD" "$PG_CONTAINER" \
   pg_dump -U "$DB_USER" -d "$DB_NAME" | gzip > "$OUT_FILE"
+chmod 600 "$OUT_FILE"
 
 echo "[backup-db] tersimpan: $OUT_FILE"
 

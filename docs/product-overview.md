@@ -33,39 +33,44 @@ hari. Model ekspansi (kota besar, rest area, franchise/kemitraan vs cloud
 kitchen) masih terbuka, belum diputuskan — itu keputusan bisnis di luar
 scope sistem ini.
 
-**Status saat ini: development lokal, production BELUM live.** Per
-[`devops/README.md`](../devops/README.md) (dicek ulang langsung — `git log`,
-`dig`, percobaan `ssh` — saat menulis ulang bagian ini 2026-10-16, bukan
-disalin dari versi dokumen sebelumnya):
+**Status saat ini: development lokal LENGKAP, production SUDAH LIVE** di
+`https://burnas-app.duckdns.org` (sejak 2026-10-16). Per
+[`devops/README.md`](../devops/README.md) (dicek ulang langsung ke VPS
+sungguhan, bukan disalin dari versi dokumen sebelumnya):
 
-- **Push ke Git remote sudah berhasil** — tiga commit terkonfirmasi ada di
-  `origin/master` (`https://github.com/nazmykiboo/samsara-BO.git`).
-- **Domain production: `burnas-app.duckdns.org`** (dikoreksi 2026-10-17 —
-  SEBELUMNYA sempat salah tercatat `burnas-ops.duckdns.org`, ternyata itu
-  domain `n8n` yang sudah live di production, BUKAN untuk app Samsara.
-  `vps.burnas-ops.id` yang tercatat paling awal juga tidak pernah dipakai.
-  **`burnas-ops.duckdns.org` adalah milik n8n — jangan pernah disentuh.**)
-- **Akses SSH ke VPS sudah berhasil** (alias `samsara-vps` di
-  `~/.ssh/config`) — diagnostik baca-saja (Tahap A) sudah dijalankan
-  2026-10-16/17 dan menemukan beberapa kondisi nyata yang mengubah rencana
-  awal: RAM bebas VPS sangat tipis (~350MB dari 3.8GB), port 80/443 sudah
-  dipakai nginx host-level (systemd) + Certbot untuk melayani n8n (bukan
-  Nginx Proxy Manager seperti rencana awal), dan nama container Postgres
-  sungguhan adalah `n8n-stack-postgres-1` (bukan `postgres`). Lihat
-  `devops/README.md` untuk status terkini tiap langkah deploy.
-- Dockerfile API & web sudah ditulis, tapi **belum pernah di-`docker build`
-  sungguhan** (Docker tidak terpasang di mesin dev ini).
-- Database `samsara` di VPS, swap memory (sudah ada 2GB), konfigurasi
-  reverse proxy + SSL, cron backup — **eksekusinya belum selesai**, masih
-  berjalan bertahap (Tahap A/B) mengikuti temuan nyata di VPS, bukan
-  asumsi dari draft awal.
-- JWT secret production **sudah** di-generate dan tersimpan di
-  `.env.production` (di luar git).
+- Push ke Git, akses SSH ke VPS (alias `samsara-vps`), database `samsara`
+  (role & password acak, dibuat di instance Postgres existing lewat
+  `docker exec`), reverse proxy + SSL (`burnas-app.duckdns.org`, nginx
+  host-level existing + Certbot — BUKAN Nginx Proxy Manager seperti rencana
+  awal), swap 2GB, JWT secret production, backup harian otomatis (cron +
+  sudah dites manual, file valid), dan **migrasi database production** —
+  **semuanya ✅ selesai dan terverifikasi**.
+- **Satu bug migrasi nyata ditemukan & diperbaiki** saat deploy ini: migrasi
+  `core/0006_move_locations_to_core.sql` crash di database yang BENAR-BENAR
+  baru (gap yang tidak pernah kelihatan di dev karena databasenya tidak
+  pernah fresh sejak migrasi itu ditulis) — diperbaiki dengan konfirmasi
+  eksplisit owner (edit ke migrasi yang sudah *applied*, biasanya dilarang
+  di repo ini), diuji ulang end-to-end terhadap database fresh sebelum
+  dicoba lagi ke production. Detail: `docs/architecture-decisions.md` § 23.
+- RAM VPS sangat tipis (available sempat di bawah 1GB) — owner
+  mengonfirmasi eksplisit untuk lanjut dengan resource limit sangat ketat
+  (api 256MB, web 64MB). Pemakaian aktual setelah jalan jauh di bawah limit
+  (~68MB dan ~2.6MB) — tidak OOM.
+- Smoke test lulus semua: HTTPS valid, `/health` OK, container `api`
+  di-restart sekali dan naik lagi sendiri otomatis, n8n/Postgres/VNC
+  terverifikasi TIDAK terganggu sepanjang proses (uptime tidak pernah
+  reset, dicek berkali-kali).
+- **Satu-satunya yang tersisa**: akun owner & integrasi production — SENGAJA
+  belum dibuat, menunggu owner menjalankan sendiri dua perintah seed
+  (`seed:owner` interaktif, `seed:integrasi`) supaya password tidak pernah
+  lewat tangan siapa pun selain owner sendiri. Lihat `devops/README.md`
+  Langkah 7 untuk perintah persisnya.
 
-Ringkasnya: kode aplikasi dan file konfigurasi deploy sudah siap, push ke
-repo GitHub sudah berhasil, domain production sudah resolve — tapi
-**eksekusi di sisi server (VPS) itu sendiri belum ada satu pun yang
-jalan**, semuanya menunggu akses SSH.
+Ringkasnya: app Samsara Backoffice sudah bisa diakses publik dengan HTTPS
+valid di `burnas-app.duckdns.org`, berjalan berdampingan dengan n8n/VNC yang
+sudah ada tanpa mengganggu satu pun, dan database production sudah
+termigrasi bersih dari nol — tinggal menunggu owner membuat akun login
+pertamanya sendiri.
 
 ---
 
@@ -318,25 +323,25 @@ Daftar murni fakta ketiadaan di kode saat ini, bukan roadmap:
   cron job di mana pun (menunggu akses SSH ke VPS saat deploy).
 - **Status deploy dev vs production** (per `devops/README.md`, status
   terkini — lihat dokumen itu untuk detail per-langkah): dev lokal berjalan
-  penuh dan diuji (lihat § 1 & § 5). Production: push ke Git remote sudah
-  berhasil, akses SSH ke VPS sudah berfungsi (alias `samsara-vps`), swap
-  2GB **sudah ada** di VPS. Domain app yang benar adalah
-  `burnas-app.duckdns.org` (bukan `burnas-ops.duckdns.org` yang ternyata
-  milik n8n), sudah dikonfirmasi resolve ke IP VPS dengan benar. **Reverse
-  proxy + SSL untuk domain app SUDAH selesai**: VPS sudah punya nginx
-  host-level + Certbot yang melayani n8n, jadi app Samsara numpang di
-  nginx yang sama (bukan Nginx Proxy Manager terpisah seperti rencana
-  awal) — server block baru dibuat, sertifikat Let's Encrypt untuk
-  `burnas-app.duckdns.org` sudah terbit dan valid, diverifikasi n8n tidak
-  terganggu sama sekali (cek sebelum/sesudah, serial sertifikatnya tidak
-  berubah). `https://burnas-app.duckdns.org` saat ini **502 Bad Gateway**
-  — ini wajar, menunggu container app yang belum dideploy, bukan masalah
-  di sisi routing/SSL. Yang masih tersisa: Dockerfile belum di-build
-  sungguhan, database `samsara` belum dibuat di VPS, cron backup belum
-  terpasang, akun owner & integrasi production belum dibuat (sengaja tidak
-  memigrasikan akun dev — lihat `docs/integrasi-n8n.md` untuk akun
-  integrasi). RAM VPS tipis (~350MB bebas) jadi container app akan
-  dibatasi resource sangat ketat.
+  penuh dan diuji (lihat § 1 & § 5). **Production SUDAH LIVE** di
+  `https://burnas-app.duckdns.org` (nginx host-level + Certbot existing yang
+  juga melayani n8n di domain terpisah `burnas-ops.duckdns.org` — tidak
+  terganggu, diverifikasi berkali-kali). Database `samsara` (role + password
+  acak) dibuat lewat `docker exec` ke instance Postgres existing (role
+  superuser instance ternyata `n8n`, bukan `postgres` — detail
+  `devops/README.md`), **migrasi production berhasil penuh** (42 file lintas
+  4 modul) setelah satu bug migrasi nyata ditemukan & diperbaiki (lihat
+  `docs/architecture-decisions.md` § 23 — migrasi `core/0006` crash di
+  database fresh, gap yang tidak pernah kelihatan di dev). Cron backup
+  harian terpasang dan sudah dites manual (file valid, permission 600).
+  Container `api`/`web` jalan dengan resource limit ketat (RAM VPS tipis,
+  sempat available < 1GB, owner mengonfirmasi eksplisit untuk lanjut) —
+  pemakaian aktual jauh di bawah limit, tidak OOM. **Satu-satunya yang
+  tersisa**: akun owner & integrasi production sengaja belum dibuat,
+  menunggu owner menjalankan sendiri `seed:owner`/`seed:integrasi` secara
+  interaktif supaya password tidak lewat tangan siapa pun selain owner
+  (lihat `docs/integrasi-n8n.md` untuk akun integrasi, `devops/README.md`
+  Langkah 7 untuk perintah persisnya).
 
 ---
 

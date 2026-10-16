@@ -2318,3 +2318,132 @@ dinonaktifkan dari sisi lain, klik menu berikutnya langsung redirect ke
 itu terbukti hilang lagi di kunjungan berikutnya (read-once). Semua akun QA
 yang dipakai untuk verifikasi ini (4 akun, lintas role) dihapus bersih
 setelahnya, termasuk baris `core_user_lokasi`/`core_login_attempts` terkait.
+
+---
+
+## 23. Deploy production #1 — app live, dan bug migrasi `core/0006` (2026-10-16)
+
+### 23.1 Ringkasan
+
+App Samsara Backoffice berhasil di-deploy ke production, live di
+`https://burnas-app.duckdns.org`, berdampingan dengan n8n/Postgres/VNC yang
+sudah berjalan di VPS yang sama tanpa mengganggu satu pun (diverifikasi
+berkali-kali sepanjang proses: uptime container tidak pernah reset,
+sertifikat SSL n8n tidak berubah, `burnas-ops.duckdns.org` tetap 200 OK).
+Dikerjakan bertahap dengan banyak titik berhenti eksplisit (bukan satu
+proses otomatis dari ujung ke ujung) — pola yang konsisten dipakai sejak
+sesi deploy pertama (lihat § 22 dan seterusnya untuk kronologi sebelumnya).
+
+### 23.2 Koreksi domain production
+
+Domain production app SEMPAT salah tercatat `burnas-ops.duckdns.org` di
+beberapa dokumen (CLAUDE.md, devops/README.md, product-overview.md) —
+diagnostik langsung ke VPS menemukan domain itu sebenarnya milik **n8n**,
+sudah live sejak lama (reverse-proxy ke port 5678, SSL sejak September
+2026). Domain app yang benar: **`burnas-app.duckdns.org`**, didaftarkan
+owner terpisah di DuckDNS. Sempat ada kesalahan tambahan: saat pertama
+didaftarkan, IP yang terisi di DuckDNS adalah IP perangkat owner sendiri
+(auto-terisi), bukan IP VPS — baru benar setelah owner perbaiki manual di
+dashboard DuckDNS. Semua dokumen sudah dikoreksi.
+
+### 23.3 Reverse proxy: numpang di nginx host-level existing, bukan Nginx Proxy Manager
+
+Rencana awal (Nginx Proxy Manager terpisah, lihat § 20/21 dan CLAUDE.md
+§ Rencana Infra VPS) diubah setelah diagnostik menemukan VPS SUDAH punya
+`nginx` host-level (systemd, bukan Docker) + Certbot yang melayani
+`burnas-ops.duckdns.org` (n8n) — port 80/443 sudah terpakai, NPM belum
+terpasang sama sekali. Keputusan owner (lewat AskUserQuestion): tambah
+server block BARU di nginx yang sama untuk `burnas-app.duckdns.org`, bukan
+pasang NPM terpisah yang akan rebutan port. Backup config dibuat sebelum
+perubahan (`/etc/nginx/sites-available.backup-20261016-142151`), diverifikasi
+n8n tidak terganggu sebelum & sesudah (serial sertifikat tidak berubah).
+
+### 23.4 RAM VPS tipis — keputusan sadar menerima risiko
+
+RAM available VPS sempat terukur 697MB-717MB, di bawah ambang aman 1GB
+yang ditetapkan owner sendiri sebagai syarat berhenti. Penyebabnya n8n
+sendiri (~410MB RSS) plus proses pendukungnya — kondisi harian, bukan
+lonjakan sesaat (dicek ulang beberapa menit kemudian, angkanya stabil/turun
+sedikit, bukan membaik). Owner dikonfirmasi eksplisit (AskUserQuestion)
+untuk tetap lanjut dengan resource limit SANGAT ketat (`docker-compose.prod.yml`:
+api 256M limit/64M reservation, web 64M limit/16M reservation, diperketat
+dari draft awal 512M/128M). Hasil aktual setelah container jalan: api
+~68MB (26% dari limit), web ~2.6MB (4% dari limit) — jauh di bawah limit,
+build maupun runtime tidak sampai OOM. Keputusan ini TIDAK diambil sepihak
+oleh Claude Code — eksplisit dikonfirmasi owner dengan risiko dijelaskan
+dulu.
+
+### 23.5 Bug migrasi `core/0006_move_locations_to_core.sql` — ditemukan & diperbaiki
+
+**Gejala**: build & start container `api` sukses, tapi container langsung
+crash-loop. Log: migrasi gagal di `core/0006_move_locations_to_core.sql`
+dengan error `relation "inventory_locations" does not exist`.
+
+**Root cause** (ditelusuri langsung, bukan tebakan): migrasi itu menyalin
+data lokasi dari `inventory_locations` (tabel modul Inventory) ke
+`core_locations` (lihat § 18 untuk konteks kenapa lokasi dipindah ke core).
+Penulisnya mengasumsikan `inventory_locations` SUDAH ADA saat migrasi ini
+jalan — BENAR untuk database dev (tabel itu sudah ada sejak modul Inventory
+migrasi 0001, jauh sebelum migrasi pemindahan-ke-core ini ditulis belakangan).
+Tapi `runMigrations()` (`core/src/db/migrate.ts:64-77`) SELALU menjalankan
+**seluruh migrasi `core/` dulu**, baru migrasi tiap modul bisnis secara
+berurutan — jadi di database production yang BENAR-BENAR baru (belum pernah
+dimigrasi sama sekali), `core/0006` jalan SEBELUM modul Inventory sempat
+membuat `inventory_locations` sama sekali. Gap ini **tidak pernah kelihatan
+di dev** selama ini, murni karena database dev tidak pernah benar-benar
+"fresh" sejak migrasi ini ada dalam sejarahnya — tidak ada CI/test harness
+yang pernah menjalankan seluruh rantai migrasi dari nol sebelum sesi deploy
+ini.
+
+**Kenapa bukan bug di tempat lain**: ditelusuri seluruh rantai terkait —
+`modules/inventory/0023_move_locations_to_core.sql` (migrasi lanjutan yang
+merepoint 11 FK ke `core_locations` lalu `DROP TABLE inventory_locations`)
+SUDAH `IF EXISTS`/idempotent dari awal, tidak butuh perbaikan. Hanya SATU
+baris `INSERT ... FROM inventory_locations` di `core/0006` yang unconditional.
+
+**Perbaikan**: baris penyalinan data dibungkus `DO $$ ... IF EXISTS (SELECT
+1 FROM information_schema.tables WHERE table_name = 'inventory_locations')
+... $$` — kalau tabelnya ada (dev, atau instalasi lama manapun), perilaku
+SAMA PERSIS seperti sebelumnya; kalau tabelnya belum ada (database baru),
+blok itu di-skip (memang tidak ada data lama untuk disalin — modul Inventory
+akan membuat `inventory_locations` kosong sendiri nanti lewat migrasi 0001,
+lalu menghapusnya lagi lewat migrasi 0023 yang sudah aman). `setval()` untuk
+reset sequence TIDAK perlu diduplikasi ke dalam blok kondisional — statement
+`SELECT setval(..., COALESCE(MAX(id), 1))` yang sudah ada di akhir file
+sudah otomatis aman untuk kedua kasus (tabel kosong → `COALESCE` jatuh ke 1).
+
+**Ini edit ke migrasi yang SUDAH applied** — bertentangan dengan aturan keras
+repo ini ("migrasi baru, bukan edit yang sudah applied", ditegakkan berkali-kali
+sepanjang proyek, bahkan oleh subagent `db-migration` yang menolak permintaan
+serupa di luar scope-nya). **Dikerjakan HANYA setelah konfirmasi eksplisit
+owner** (AskUserQuestion, dengan penjelasan lengkap root cause dan argumen
+keamanan fix-nya sebelum owner menjawab) — dibenarkan karena: (a) ini bug
+crash yang nyata dan dapat dibuktikan, bukan perbedaan pendapat soal desain;
+(b) fix-nya PROVABLY tidak mengubah perilaku di database manapun yang sudah
+menjalankan migrasi ini (dikonfirmasi: `core/0006` sudah tercatat *applied*
+di `schema_migrations` dev, sehingga tidak pernah dijalankan ulang di sana
+sama sekali); (c) migrasi lanjutan (`0023`) sudah terbukti aman menghadapi
+kasus ini tanpa perlu ikut diubah.
+
+**Verifikasi sebelum dicoba lagi ke production**: dibuat database test lokal
+benar-benar baru (`createdb samsara_fresh_test`), dijalankan `migrate.ts`
+dari nol — **seluruh 42 file migrasi lintas core/inventory/hr/sales-sync
+berhasil tanpa error**, `core_locations` berakhir kosong (0 baris, benar
+untuk fresh install), `inventory_locations` berakhir tidak ada (ter-DROP
+bersih oleh `0023`). `npm test` penuh (276 test) tetap lulus 100% setelah
+perubahan ini (tidak ada regresi, karena file ini memang tidak pernah
+dijalankan ulang di dev). Baru setelah lolos verifikasi ini, file migrasi
+yang sudah diperbaiki disalin ulang ke VPS dan `docker compose up -d --build`
+diulang — berhasil, seluruh 42 file migrasi jalan bersih ke database
+production, container `api` langsung `healthy`.
+
+### 23.6 Yang masih tersisa (sengaja, bukan terlupa)
+
+Akun owner & integrasi production BELUM dibuat — sengaja ditahan sampai
+owner sendiri yang menjalankan `seed:owner` (interaktif, password diketik
+langsung oleh owner lewat `read -s`, tidak pernah lewat argumen
+command/environment yang bisa terlihat di `ps`/log) dan `seed:integrasi`.
+Password/kredensial apa pun tidak pernah ditulis ke chat, log, atau git
+sepanjang seluruh proses deploy ini — password database disalin lewat
+`scp` (file `.env.production`, permission 600 di kedua sisi), bukan lewat
+git atau pesan chat.

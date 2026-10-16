@@ -1,22 +1,20 @@
 # Compose file untuk production di VPS. HANYA berisi service aplikasi (api, web) --
 # SENGAJA TIDAK membuat service Postgres baru: CLAUDE.md (§ Rencana infra VPS) sudah
-# memutuskan pakai INSTANCE Postgres yang SUDAH JALAN di VPS (container `postgres:16`
-# existing, punya n8n juga), database baru `samsara` dibuat DI DALAM instance itu --
-# bukan instance terpisah. Begitu juga n8n dan VNC desktop (dorowu/ubuntu-desktop-lxde-vnc)
-# TIDAK disentuh sama sekali oleh file ini.
+# memutuskan pakai INSTANCE Postgres yang SUDAH JALAN di VPS, database baru `samsara`
+# dibuat DI DALAM instance itu -- bukan instance terpisah. Begitu juga n8n dan VNC
+# desktop TIDAK disentuh sama sekali oleh file ini.
 #
-# !! BELUM DIVERIFIKASI LANGSUNG DI VPS !! -- ditulis tanpa akses SSH ke VPS (lihat
-# laporan sesi ini). SEBELUM `docker compose -f docker-compose.prod.yml up -d`:
-#   1. Cek nama network Docker yang dipakai container Postgres existing:
-#      `docker inspect <nama-container-postgres> | grep -A5 Networks`
-#      Ganti nilai `EXISTING_NETWORK_NAME` di bawah (atau isi env var itu di shell)
-#      supaya cocok PERSIS -- kalau beda, container app ini tidak akan bisa
-#      menjangkau Postgres sama sekali.
-#   2. Cek nama/hostname container Postgres itu sendiri (dipakai sebagai DB_HOST),
-#      ganti default "postgres" di bawah kalau beda.
-#   3. Pastikan database `samsara` SUDAH dibuat di instance itu (lihat langkah
-#      terpisah "buat database baru" di laporan) SEBELUM container `api` start --
-#      migrate.ts akan gagal connect kalau database-nya belum ada.
+# SUDAH DIVERIFIKASI LANGSUNG DI VPS (2026-10-16/17, diagnostik Tahap A):
+#   - Nama container Postgres sungguhan: `n8n-stack-postgres-1` (bukan `postgres`).
+#   - Network Docker yang dipakainya: `n8n-stack_default` -- ini nilai EXISTING_NETWORK_NAME
+#     yang benar (lihat default di bawah, sudah diisi sesuai temuan, bukan placeholder lagi).
+#   - Network itu sudah punya DNS alias internal "postgres" untuk container itu (dikonfirmasi
+#     lewat `docker inspect`), jadi DB_HOST tetap bisa pakai "postgres" (default di bawah)
+#     tanpa perlu container app ini tahu nama container panjangnya.
+#   - web di-bind ke 127.0.0.1:8080 (match persis dengan proxy_pass di server block nginx
+#     host-level untuk burnas-app.duckdns.org) -- api TIDAK di-expose ke host sama sekali.
+#   - Pastikan database `samsara` SUDAH dibuat (CREATE ROLE + CREATE DATABASE lewat
+#     `docker exec` ke n8n-stack-postgres-1) SEBELUM container `api` start.
 
 services:
   api:
@@ -37,11 +35,14 @@ services:
       - existing_vps_network
     deploy:
       resources:
+        # Diperketat dari draft awal (512M/128M) -- RAM bebas VPS cuma ~350MB
+        # saat diagnostik (lihat devops/README.md). 256M cukup untuk Express +
+        # pg pool kecil, jauh di atas footprint idle realistis (~60-100MB).
         limits:
-          cpus: "1.0"
-          memory: 512M
+          cpus: "0.5"
+          memory: 256M
         reservations:
-          memory: 128M
+          memory: 64M
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
       interval: 30s
@@ -67,15 +68,15 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: 128M
+          cpus: "0.25"
+          memory: 64M
         reservations:
-          memory: 32M
+          memory: 16M
 
 networks:
   default:
-  # Network Docker yang SUDAH ADA di VPS, dipakai container Postgres existing --
-  # HARUS diganti ke nama sebenarnya (lihat catatan di atas), ini CUMA placeholder.
+  # Network Docker yang SUDAH ADA di VPS, dipakai container Postgres existing
+  # (n8n-stack-postgres-1) -- dikonfirmasi lewat `docker inspect` 2026-10-16/17.
   existing_vps_network:
     external: true
-    name: ${EXISTING_NETWORK_NAME:-vps_default}
+    name: ${EXISTING_NETWORK_NAME:-n8n-stack_default}
