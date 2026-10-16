@@ -38,19 +38,27 @@ scope sistem ini.
 `dig`, percobaan `ssh` — saat menulis ulang bagian ini 2026-10-16, bukan
 disalin dari versi dokumen sebelumnya):
 
-- **Push ke Git remote sudah berhasil** — kedua commit (`1c61415`, `754f1ea`)
-  terkonfirmasi ada di `origin/master` (`https://github.com/nazmykiboo/samsara-BO.git`).
-- **Domain production: `burnas-ops.duckdns.org`** — sudah resolve ke IP VPS
-  (`202.155.13.91`), dikonfirmasi ulang. Domain `vps.burnas-ops.id` yang
-  sempat tercatat di draft awal **tidak pernah resolve** (NXDOMAIN) dan
-  sudah final diputuskan tidak dipakai.
+- **Push ke Git remote sudah berhasil** — tiga commit terkonfirmasi ada di
+  `origin/master` (`https://github.com/nazmykiboo/samsara-BO.git`).
+- **Domain production: `burnas-app.duckdns.org`** (dikoreksi 2026-10-17 —
+  SEBELUMNYA sempat salah tercatat `burnas-ops.duckdns.org`, ternyata itu
+  domain `n8n` yang sudah live di production, BUKAN untuk app Samsara.
+  `vps.burnas-ops.id` yang tercatat paling awal juga tidak pernah dipakai.
+  **`burnas-ops.duckdns.org` adalah milik n8n — jangan pernah disentuh.**)
+- **Akses SSH ke VPS sudah berhasil** (alias `samsara-vps` di
+  `~/.ssh/config`) — diagnostik baca-saja (Tahap A) sudah dijalankan
+  2026-10-16/17 dan menemukan beberapa kondisi nyata yang mengubah rencana
+  awal: RAM bebas VPS sangat tipis (~350MB dari 3.8GB), port 80/443 sudah
+  dipakai nginx host-level (systemd) + Certbot untuk melayani n8n (bukan
+  Nginx Proxy Manager seperti rencana awal), dan nama container Postgres
+  sungguhan adalah `n8n-stack-postgres-1` (bukan `postgres`). Lihat
+  `devops/README.md` untuk status terkini tiap langkah deploy.
 - Dockerfile API & web sudah ditulis, tapi **belum pernah di-`docker build`
-  sungguhan** (Docker tidak terpasang di mesin dev ini, dicek ulang).
-- Database `samsara` di VPS, swap memory, konfigurasi Nginx Proxy Manager +
-  SSL, cron backup — **semuanya belum dieksekusi**, masih menunggu akses SSH
-  ke VPS yang valid (percobaan terakhir: `Permission denied
-  (publickey,password)` — bukan lagi diblokir izin sesi seperti
-  sebelumnya, murni belum ada kredensial yang bisa dipakai).
+  sungguhan** (Docker tidak terpasang di mesin dev ini).
+- Database `samsara` di VPS, swap memory (sudah ada 2GB), konfigurasi
+  reverse proxy + SSL, cron backup — **eksekusinya belum selesai**, masih
+  berjalan bertahap (Tahap A/B) mengikuti temuan nyata di VPS, bukan
+  asumsi dari draft awal.
 - JWT secret production **sudah** di-generate dan tersimpan di
   `.env.production` (di luar git).
 
@@ -308,22 +316,27 @@ Daftar murni fakta ketiadaan di kode saat ini, bukan roadmap:
 - **Backup**: script `devops/backup-db.sh` (pg_dump harian, retensi 7 hari)
   **sudah ditulis**, tapi per `devops/README.md` **belum terpasang** sebagai
   cron job di mana pun (menunggu akses SSH ke VPS saat deploy).
-- **Status deploy dev vs production** (per `devops/README.md`, dicek ulang
-  langsung — `git log origin/master`, `dig`, percobaan `ssh` — saat menulis
-  ulang bagian ini 2026-10-16): dev lokal berjalan penuh dan diuji (lihat
-  § 1 & § 5). Production: **push ke Git remote sudah berhasil** (kedua
-  commit ada di `origin/master`), **domain `burnas-ops.duckdns.org` sudah
-  resolve ke IP VPS** — tapi Dockerfile belum pernah di-build sungguhan,
-  database `samsara` belum dibuat di VPS, swap memory belum dicek, Nginx
-  Proxy Manager + SSL belum dikonfigurasi, cron backup belum terpasang,
-  akun owner & integrasi production belum dibuat (sengaja tidak
+- **Status deploy dev vs production** (per `devops/README.md`, status
+  terkini — lihat dokumen itu untuk detail per-langkah): dev lokal berjalan
+  penuh dan diuji (lihat § 1 & § 5). Production: push ke Git remote sudah
+  berhasil, akses SSH ke VPS sudah berfungsi (alias `samsara-vps`), swap
+  2GB **sudah ada** di VPS. Domain app yang benar adalah
+  `burnas-app.duckdns.org` (bukan `burnas-ops.duckdns.org` yang ternyata
+  milik n8n), sudah dikonfirmasi resolve ke IP VPS dengan benar. **Reverse
+  proxy + SSL untuk domain app SUDAH selesai**: VPS sudah punya nginx
+  host-level + Certbot yang melayani n8n, jadi app Samsara numpang di
+  nginx yang sama (bukan Nginx Proxy Manager terpisah seperti rencana
+  awal) — server block baru dibuat, sertifikat Let's Encrypt untuk
+  `burnas-app.duckdns.org` sudah terbit dan valid, diverifikasi n8n tidak
+  terganggu sama sekali (cek sebelum/sesudah, serial sertifikatnya tidak
+  berubah). `https://burnas-app.duckdns.org` saat ini **502 Bad Gateway**
+  — ini wajar, menunggu container app yang belum dideploy, bukan masalah
+  di sisi routing/SSL. Yang masih tersisa: Dockerfile belum di-build
+  sungguhan, database `samsara` belum dibuat di VPS, cron backup belum
+  terpasang, akun owner & integrasi production belum dibuat (sengaja tidak
   memigrasikan akun dev — lihat `docs/integrasi-n8n.md` untuk akun
-  integrasi). Semua item yang tersisa menunggu **akses SSH ke VPS yang
-  valid** (belum ada kredensial yang bisa dipakai dari sesi Claude Code
-  manapun sejauh ini). JWT secret production dan push Git adalah item
-  infra production yang sudah benar-benar selesai; domain sudah lolos
-  prasyaratnya tapi konfigurasinya sendiri (Nginx Proxy Manager) belum
-  dieksekusi.
+  integrasi). RAM VPS tipis (~350MB bebas) jadi container app akan
+  dibatasi resource sangat ketat.
 
 ---
 

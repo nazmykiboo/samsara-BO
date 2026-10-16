@@ -57,7 +57,7 @@ Modular seperti Odoo — setiap modul (Inventory, Sales/Dashboard, HR, Marketing
 
 ### Rencana infra VPS (untuk referensi, BELUM dieksekusi — jangan sentuh VPS production sampai owner minta)
 - Provider: Rumah Web, Paket L — 2 vCPU / 4GB RAM / 80GB SSD, unmetered bandwidth.
-- Domain: `burnas-ops.duckdns.org` (dikoreksi 2026-10-16 — domain `vps.burnas-ops.id` yang tercatat sebelumnya tidak pernah resolve di DNS; `burnas-ops.duckdns.org` sudah resolve ke IP VPS, final dipakai sebagai domain production).
+- Domain app: `burnas-app.duckdns.org` (dikoreksi 2026-10-17 — sebelumnya sempat tercatat `burnas-ops.duckdns.org`, TERNYATA itu domain `n8n` yang sudah live di production, bukan untuk app Samsara. `vps.burnas-ops.id` yang tercatat paling awal juga tidak pernah dipakai, tidak pernah resolve di DNS). **`burnas-ops.duckdns.org` adalah milik n8n — JANGAN PERNAH disentuh/diarahkan ke app Samsara.**
 - Container yang **sudah jalan di VPS dan tidak boleh diganggu**: `n8n`, `postgres:16`, dan `dorowu/ubuntu-desktop-lxde-vnc` (VNC desktop) — **VNC ini wajib tetap hidup, jangan pernah dimatikan**.
 - Saat deploy nanti: pakai instance Postgres yang sudah ada (database baru `samsara`, bukan instance baru), reverse proxy Nginx Proxy Manager dengan subdomain per modul, resource limit eksplisit di setiap container baru karena RAM terbatas.
 - Sejak keputusan dev lokal dibalik ke Postgres (2026-09-27), engine VPS (Postgres) dan lokal (Postgres) **sudah konsisten** — tidak ada lagi keputusan adapter/engine yang menggantung. Yang masih perlu dikonfirmasi owner saat deploy: pakai instance Postgres VPS yang sudah ada (database baru `samsara`) vs container terpisah, bukan soal engine lagi. **Jangan putuskan sendiri — tanya owner saat mau deploy.**
