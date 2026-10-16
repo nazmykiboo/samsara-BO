@@ -1,0 +1,13 @@
+-- Role baru "integrasi" -- BUKAN untuk manusia, khusus akun otomatis (n8n)
+-- yang cuma boleh akses 4 endpoint import CSV sales-sync (lihat
+-- docs/integrasi-n8n.md). Berbeda dari 4 role lain (owner/manajer_ops/
+-- supervisor/staf) yang semuanya untuk staf manusia dengan akses lintas
+-- modul sesuai jabatan, role ini sengaja SEMPIT: tidak ada permission di
+-- module.json manapun yang mendaftarkan "integrasi" di roles[]-nya selain
+-- action sales_sync.import (lihat perubahan modules/sales-sync/module.json)
+-- -- karena sistem permission di repo ini murni whitelist (bukan "akses
+-- semua kecuali di-exclude"), cukup TIDAK PERNAH menambahkan "integrasi"
+-- ke roles[] action lain supaya otomatis tertolak di endpoint lain mana pun.
+--
+-- Idempotent: ON CONFLICT (name) DO NOTHING, konsisten pola migrasi lain.
+INSERT INTO core_roles (name) VALUES ('integrasi') ON CONFLICT (name) DO NOTHING;

@@ -1,6 +1,15 @@
-export type Role = "owner" | "manajer_ops" | "supervisor" | "staf";
+/**
+ * `integrasi` BUKAN role manusia: akun otomatis (workflow n8n) yang cuma
+ * boleh memanggil 4 endpoint import CSV modul sales-sync (action
+ * `sales_sync.import`). Karena sistem permission di repo ini murni WHITELIST
+ * (role harus terdaftar di `PermissionDef.roles` supaya lolos), menjaga
+ * "integrasi" TIDAK PERNAH muncul di roles[] action lain sudah cukup untuk
+ * menolaknya di seluruh endpoint lain. Lihat migrasi
+ * `core/src/db/migrations/0008_add_integrasi_role.sql`.
+ */
+export type Role = "owner" | "manajer_ops" | "supervisor" | "staf" | "integrasi";
 
-export const ROLES: Role[] = ["owner", "manajer_ops", "supervisor", "staf"];
+export const ROLES: Role[] = ["owner", "manajer_ops", "supervisor", "staf", "integrasi"];
 
 /** Lingkup lokasi untuk satu role pada satu aksi. */
 export type LocationScope = "any" | "own";

@@ -778,6 +778,342 @@ test("POST /api/auth/users/:id/reset: staf dapat PIN baru, PIN lama langsung tid
   assert.equal(loginNew.status, 200, "PIN BARU hasil reset berhasil dipakai login");
 });
 
+// ---------------------------------------------------------------------------
+// Role `integrasi` (akun bot n8n) -- lihat core/src/db/migrations/0008_add_integrasi_role.sql
+//
+// Kriteria penerimaan dari owner: akun ini HANYA boleh 4 endpoint import CSV
+// modul sales-sync, dan DITOLAK di endpoint lain APA PUN (termasuk POST
+// /proses yang mengurangi stok, daftar menu Inventory, dan modul HR).
+//
+// User integrasi di bawah dibuat FIXTURE SENDIRI lewat `createTestUser` (SQL
+// langsung), BUKAN memakai akun hasil `npm run seed:integrasi` -- test tidak
+// boleh bergantung pada akun operasional yang passwordnya cuma ada di catatan
+// owner.
+// ---------------------------------------------------------------------------
+
+/** Prefix semua baris fixture sales-sync di file ini -- SENGAJA beda dari `TEST-IMP-` di modules/sales-sync/src/domain/import-csv.test.ts. */
+const SS_PREFIX = "TEST-PERM-";
+const SS_PLATFORM = `${SS_PREFIX}PLATFORM`;
+/** id raw Majoo fiktif; blok 9_8xx dipakai di sini, 9_9xx dipakai import-csv.test.ts. */
+const SS_MAJOO_ID = 9_800_000_001;
+
+function csvField(value: string): string {
+  return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+function buatCsv(header: readonly string[], baris: ReadonlyArray<Record<string, string>>): string {
+  const rows = baris.map((nilai) => header.map((kolom) => nilai[kolom] ?? ""));
+  return [[...header], ...rows].map((r) => r.map(csvField).join(",")).join("\n") + "\n";
+}
+
+/**
+ * Satu baris CSV minimal-tapi-VALID untuk masing-masing dari 4 endpoint
+ * import. Header & format nilainya diambil dari fixture yang sudah terbukti
+ * di modules/sales-sync/src/domain/import-csv.test.ts (bukan tebakan):
+ * header yang tidak lengkap ditolak 400 sebelum menyentuh data, jadi CSV di
+ * sini harus lengkap supaya 200-nya benar-benar membuktikan gate permission
+ * terlewati, bukan kebetulan gagal di tempat lain.
+ */
+const CSV_IMPORT: Record<string, string> = {
+  "/import/log-penjualan": buatCsv(
+    [
+      "transaction_date",
+      "transaction_time",
+      "platform",
+      "order_id",
+      "item_name",
+      "menu_id",
+      "quantity",
+      "item_type",
+      "parent_item",
+      "unique_key",
+      "inv_status",
+    ],
+    [
+      {
+        transaction_date: "7/22/2026",
+        transaction_time: "6:16",
+        platform: SS_PLATFORM,
+        order_id: `${SS_PREFIX}ORDER-1`,
+        item_name: "Item Uji Permission",
+        menu_id: `${SS_PREFIX}EXT-1`,
+        quantity: "1",
+        item_type: "menu",
+        parent_item: "",
+        unique_key: `${SS_PREFIX}KEY-1`,
+        // SENGAJA bukan 'OK': baris 'OK' yang belum terpetakan akan muncul di
+        // antrian pemetaan & daftar belum-diproses data dev. 'SKIP-TEST'
+        // tetap tersimpan (yang diuji di sini permission, bukan isi arsip).
+        inv_status: "SKIP-TEST",
+      },
+    ],
+  ),
+  "/import/transaksi": buatCsv(
+    [
+      "platform",
+      "platform_order_number",
+      "platform_transaction_id",
+      "order_time",
+      "settled_time",
+      "status",
+      "gross_amount",
+      "total_fees",
+      "net_revenue",
+      "currency",
+      "source",
+      "source_id",
+      "raw_payload",
+    ],
+    [
+      {
+        platform: SS_PLATFORM,
+        platform_order_number: `${SS_PREFIX}ORD-1`,
+        platform_transaction_id: `${SS_PREFIX}TRX-1`,
+        order_time: "2026-07-25T13:30:00+07:00",
+        settled_time: "",
+        status: "SETTLED",
+        gross_amount: "29,600",
+        total_fees: "3,000",
+        net_revenue: "26,600",
+        currency: "IDR",
+        source: "email",
+        source_id: `${SS_PREFIX}SRC-1`,
+        raw_payload: `{"order":"${SS_PREFIX}ORD-1"}`,
+      },
+    ],
+  ),
+  "/import/raw-majoo": buatCsv(
+    [
+      "id",
+      "transaction_no",
+      "transaction_date",
+      "payment_date",
+      "order_type_name",
+      "payment_method_name",
+      "payment_cashier_name",
+      "total_sales",
+      "receivables",
+      "total_discount_amount",
+      "refund_amount",
+      "is_paid",
+      "outlet_id",
+      "hasMore",
+      "nextPage",
+      "_empty",
+      "refund_id",
+      "refund_no",
+      "refund_date",
+      "refund_reason",
+    ],
+    [
+      {
+        id: String(SS_MAJOO_ID),
+        transaction_no: `${SS_PREFIX}TRXNO-1`,
+        transaction_date: "2025-12-15T15:12:22Z",
+        payment_date: "2025-12-15T15:12:30Z",
+        order_type_name: "Dine In",
+        payment_method_name: "Cash",
+        payment_cashier_name: "Kasir Uji",
+        total_sales: "50000",
+        receivables: "0",
+        total_discount_amount: "0",
+        refund_amount: "0",
+        is_paid: "1",
+        outlet_id: `${SS_PREFIX}OUTLET`,
+      },
+    ],
+  ),
+  "/import/biaya-platform": buatCsv(
+    [
+      "tanggal_closing",
+      "platform",
+      "kategori_biaya",
+      "deskripsi",
+      "transaction_type_raw",
+      "amount",
+      "amount_raw",
+      "reference_id",
+      "id_platform",
+      "create_time",
+      "synced_at",
+    ],
+    [
+      {
+        tanggal_closing: "2026-08-04",
+        platform: SS_PLATFORM,
+        kategori_biaya: "iklan",
+        deskripsi: "Biaya uji permission",
+        transaction_type_raw: "3",
+        amount: "15000",
+        amount_raw: "15000.1234",
+        reference_id: `${SS_PREFIX}REF-1`,
+        id_platform: `${SS_PREFIX}IDP-1`,
+        create_time: "2026-08-04 10:15:00",
+        synced_at: "2026-08-05T01:00:00Z",
+      },
+    ],
+  ),
+};
+
+const PATH_IMPORT = Object.keys(CSV_IMPORT);
+
+async function postImport(path: string, token: string): Promise<Response> {
+  return fetch(`${baseUrl}/api/sales-sync${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "text/csv" },
+    body: CSV_IMPORT[path],
+  });
+}
+
+/**
+ * Endpoint import COMMIT sungguhan (beda dari domain test yang pakai
+ * withRollback), jadi baris fixture-nya wajib dibersihkan eksplisit -- sama
+ * alasannya dengan pembersihan user di `after()`. Termasuk antrian
+ * salessync_item_mapping, yang disegarkan otomatis oleh importLogPenjualan.
+ */
+async function bersihkanFixtureSalesSync(): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query(`DELETE FROM salessync_item_mapping WHERE platform = $1`, [SS_PLATFORM]);
+    await client.query(`DELETE FROM salessync_log_penjualan WHERE unique_key LIKE $1`, [`${SS_PREFIX}%`]);
+    await client.query(`DELETE FROM salessync_transaksi WHERE source_id LIKE $1`, [`${SS_PREFIX}%`]);
+    await client.query(`DELETE FROM salessync_raw_majoo WHERE id = $1`, [SS_MAJOO_ID]);
+    await client.query(`DELETE FROM salessync_biaya_platform WHERE id_platform LIKE $1`, [`${SS_PREFIX}%`]);
+  } finally {
+    client.release();
+  }
+}
+
+test("role integrasi: bisa login password dan BOLEH keempat endpoint import CSV sales-sync", async () => {
+  await createTestUser("test_integrasi_import", "rahasia-bot-123", "integrasi");
+  const token = await login("test_integrasi_import", "rahasia-bot-123");
+  assert.ok(token.length > 0, "login username+password role integrasi mengembalikan token");
+
+  try {
+    for (const path of PATH_IMPORT) {
+      const res = await postImport(path, token);
+      assert.equal(res.status, 200, `integrasi BOLEH POST /api/sales-sync${path}`);
+      const body = (await res.json()) as { dibuat: number; errors: unknown[] };
+      assert.deepEqual(body.errors, [], `tidak ada baris error di ${path} (CSV fixture valid)`);
+      assert.equal(body.dibuat, 1, `satu baris fixture tersimpan lewat ${path}`);
+    }
+  } finally {
+    await bersihkanFixtureSalesSync();
+  }
+});
+
+test("role integrasi: DITOLAK 403 di endpoint lain apa pun (sales-sync non-import, Inventory, HR)", async () => {
+  await createTestUser("test_integrasi_tolak", "rahasia-bot-123", "integrasi");
+  const token = await login("test_integrasi_tolak", "rahasia-bot-123");
+  const auth = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+  const wajibDitolak: Array<{ method: string; path: string; body?: string; catatan: string }> = [
+    // --- sales-sync SELAIN import: sales_sync.manage, tanpa "integrasi" ---
+    {
+      method: "POST",
+      path: "/api/sales-sync/proses",
+      body: JSON.stringify({ tanggalMulai: "2026-01-01" }),
+      catatan: "proses sinkronisasi MENGURANGI STOK -- paling penting ditolak",
+    },
+    { method: "GET", path: "/api/sales-sync/item-mapping", catatan: "daftar pemetaan item" },
+    {
+      method: "PATCH",
+      // id 1 sembarang: permission dicek SEBELUM handler, jadi hasilnya 403
+      // (bukan 404) walau barisnya tidak ada.
+      path: "/api/sales-sync/item-mapping/1",
+      body: JSON.stringify({ kodeMenu: "M-001" }),
+      catatan: "ubah pemetaan item -- 403 sebelum sempat cek 404",
+    },
+    { method: "GET", path: "/api/sales-sync/belum-diproses", catatan: "arsip belum diproses" },
+
+    // --- Inventory: 6 endpoint yang SEBELUMNYA tanpa gate permission ---
+    { method: "GET", path: "/api/inventory/menu", catatan: "daftar menu -- contoh eksplisit dari owner" },
+    { method: "GET", path: "/api/inventory/items", catatan: "daftar item" },
+    { method: "GET", path: "/api/inventory/resep-produksi", catatan: "daftar resep produksi" },
+    { method: "GET", path: "/api/inventory/items/SJ-003/hpp", catatan: "HPP item" },
+    { method: "GET", path: "/api/inventory/menu/M-001/hpp", catatan: "HPP menu" },
+    { method: "GET", path: "/api/inventory/menu/M-001/rekomendasi-harga", catatan: "rekomendasi harga menu" },
+
+    // --- Inventory: endpoint yang memang sudah di-gate sejak awal ---
+    {
+      method: "POST",
+      path: "/api/inventory/transaksi/opname/1/keputusan",
+      body: JSON.stringify({ decision: "setuju" }),
+      catatan: "approve opname (opname.approve) -- 403 sebelum sempat cek 404",
+    },
+    { method: "GET", path: "/api/inventory/stok?item=BB-001&location=1", catatan: "lihat stok" },
+
+    // --- modul HR: tidak ada satu pun action yang memuat "integrasi" ---
+    { method: "GET", path: "/api/hr/jadwal", catatan: "jadwal shift HR" },
+  ];
+
+  for (const { method, path, body, catatan } of wajibDitolak) {
+    const res = await fetch(`${baseUrl}${path}`, { method, headers: auth, body });
+    assert.equal(res.status, 403, `integrasi WAJIB 403 di ${method} ${path} (${catatan})`);
+    const json = (await res.json()) as { error: string };
+    assert.match(json.error, /integrasi/, `pesan 403 menyebut role-nya: ${method} ${path}`);
+  }
+});
+
+test("regresi: owner & manajer_ops TETAP boleh keempat endpoint import setelah dipisah ke sales_sync.import", async () => {
+  await createTestUser("test_owner_ssimport", "rahasia123", "owner");
+  await createTestUser("test_manajer_ssimport", "rahasia123", "manajer_ops");
+  const ownerToken = await login("test_owner_ssimport", "rahasia123");
+  const manajerToken = await login("test_manajer_ssimport", "rahasia123");
+
+  try {
+    for (const path of PATH_IMPORT) {
+      const ownerRes = await postImport(path, ownerToken);
+      assert.equal(ownerRes.status, 200, `owner TETAP boleh POST /api/sales-sync${path}`);
+      await ownerRes.json();
+
+      // Baris fixture sudah ada dari panggilan owner di atas, jadi upsert-nya
+      // masuk kategori 'dilewati' -- yang diuji di sini aksesnya (200, bukan
+      // 403), bukan lagi kategori hasil upsert.
+      const manajerRes = await postImport(path, manajerToken);
+      assert.equal(manajerRes.status, 200, `manajer_ops TETAP boleh POST /api/sales-sync${path}`);
+      await manajerRes.json();
+    }
+
+    // Kontrol negatif pasangannya: dua role yang sama TETAP boleh endpoint
+    // sales_sync.manage juga (pemisahan action tidak mencabut apa pun dari mereka).
+    for (const token of [ownerToken, manajerToken]) {
+      const res = await fetch(`${baseUrl}/api/sales-sync/belum-diproses`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(res.status, 200, "owner/manajer_ops tetap boleh endpoint sales_sync.manage");
+    }
+  } finally {
+    await bersihkanFixtureSalesSync();
+  }
+});
+
+test("regresi: supervisor & staf TETAP boleh 6 endpoint Inventory yang baru di-gate (master_item.lihat/master_menu.lihat/resep_produksi.lihat)", async () => {
+  await createTestUser("test_supervisor_lihat", "rahasia123", "supervisor", [ckLocationId]);
+  const supervisorToken = await login("test_supervisor_lihat", "rahasia123");
+  const stafId = await createTestStafUser("Test Staf Lihat Master", "444555", [ckLocationId]);
+  const stafToken = await loginPin(stafId, "444555");
+
+  const endpoints = [
+    "/api/inventory/items",
+    "/api/inventory/items/SJ-003/hpp",
+    "/api/inventory/menu",
+    "/api/inventory/menu/M-001/hpp",
+    "/api/inventory/menu/M-001/rekomendasi-harga",
+    "/api/inventory/resep-produksi",
+  ];
+
+  for (const [role, token] of [
+    ["supervisor", supervisorToken],
+    ["staf", stafToken],
+  ] as const) {
+    for (const path of endpoints) {
+      const res = await fetch(`${baseUrl}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+      assert.equal(res.status, 200, `${role} TETAP boleh GET ${path} (tidak ada regresi dari gate baru)`);
+    }
+  }
+});
+
 test("POST /api/auth/users/:id/reset: manajer_ops/supervisor dapat password baru, password lama langsung tidak berlaku", async () => {
   const token = await getOwnerToken("resetpw");
   const targetId = await createTestUser("test_resetpw_target", "password-lama-123", "manajer_ops");

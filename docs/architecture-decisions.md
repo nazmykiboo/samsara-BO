@@ -1972,3 +1972,218 @@ pemetaan menu, bukan sekadar beberapa baris dummy).
 
 Tidak ada migrasi skema yang menyertai entri ini — ini murni catatan
 klarifikasi kebijakan data, bukan perubahan struktur database.
+
+---
+
+## 20. Gap ditemukan: permission role `integrasi` belum benar-benar diberi akses ke endpoint import `sales-sync` (2026-10-15)
+
+> **SUDAH DITUTUP 2026-10-16 — lihat § 21.** Isi § 20 di bawah dibiarkan apa
+> adanya sebagai catatan temuan historis; kondisi kode yang dideskripsikan di
+> § 20.2/20.3 **sudah tidak berlaku lagi**.
+
+Ditemukan oleh `docs-writer` saat menulis `docs/integrasi-n8n.md` (panduan
+teknis membangun workflow n8n untuk import CSV otomatis ke modul
+`sales-sync`). Ini **bukan keputusan arsitektur baru** yang saya ambil —
+ini laporan temuan kesenjangan antara niat desain yang sudah tercatat di
+kode (lewat komentar) dan implementasi yang sebenarnya berjalan, supaya
+tidak hilang dan ada yang menindaklanjuti.
+
+### 20.1 Yang seharusnya terjadi (niat desain, sudah ada jejaknya di kode)
+
+- `core/src/auth/types.ts` mendefinisikan role `integrasi` dengan komentar
+  eksplisit: akun otomatis (workflow n8n) yang "cuma boleh akses 4 endpoint
+  import CSV modul sales-sync (action `sales_sync.import`)".
+- Migrasi `core/src/db/migrations/0008_add_integrasi_role.sql` menambahkan
+  role `integrasi` ke tabel `core_roles`, dengan komentar yang juga
+  mengasumsikan akan ada permission action `sales_sync.import` terpisah
+  dari `sales_sync.manage`, dan role `integrasi` akan masuk ke `roles[]`
+  action itu — sambil mereferensikan dokumen `docs/integrasi-n8n.md` yang
+  (saat migrasi itu ditulis) belum ada.
+
+### 20.2 Yang sebenarnya ada di kode saat ini
+
+- `modules/sales-sync/module.json` — **kedelapan** endpoint modul ini
+  (termasuk keempat endpoint import `log-penjualan`, `transaksi`,
+  `raw-majoo`, `biaya-platform`, DAN `proses`) semuanya memakai **satu**
+  permission action yang sama: `sales_sync.manage`, dengan
+  `roles: ["owner", "manajer_ops"]`. Role `integrasi` **tidak terdaftar**
+  di `roles[]` manapun di file ini.
+- `modules/sales-sync/src/api/router.ts` konsisten dengan itu — semua
+  route dipasang `requirePermission("sales_sync.manage")`, tidak ada
+  action `sales_sync.import` di kode mana pun selain di komentar
+  `types.ts`.
+- `apps/web/src/auth/usePermission.ts` juga hanya mengenal
+  `"sales_sync.manage": ["owner", "manajer_ops"]` — konsisten dengan
+  backend, tidak ada jejak `sales_sync.import` di frontend juga.
+- Tidak ada script `npm run seed:integrasi` di `package.json` manapun
+  (root maupun `apps/api`) — hanya ada `seed:owner`
+  (`apps/api/src/seed-owner.ts`). Belum ada cara terstandar untuk benar-
+  benar membuat user `n8n-integrasi` dengan role `integrasi`.
+
+### 20.3 Konsekuensi praktis
+
+Dengan kondisi kode saat ini: **akun role `integrasi` tidak bisa memanggil
+endpoint apa pun di modul `sales-sync`**, termasuk 4 endpoint import yang
+seharusnya menjadi satu-satunya hal yang boleh diaksesnya — bukan cuma
+`/proses` yang memang sengaja ditolak. Permintaan `POST
+/sales-sync/import/*` dengan token role `integrasi` akan mendapat
+`403 Forbidden "Role integrasi tidak punya izin untuk aksi
+sales_sync.manage"`, sama seperti kalau mencoba `/proses`.
+
+Jadi workflow n8n yang dijelaskan di `docs/integrasi-n8n.md` **belum bisa
+benar-benar dites end-to-end** sampai gap ini ditutup oleh Backend
+Developer:
+1. Tambahkan permission action baru `sales_sync.import` di
+   `modules/sales-sync/module.json` untuk 4 endpoint import (roles minimal
+   `owner`, `manajer_ops`, `integrasi` — supaya staf manusia tetap bisa
+   import manual dari UI kalau perlu, dan akun integrasi bisa import lewat
+   n8n), sambil endpoint `/proses` TETAP di `sales_sync.manage` tanpa
+   `integrasi` (pemisahan ini yang justru jadi inti pengamanan "integrasi
+   tidak bisa memproses ke stok").
+2. Update `router.ts` modul `sales-sync` supaya 4 route import memakai
+   `requirePermission("sales_sync.import")`, bukan `sales_sync.manage`.
+3. Buat script `seed:integrasi` (pola sama seperti `seed-owner.ts`) supaya
+   akun `n8n-integrasi` bisa dibuat secara terstandar, idempotent, dan
+   passwordnya tidak pernah masuk ke kode/repo.
+
+### 20.4 Apa yang TIDAK saya putuskan sendiri
+
+Saya **tidak** mengubah `module.json`/`router.ts`/membuat script seed
+apa pun untuk menutup gap ini — di luar ruang gerak `docs-writer` (hanya
+boleh menulis ke `docs/` dan `README.md`), dan lebih penting lagi: ini
+pekerjaan Backend Developer/Arsitek yang perlu direview seperti perubahan
+permission lainnya, bukan sesuatu yang boleh "diam-diam diperbaiki" lewat
+sesi dokumentasi. `docs/integrasi-n8n.md` sudah saya tulis sesuai **niat
+desain yang dituju** (karena itu yang diminta, dan jejaknya sudah ada di
+kode/migrasi), dengan catatan status implementasi yang jelas di bagian
+awal dokumen tersebut supaya siapa pun yang mau memakainya tidak
+mengira ini sudah langsung bisa jalan hari ini.
+
+**Terbuka untuk owner/Backend Developer:** konfirmasi apakah rencana di
+§ 20.3 (action baru `sales_sync.import`, roles `owner`+`manajer_ops`+
+`integrasi`) ini yang dimaksud, atau ada pendekatan lain yang lebih
+disukai — saya hanya merekonstruksi niat dari komentar yang sudah ada di
+kode, bukan memastikan langsung dengan owner.
+
+---
+
+## 21. Gap § 20 ditutup + 6 endpoint Inventory tanpa gate permission ikut ditutup (2026-10-16)
+
+Menindaklanjuti temuan § 20. Semua yang diminta di § 20.3 sudah dikerjakan,
+plus satu celah tambahan yang ditemukan saat verifikasi.
+
+### 21.1 Permission 4 endpoint import dipisah dari `/proses`
+
+Action baru **`sales_sync.import`**, `roles: ["owner", "manajer_ops",
+"integrasi"]`, dipakai oleh 4 endpoint import CSV
+(`/import/log-penjualan`, `/import/transaksi`, `/import/raw-majoo`,
+`/import/biaya-platform`). Empat endpoint sales-sync lainnya (`/proses`,
+`GET /item-mapping`, `PATCH /item-mapping/:id`, `/belum-diproses`) **tetap**
+`sales_sync.manage` dengan `roles: ["owner", "manajer_ops"]`.
+
+Pemisahan ini **justru inti pengamanannya**, bukan kerapian: kalau
+`integrasi` ditambahkan ke `sales_sync.manage` yang lama (satu action untuk
+8 endpoint), akun bot otomatis ikut dapat akses `POST /proses` — endpoint
+yang MENGURANGI STOK sungguhan. Owner/manajer_ops ada di **dua-duanya**,
+jadi tidak ada akses yang dicabut dari role manusia.
+
+Di `router.ts`, helper `endpointImport()` (yang dipakai keempat route
+import) sekarang memasang `requirePermission("sales_sync.import")`; empat
+route lain tidak disentuh.
+
+### 21.2 Celah TAMBAHAN yang ditemukan: 6 endpoint Inventory tanpa gate sama sekali
+
+Saat memverifikasi kriteria "akun `integrasi` harus 403 di daftar menu",
+ternyata ada **6 endpoint modul Inventory yang tidak punya blok
+`"permission"` sama sekali** di `module.json` — hanya `requireAuth` global,
+artinya **SIAPA PUN yang login** bisa mengaksesnya, termasuk akun bot:
+
+`GET /items`, `GET /items/:kode/hpp`, `GET /menu`, `GET /menu/:kode/hpp`,
+`GET /menu/:kode/rekomendasi-harga`, `GET /resep-produksi`.
+
+Ini bukan niat desain yang disengaja: komentar di `router.ts` menjelaskannya
+sebagai "semua role login boleh akses", yang benar **selama** satu-satunya
+yang bisa login adalah 4 role manusia. Begitu ada role ke-5 yang bukan
+manusia, "semua role yang login" berhenti jadi batasan yang bermakna.
+
+**Keputusan:** tiga action READ baru, mengikuti konvensi `.lihat` yang sudah
+dipakai di modul ini (`stok.lihat`, `min_stok.lihat`,
+`permintaan_transfer.lihat`), semuanya `roles: ["owner", "manajer_ops",
+"supervisor", "staf"]`:
+
+| Action baru | Endpoint |
+|---|---|
+| `master_item.lihat` | `GET /items`, `GET /items/:kode/hpp` |
+| `master_menu.lihat` | `GET /menu`, `GET /menu/:kode/hpp`, `GET /menu/:kode/rekomendasi-harga` |
+| `resep_produksi.lihat` | `GET /resep-produksi` |
+
+**Sengaja TIDAK numpang action yang sudah ada**, dua-duanya pernah
+dipertimbangkan dan ditolak:
+- Bukan `master_item.edit`/`master_menu.edit`/`resep.edit` — itu action
+  WRITE dengan populasi lebih sempit (`owner`+`manajer_ops`). Memakainya
+  sebagai gate READ akan **mencabut** akses supervisor & staf yang hari ini
+  memang butuh endpoint itu (ItemPicker di form pembelian/produksi/opname,
+  halaman Menu & HPP, dropdown di ProduksiForm).
+- Bukan `hpp.lihat_harga` — itu **konsep berbeda**: dicek lewat
+  `hasPermission` untuk memfilter FIELD harga/HPP/margin dari response, bukan
+  lewat `requirePermission` sebagai gate akses. Dua mekanisme itu tidak
+  boleh dicampur; `hpp.lihat_harga` tetap bekerja seperti sebelumnya di
+  endpoint yang sama.
+
+Populasi keempat role manusia dipilih supaya **tidak ada perubahan perilaku
+sama sekali untuk role yang sudah ada** — satu-satunya yang berubah: role
+di luar keempatnya (hari ini hanya `integrasi`) sekarang ditolak 403. Ada
+test regresi eksplisit untuk ini.
+
+### 21.3 Script `seed:integrasi` — password acak, BUKAN dari `.env`
+
+`apps/api/src/seed-integrasi.ts` + script `seed:integrasi` di
+`apps/api/package.json`. Polanya mirip `seed-owner.ts` (idempoten: berhenti
+kalau sudah ada user role `integrasi`), dengan **satu perbedaan penting atas
+instruksi eksplisit owner**: passwordnya **di-generate acak** dengan CSPRNG
+(`crypto.randomBytes(24).toString("base64url")`) saat script dijalankan, lalu
+ditampilkan **sekali** ke terminal — **tidak dibaca dari `.env`** seperti
+`seed-owner` (yang baca `AUTH_SEED_OWNER_PASSWORD`), dan tidak ditulis ke
+file apa pun. Konsekuensi yang disengaja: kalau output terminalnya hilang,
+password tidak bisa dibaca ulang — jalurnya reset kredensial oleh owner
+(`POST /api/auth/users/:id/reset`), bukan menjalankan ulang script.
+
+`integrasi` ditambahkan ke `PASSWORD_ROLES` (login username+password lewat
+`POST /auth/login`, bukan PIN — n8n tidak punya layar pilih-nama) dan ke
+`isAllLocationsRole` (akun bot system-wide, tidak terikat satu lokasi fisik,
+jadi `createUser()` tidak mewajibkan `locationIds`) di
+`core/src/auth/users.ts`.
+
+### 21.4 Catatan sisi frontend
+
+`apps/web` punya tipe `Role` **sendiri** (`apps/web/src/api/types.ts`,
+duplikat yang disinkronkan manual, bukan import dari `core`). `"integrasi"`
+ditambahkan ke sana **hanya** supaya halaman Kelola User bisa menampilkan
+label & lokasi akun bot dengan benar (`ROLE_LABEL` di `KelolaUserTab.tsx`
+bertipe `Record<Role, string>`, jadi exhaustive) — akun ini ikut muncul di
+DAFTAR user walaupun tidak bisa dibuat dari form itu (`ROLE_OPTIONS` sengaja
+tidak menawarkannya; akun bot dibuat lewat CLI supaya passwordnya cuma
+muncul sekali di terminal owner).
+
+`"integrasi"` **sengaja TIDAK** dimasukkan ke `SEMUA_ROLE` di
+`apps/web/src/auth/usePermission.ts`: kalau dimasukkan, kontrol UI yang
+backend-nya pasti menolak 403 malah ikut tampil. Tabel `PERMISSION_ROLES` di
+file itu (yang menurut komentarnya memang mirror 1:1 dari `module.json`)
+diperbarui dengan 4 action baru.
+
+### 21.5 Verifikasi
+
+`npm run typecheck` bersih di 6 workspace. `npm test` **269 test, 0 gagal**
+di semua workspace (core 7, hr 46, inventory 151, sales-sync 41, api 24).
+Empat test baru di `apps/api/src/auth.test.ts`:
+
+1. `role integrasi: bisa login password dan BOLEH keempat endpoint import CSV sales-sync`
+2. `role integrasi: DITOLAK 403 di endpoint lain apa pun (sales-sync non-import, Inventory, HR)` — 14 endpoint
+3. `regresi: owner & manajer_ops TETAP boleh keempat endpoint import setelah dipisah ke sales_sync.import`
+4. `regresi: supervisor & staf TETAP boleh 6 endpoint Inventory yang baru di-gate`
+
+Test membuat user fixture-nya **sendiri** lewat SQL langsung (pola
+`createTestUser` yang sudah ada), **tidak** bergantung pada akun hasil
+`seed:integrasi`. Endpoint import COMMIT sungguhan, jadi baris fixture
+arsip (prefix `TEST-PERM-`, termasuk antrian `salessync_item_mapping` yang
+disegarkan otomatis oleh import log) dibersihkan eksplisit di `finally`.

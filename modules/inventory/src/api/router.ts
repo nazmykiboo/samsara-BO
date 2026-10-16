@@ -162,14 +162,25 @@ export function createRouter(): Router {
   });
 
   // --- HPP -------------------------------------------------------------------
-  // Endpoint HPP bisa diakses semua role yang login (tidak ada requirePermission
-  // gate akses) -- yang dibatasi per role adalah FIELD di response-nya
+  // Endpoint HPP bisa diakses KEEMPAT role manusia (owner/manajer_ops/
+  // supervisor/staf) -- yang dibatasi per role adalah FIELD di response-nya
   // (hpp.lihat_harga) dan metode HPP yang dipakai (resolveHppMethod: query
   // param ?metode= cuma jadi override untuk owner/manajer_ops, role lain
   // selalu pakai default global -- lihat domain/pengaturan.ts).
+  //
+  // Gate akses-nya (master_item.lihat / master_menu.lihat) tetap WAJIB ada
+  // walau populasi role-nya keempat role manusia: tanpa gate sama sekali,
+  // SIAPA PUN yang login lolos -- termasuk akun otomatis role `integrasi`
+  // (n8n) yang cuma boleh 4 endpoint import modul sales-sync. Permission di
+  // repo ini murni whitelist (lihat core/src/auth/permissions.ts), jadi role
+  // yang tidak terdaftar di roles[] otomatis ditolak 403. Action READ ini
+  // SENGAJA terpisah dari master_item.edit/master_menu.edit (itu WRITE,
+  // populasi role-nya lebih sempit) dan dari hpp.lihat_harga (itu filter
+  // FIELD lewat hasPermission, bukan gate akses lewat requirePermission).
 
   router.get(
     "/items/:kode/hpp",
+    requirePermission("master_item.lihat"),
     asyncHandler(async (req, res) => {
       const client = await pool.connect();
       try {
@@ -190,6 +201,7 @@ export function createRouter(): Router {
 
   router.get(
     "/menu/:kode/hpp",
+    requirePermission("master_menu.lihat"),
     asyncHandler(async (req, res) => {
       const client = await pool.connect();
       try {
@@ -214,8 +226,9 @@ export function createRouter(): Router {
 
   router.get(
     "/menu/:kode/rekomendasi-harga",
-    // Read-only, cuma kalkulasi (tidak menyimpan apa pun) -- semua role
-    // login boleh akses, sama seperti GET .../hpp. Metode HPP dan target
+    requirePermission("master_menu.lihat"),
+    // Read-only, cuma kalkulasi (tidak menyimpan apa pun) -- keempat role
+    // manusia boleh akses, sama seperti GET .../hpp. Metode HPP dan target
     // food cost dua-duanya opsional di-override lewat query param, sama
     // persis pola resolveHppMethod (?metode= cuma berlaku untuk
     // owner/manajer_ops, role lain selalu pakai default global).
@@ -827,14 +840,16 @@ export function createRouter(): Router {
 
   // --- Master item & resep produksi (owner/manajer_ops) -------------------
 
-  // Semua role login boleh akses (sama seperti /items/:kode/hpp dan
+  // Keempat role manusia boleh akses (sama seperti /items/:kode/hpp dan
   // /menu/:kode/hpp) -- bukan cuma owner/manajer_ops -- karena dipakai juga
   // oleh ItemPicker di form transaksi (pembelian/produksi/opname) yang bisa
   // diisi supervisor. hargaMaster (field cost-sensitif) di-strip untuk role
   // tanpa permission hpp.lihat_harga, field lain (kode/nama/satuan/status)
   // bukan data harga jadi tetap tampil semua role.
+  // Gate master_item.lihat: lihat alasan lengkapnya di blok komentar HPP di atas.
   router.get(
     "/items",
+    requirePermission("master_item.lihat"),
     asyncHandler(async (req, res) => {
       const user = getAuthUser(req);
       const client = await pool.connect();
@@ -852,13 +867,14 @@ export function createRouter(): Router {
   );
 
   // GET /menu: sama seperti GET /items & GET /items/:kode/hpp, GET /menu/:kode/hpp
-  // di atas -- tidak ada requirePermission gate sama sekali (semua role login
-  // boleh akses), karena halaman Menu & HPP (MenuHppPage.tsx) dipakai semua
-  // role, bukan cuma owner/manajer_ops. Tidak ada field sensitif (harga/HPP)
-  // di response list ini (cuma status pending/ok) jadi tidak perlu strip
-  // apa pun berdasarkan permission hpp.lihat_harga.
+  // di atas -- di-gate master_menu.lihat dengan populasi KEEMPAT role manusia,
+  // karena halaman Menu & HPP (MenuHppPage.tsx) dipakai semua role itu, bukan
+  // cuma owner/manajer_ops. Tidak ada field sensitif (harga/HPP) di response
+  // list ini (cuma status pending/ok) jadi tidak perlu strip apa pun
+  // berdasarkan permission hpp.lihat_harga.
   router.get(
     "/menu",
+    requirePermission("master_menu.lihat"),
     asyncHandler(async (_req, res) => {
       const client = await pool.connect();
       try {
@@ -1092,8 +1108,8 @@ export function createRouter(): Router {
   );
 
   // GET /resep-produksi (list): sama seperti GET /items & GET /menu di atas
-  // -- tidak ada requirePermission gate sama sekali (semua role login boleh
-  // akses). Dipakai bukan cuma ResepProduksiTab.tsx (halaman Master,
+  // -- di-gate resep_produksi.lihat dengan populasi KEEMPAT role manusia.
+  // Dipakai bukan cuma ResepProduksiTab.tsx (halaman Master,
   // owner/manajer_ops saja via tombol edit yang masih di-gate resep.edit),
   // tapi juga ProduksiForm.tsx (form transaksi Produksi, dipakai juga oleh
   // supervisor -- lihat permission POST /transaksi/produksi di module.json).
@@ -1104,6 +1120,7 @@ export function createRouter(): Router {
   // komposisi bahan+qty yang lebih sensitif/proprietary.
   router.get(
     "/resep-produksi",
+    requirePermission("resep_produksi.lihat"),
     asyncHandler(async (_req, res) => {
       const client = await pool.connect();
       try {

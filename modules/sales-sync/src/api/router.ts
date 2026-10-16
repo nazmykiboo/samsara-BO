@@ -73,10 +73,19 @@ function endpointImport(
   // Aman: requirePermission/getAuthUser tidak menyentuh body sama sekali, dan
   // `requireAuth` global sudah dipasang di build-server.ts sebelum modul mana
   // pun di-mount, jadi req.auth sudah terisi sebelum sampai ke sini.
+  //
+  // Permission `sales_sync.import` SENGAJA TERPISAH dari `sales_sync.manage`
+  // yang dipakai 4 endpoint lain di router ini (/proses, /item-mapping GET,
+  // /item-mapping/:id PATCH, /belum-diproses): cuma 4 endpoint import inilah
+  // yang boleh diakses akun otomatis role `integrasi` (n8n). Kalau keduanya
+  // disatukan, menambahkan `integrasi` ke roles[] otomatis memberinya akses
+  // ke POST /proses juga -- yang MENGURANGI STOK sungguhan di modul
+  // Inventory. owner & manajer_ops tetap ada di dua-duanya, jadi akses
+  // mereka tidak berubah sama sekali.
   router.post(
     path,
     csvBody(),
-    requirePermission("sales_sync.manage"),
+    requirePermission("sales_sync.import"),
     asyncHandler(async (req, res) => {
       const text = ambilCsv(req, res);
       if (text === null) return;

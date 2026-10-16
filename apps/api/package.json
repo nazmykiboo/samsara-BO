@@ -8,6 +8,7 @@
     "migrate": "tsx src/migrate.ts",
     "import:harga-jual": "tsx src/import-harga-jual.ts",
     "seed:owner": "tsx src/seed-owner.ts",
+    "seed:integrasi": "tsx src/seed-integrasi.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test src/**/*.test.ts"

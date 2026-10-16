@@ -31,12 +31,22 @@ function generatePassword(): string {
   return randomBytes(9).toString("base64url");
 }
 
+/**
+ * Role yang aksesnya tidak pernah dibatasi lokasi. `integrasi` ikut di sini
+ * karena akun bot (n8n) bukan akun outlet: dia mengimpor arsip CSV lintas
+ * platform/lokasi, tidak terikat satu lokasi fisik -- jadi `createUser()`
+ * tidak mewajibkan `locationIds` untuknya.
+ */
 function isAllLocationsRole(role: Role): boolean {
-  return role === "owner" || role === "manajer_ops";
+  return role === "owner" || role === "manajer_ops" || role === "integrasi";
 }
 
-/** Role yang login pakai username+password. Role di luar ini (staf) login pakai PIN. */
-const PASSWORD_ROLES: Role[] = ["owner", "manajer_ops", "supervisor"];
+/**
+ * Role yang login pakai username+password. Role di luar ini (staf) login pakai
+ * PIN. `integrasi` ikut jalur password karena n8n memanggil
+ * `POST /auth/login` dengan username+password, bukan layar pilih-nama + PIN.
+ */
+const PASSWORD_ROLES: Role[] = ["owner", "manajer_ops", "supervisor", "integrasi"];
 
 async function getUserLocationIds(client: PoolClient, userId: number | string): Promise<number[]> {
   const { rows } = await client.query<{ location_id: string }>(

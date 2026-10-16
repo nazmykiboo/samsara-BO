@@ -23,6 +23,11 @@ export type PermissionAction =
   | "master_item.edit"
   | "master_menu.edit"
   | "resep.edit"
+  // Gate READ (bukan write) untuk GET /items, /items/:kode/hpp, /menu,
+  // /menu/:kode/hpp, /menu/:kode/rekomendasi-harga, /resep-produksi.
+  | "master_item.lihat"
+  | "master_menu.lihat"
+  | "resep_produksi.lihat"
   // --- modul inventory: harga & HPP ---
   | "harga_jual.edit"
   | "hpp.lihat_harga"
@@ -55,8 +60,15 @@ export type PermissionAction =
   | "pengajuan_libur.approve"
   | "shift_template.manage"
   // --- modul sales-sync ---
+  | "sales_sync.import"
   | "sales_sync.manage";
 
+/**
+ * Keempat role MANUSIA. SENGAJA tidak termasuk "integrasi": itu akun bot
+ * (n8n) yang cuma punya action `sales_sync.import` di backend dan tidak
+ * pernah memakai UI ini -- jangan menambahkannya ke sini, nanti kontrol UI
+ * yang pasti ditolak 403 malah ikut tampil.
+ */
 const SEMUA_ROLE: Role[] = ["owner", "manajer_ops", "supervisor", "staf"];
 
 export const PERMISSION_ROLES: Record<PermissionAction, Role[]> = {
@@ -67,6 +79,15 @@ export const PERMISSION_ROLES: Record<PermissionAction, Role[]> = {
   "master_menu.edit": ["owner", "manajer_ops"],
   // Resep produksi DAN resep menu (termasuk nonaktifkan menu).
   "resep.edit": ["owner", "manajer_ops"],
+  // Gate READ daftar/HPP item, menu, dan resep produksi. Populasinya KEEMPAT
+  // role manusia (bukan cuma owner/manajer_ops seperti versi .edit di atas),
+  // jadi tidak ada kontrol UI yang perlu disembunyikan karena action ini --
+  // didaftarkan di sini semata-mata supaya tabel ini tetap 1:1 dengan
+  // modules/inventory/module.json. Yang ditolak cuma role di luar keempatnya
+  // (yaitu akun bot "integrasi").
+  "master_item.lihat": SEMUA_ROLE,
+  "master_menu.lihat": SEMUA_ROLE,
+  "resep_produksi.lihat": SEMUA_ROLE,
 
   // PATCH /menu/:kode/harga-jual DAN PATCH /menu/:kode/harga-channel -- OWNER SAJA.
   "harga_jual.edit": ["owner"],
@@ -114,9 +135,14 @@ export const PERMISSION_ROLES: Record<PermissionAction, Role[]> = {
   "pengajuan_libur.approve": ["owner", "manajer_ops"],
   "shift_template.manage": ["owner", "manajer_ops"],
 
-  // SATU action untuk SEMUA endpoint modul sales-sync (4 import CSV, daftar + ubah pemetaan item,
-  // jalankan proses) -- lihat modules/sales-sync/module.json: tiap endpoint di sana memakai
-  // action yang sama, tidak dipecah per aksi.
+  // 4 endpoint import CSV sales-sync -- action TERPISAH dari sales_sync.manage karena
+  // cuma endpoint import inilah yang boleh dipanggil akun bot role "integrasi" (n8n).
+  // Untuk sisi UI ini tidak ada bedanya dengan sales_sync.manage (owner/manajer_ops
+  // sama-sama boleh), tapi JANGAN disatukan lagi di backend: lihat komentar di
+  // modules/sales-sync/src/api/router.ts (endpointImport).
+  "sales_sync.import": ["owner", "manajer_ops", "integrasi"],
+  // Endpoint sales-sync SELAIN import: daftar + ubah pemetaan item, daftar belum-diproses,
+  // dan POST /proses yang MENGURANGI STOK. "integrasi" SENGAJA tidak ada di sini.
   "sales_sync.manage": ["owner", "manajer_ops"],
 };
 

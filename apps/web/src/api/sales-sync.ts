@@ -2,7 +2,11 @@ import { api, postCsv } from "./client";
 import type { BarisBelumDiproses, HasilImportCsv, HasilProsesSinkronisasi, ItemMapping } from "./types";
 
 /**
- * Modul sales-sync -- semua endpoint permission `sales_sync.manage` (owner/manajer_ops).
+ * Modul sales-sync -- 4 endpoint import permission `sales_sync.import`
+ * (owner/manajer_ops/integrasi), endpoint lainnya `sales_sync.manage`
+ * (owner/manajer_ops). Dari sisi UI ini tidak ada bedanya: owner & manajer_ops
+ * boleh dua-duanya, dan role `integrasi` adalah akun bot n8n yang tidak pernah
+ * memakai UI ini.
  *
  * Keempat fungsi import di bawah mengirim TEKS CSV MENTAH lewat `postCsv` (Content-Type: text/csv),
  * bukan JSON dan bukan FormData -- lihat catatan di ./client.ts dan `modules/sales-sync/module.json`.

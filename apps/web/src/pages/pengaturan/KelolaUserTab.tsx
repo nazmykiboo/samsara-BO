@@ -21,11 +21,17 @@ const ROLE_OPTIONS: { value: Exclude<Role, "owner">; label: string }[] = [
 // Sengaja TIDAK ada "owner" di ROLE_OPTIONS -- cuma ada 1 akun owner by
 // design, bukan sesuatu yang dibuat lewat UI self-service ini (lihat catatan
 // tugas). Backend sebenarnya mengizinkan, tapi form ini tidak menawarkannya.
+// "integrasi" juga TIDAK ada di ROLE_OPTIONS: itu akun bot (n8n) yang dibuat
+// sekali lewat CLI (`npm run seed:integrasi -w @samsara/api`) supaya
+// password acaknya cuma muncul sekali di terminal owner -- tapi labelnya
+// tetap WAJIB ada di ROLE_LABEL di bawah, karena akun itu ikut muncul di
+// DAFTAR user halaman ini.
 const ROLE_LABEL: Record<Role, string> = {
   owner: "Owner",
   manajer_ops: "Manajer Ops",
   supervisor: "Supervisor",
   staf: "Staf",
+  integrasi: "Integrasi (n8n)",
 };
 
 function lokasiNames(ids: number[]): string {
@@ -169,7 +175,13 @@ export function KelolaUserTab() {
                       </p>
                       <p className="text-xs text-slate-500">
                         {ROLE_LABEL[u.role]} &middot;{" "}
-                        {u.role === "owner" || u.role === "manajer_ops" ? "Semua lokasi" : lokasiNames(u.locationIds)}
+                        {/* Tiga role ini all-locations di backend (isAllLocationsRole di
+                            core/src/auth/users.ts) jadi locationIds-nya selalu kosong --
+                            tanpa "integrasi" di sini, akun bot tampil "Belum ada lokasi"
+                            yang menyesatkan (seolah setupnya belum selesai). */}
+                        {u.role === "owner" || u.role === "manajer_ops" || u.role === "integrasi"
+                          ? "Semua lokasi"
+                          : lokasiNames(u.locationIds)}
                       </p>
                       <p className="text-xs text-slate-400">
                         Login pakai {u.authMethod === "pin" ? "PIN" : "username & password"}

@@ -2,7 +2,16 @@
 // layer di modules/inventory/src/domain/*.ts) -- kalau backend berubah,
 // sinkronkan di sini juga.
 
-export type Role = "owner" | "manajer_ops" | "supervisor" | "staf";
+/**
+ * `integrasi` BUKAN role manusia dan TIDAK PERNAH dipakai login ke web ini:
+ * akun otomatis (workflow n8n) yang cuma boleh 4 endpoint import CSV modul
+ * sales-sync. Ada di union ini semata-mata supaya daftar user di halaman
+ * Kelola User bisa menampilkan labelnya dengan benar (akunnya dibuat lewat
+ * CLI `npm run seed:integrasi -w @samsara/api`, bukan lewat form UI -- karena
+ * itu ROLE_OPTIONS di KelolaUserTab.tsx sengaja tidak menawarkannya), dan
+ * SENGAJA TIDAK dimasukkan ke SEMUA_ROLE di auth/usePermission.ts.
+ */
+export type Role = "owner" | "manajer_ops" | "supervisor" | "staf" | "integrasi";
 
 export interface AuthUser {
   id: number;
