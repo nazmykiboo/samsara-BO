@@ -10,3 +10,10 @@ dist/
 # bisa berisi data pelanggan/transaksi sungguhan.
 *.sql.gz
 backups/
+
+# catatan kredensial manual (mis. output seed-owner/seed-integrasi yang
+# ditempel owner ke file lokal) -- JANGAN PERNAH ikut ter-commit.
+akun-integrasi
+akun-owner
+*credential*
+*kredensial*

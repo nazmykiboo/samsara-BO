@@ -60,17 +60,30 @@ sungguhan, bukan disalin dari versi dokumen sebelumnya):
   di-restart sekali dan naik lagi sendiri otomatis, n8n/Postgres/VNC
   terverifikasi TIDAK terganggu sepanjang proses (uptime tidak pernah
   reset, dicek berkali-kali).
-- **Satu-satunya yang tersisa**: akun owner & integrasi production — SENGAJA
-  belum dibuat, menunggu owner menjalankan sendiri dua perintah seed
-  (`seed:owner` interaktif, `seed:integrasi`) supaya password tidak pernah
-  lewat tangan siapa pun selain owner sendiri. Lihat `devops/README.md`
-  Langkah 7 untuk perintah persisnya.
+- Akun owner production sudah dibuat owner sendiri lewat `seed:owner` —
+  app sudah benar-benar dipakai (bukan cuma live secara teknis).
+- **Data master dev -> production sudah disinkronkan penuh** (2026-10-17):
+  item, menu, resep, harga per channel, pemetaan item sales-sync, dan
+  pengaturan sistem sekarang **identik** antara dev dan production —
+  dibuktikan lewat perhitungan HPP 70 menu/item langsung lewat fungsi
+  domain di kedua sisi, 0 selisih. Detail lengkap metodologi & 3 skrip
+  yang dijalankan: `docs/architecture-decisions.md` § 24. **Sejak
+  sinkronisasi ini, production adalah sumber kebenaran (source of truth)
+  untuk data master** — bukan dev lagi (lihat § 7 "Keputusan desain
+  penting" dan CLAUDE.md).
+- Bug zona waktu nyata ditemukan & diperbaiki dalam proses yang sama:
+  label `Z` di import `raw-majoo` ternyata salah (sebenarnya jam lokal
+  Asia/Jakarta, bukan UTC) — dikonfirmasi lintas 5539 order sungguhan
+  (99.96% konsisten). Diperbaiki di kode (bukan di data lama), container
+  `api` production di-rebuild & restart, `web`/n8n/Postgres/VNC tidak
+  disentuh.
 
 Ringkasnya: app Samsara Backoffice sudah bisa diakses publik dengan HTTPS
 valid di `burnas-app.duckdns.org`, berjalan berdampingan dengan n8n/VNC yang
-sudah ada tanpa mengganggu satu pun, dan database production sudah
-termigrasi bersih dari nol — tinggal menunggu owner membuat akun login
-pertamanya sendiri.
+sudah ada tanpa mengganggu satu pun, database production sudah termigrasi
+bersih dari nol DAN data masternya sudah disinkronkan penuh dengan dev —
+app sudah benar-benar dipakai owner, bukan cuma live secara teknis.
+Production sekarang jadi acuan utama data master ke depan, bukan dev.
 
 ---
 

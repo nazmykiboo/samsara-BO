@@ -277,9 +277,12 @@ tiap endpoint:
   perlu dibersihkan dulu di n8n, tapi juga tidak masalah kalau mau
   dibersihkan.
 - `import/raw-majoo`: kolom `id` (bilangan bulat, wajib, dipakai sebagai
-  primary key apa adanya), kolom waktu berakhiran `Z` (UTC eksplisit),
-  angka tanpa pemisah ribuan, `is_paid` berupa `'1'`/`'0'`, kolom
-  `hasMore`/`nextPage`/`_empty` dari sumber.
+  primary key apa adanya), kolom waktu berakhiran `Z` tapi diperlakukan
+  sebagai **jam lokal Asia/Jakarta** (bukan UTC asli — label "Z" di sumber
+  Majoo salah, dikonfirmasi 2026-10-17, lihat
+  `docs/architecture-decisions.md` § 24), angka tanpa pemisah ribuan,
+  `is_paid` berupa `'1'`/`'0'`, kolom `hasMore`/`nextPage`/`_empty` dari
+  sumber.
 - `import/biaya-platform`: kolom `tanggal_closing` (boleh format
   `YYYY-MM-DD` polos atau dengan offset), `create_time`/`synced_at`
   (nullable), `amount` (boleh desimal/negatif untuk potongan),

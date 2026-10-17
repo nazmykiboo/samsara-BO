@@ -127,6 +127,44 @@ function waktuOpsional(cols: string[], idx: number, nama: string): string | null
 }
 
 /**
+ * KHUSUS kolom waktu `raw_majoo` (transaction_date/payment_date/refund_date):
+ * sumbernya SELALU diakhiri "Z" (klaim UTC eksplisit), TAPI klaim itu SALAH --
+ * dikonfirmasi 2026-10-17 lewat perbandingan jam genuinely-lokal di
+ * `salessync_log_penjualan` untuk order Majoo yang sama: 5537 dari 5539 order
+ * yang match (99,96%, toleransi ±65 detik) menunjukkan angka jam mentah di
+ * balik "Z" itu SEBENARNYA sudah waktu lokal Asia/Jakarta, bukan UTC asli --
+ * 2 pengecualian punya selisih yang masuk akal dijelaskan beda semantik
+ * "jam order" vs "jam closing transaksi", bukan kontradiksi pola. Detail
+ * lengkap: docs/architecture-decisions.md § 24.
+ *
+ * BEDA dari `waktuWajib`/`waktuOpsional` (generic, TETAP dipakai apa adanya
+ * untuk sumber LAIN yang offset-nya genuinely benar, mis. `salessync_transaksi`
+ * -- JANGAN disatukan dengan fungsi ini) -- fungsi ini SELALU memperlakukan
+ * wall-clock digit sebagai lokal +07:00, APA PUN offset yang tertulis di
+ * sumbernya (termasuk kalau offset itu "Z"), dengan membuang offset asli
+ * sebelum menambahkan +07:00 yang benar.
+ *
+ * Fix ini CUMA mengubah interpretasi untuk IMPOR BARU -- baris yang sudah
+ * tersimpan di `salessync_raw_majoo` dari impor SEBELUM perbaikan ini TIDAK
+ * ikut berubah (tidak ada backfill/migrasi data), kecuali baris itu
+ * di-upload ulang lewat CSV yang sama (upsert akan menimpa dengan interpretasi
+ * yang sudah benar).
+ */
+function waktuWajibLokalPaksa(cols: string[], idx: number, nama: string): string {
+  const raw = teksWajib(cols, idx, nama);
+  const tanpaOffsetAsli = raw.replace(SUDAH_ADA_OFFSET, "");
+  const normal = tambahOffsetJakarta(tanpaOffsetAsli);
+  const d = new Date(normal);
+  if (Number.isNaN(d.getTime())) throw new Error(`Kolom "${nama}" bukan waktu valid: "${raw}"`);
+  return d.toISOString();
+}
+
+function waktuOpsionalLokalPaksa(cols: string[], idx: number, nama: string): string | null {
+  if (ambil(cols, idx) === "") return null;
+  return waktuWajibLokalPaksa(cols, idx, nama);
+}
+
+/**
  * Angka yang di sumber pakai pemisah ribuan koma DAN berkutip (mis. `"29,600"`).
  * Parser CSV sudah membuka kutipnya, tapi pemisah ribuannya masih ada dan
  * HARUS dibuang manual sebelum parseFloat (kalau tidak, `parseFloat("29,600")`
@@ -518,11 +556,13 @@ export async function importRawMajoo(client: PoolClient, text: string): Promise<
       params: [
         bilanganBulatWajib(cols, idx.id!, "id"),
         teksWajib(cols, idx.transaction_no!, "transaction_no"),
-        // transaction_date/payment_date/refund_date di sumber ini sudah
-        // berakhiran "Z" (UTC eksplisit, tidak ambigu) -- helper waktu
-        // membiarkannya apa adanya, tidak menambah offset.
-        waktuWajib(cols, idx.transaction_date!, "transaction_date"),
-        waktuOpsional(cols, idx.payment_date!, "payment_date"),
+        // transaction_date/payment_date/refund_date di sumber ini diakhiri
+        // "Z" tapi itu SALAH LABEL -- angkanya sebenarnya sudah waktu lokal
+        // Asia/Jakarta, bukan UTC asli. Lihat waktuWajibLokalPaksa() untuk
+        // bukti & penjelasan lengkap -- JANGAN kembalikan ke waktuWajib/
+        // waktuOpsional generic di sini.
+        waktuWajibLokalPaksa(cols, idx.transaction_date!, "transaction_date"),
+        waktuOpsionalLokalPaksa(cols, idx.payment_date!, "payment_date"),
         teksOpsional(cols, idx.order_type_name!),
         teksOpsional(cols, idx.payment_method_name!),
         teksOpsional(cols, idx.payment_cashier_name!),
@@ -537,7 +577,7 @@ export async function importRawMajoo(client: PoolClient, text: string): Promise<
         teksOpsional(cols, idx._empty!),
         teksOpsional(cols, idx.refund_id!),
         teksOpsional(cols, idx.refund_no!),
-        waktuOpsional(cols, idx.refund_date!, "refund_date"),
+        waktuOpsionalLokalPaksa(cols, idx.refund_date!, "refund_date"),
         teksOpsional(cols, idx.refund_reason!),
       ],
     }));

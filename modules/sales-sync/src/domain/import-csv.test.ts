@@ -521,6 +521,42 @@ test("importRawMajoo: id bukan angka masuk errors[] dengan nomor baris benar, ba
   });
 });
 
+test("importRawMajoo: kolom waktu berakhiran Z diperlakukan sebagai jam lokal Asia/Jakarta, BUKAN UTC asli", async () => {
+  // Sumber Majoo selalu menulis "...15:12:22Z" tapi label itu salah -- angka
+  // jamnya sebenarnya SUDAH WIB (dikonfirmasi lintas 5539 order sungguhan,
+  // lihat docs/architecture-decisions.md § 24). Hasil tersimpan harus
+  // menunjukkan jam dinding 15:12:22 saat dibaca di zona Asia/Jakarta -- KALAU
+  // "Z" dipercaya sebagai UTC asli (bug lama), hasilnya akan 22:12:22 (+7 jam).
+  await withRollback(async (client) => {
+    const csv = buatCsv(HEADER_MAJOO, [barisMajoo(1)]);
+    await importRawMajoo(client, csv);
+
+    const { rows } = await client.query<{ jam_lokal: string; refund_date: string | null }>(
+      `SELECT to_char(transaction_date AT TIME ZONE 'Asia/Jakarta', 'HH24:MI:SS') AS jam_lokal, refund_date
+       FROM salessync_raw_majoo WHERE id = $1`,
+      [MAJOO_ID_DASAR + 1],
+    );
+    assert.equal(rows[0].jam_lokal, "15:12:22", 'sumber "2025-12-15T15:12:22Z" -> 15:12:22 WIB, bukan 22:12:22');
+    assert.equal(rows[0].refund_date, null, "refund_date kosong di sumber tetap NULL, tidak ikut diproses waktu");
+  });
+});
+
+test("importRawMajoo: refund_date (opsional) juga diperlakukan sebagai jam lokal kalau diisi", async () => {
+  await withRollback(async (client) => {
+    const csv = buatCsv(HEADER_MAJOO, [
+      barisMajoo(1, { refund_id: `${PREFIX}RF-1`, refund_date: "2026-01-10T09:30:00Z", refund_reason: "Salah input" }),
+    ]);
+    await importRawMajoo(client, csv);
+
+    const { rows } = await client.query<{ jam_lokal: string }>(
+      `SELECT to_char(refund_date AT TIME ZONE 'Asia/Jakarta', 'HH24:MI:SS') AS jam_lokal
+       FROM salessync_raw_majoo WHERE id = $1`,
+      [MAJOO_ID_DASAR + 1],
+    );
+    assert.equal(rows[0].jam_lokal, "09:30:00", 'sumber "2026-01-10T09:30:00Z" -> 09:30:00 WIB, bukan 16:30:00');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 4. importBiayaPlatform
 // ---------------------------------------------------------------------------

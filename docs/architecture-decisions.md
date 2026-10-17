@@ -2447,3 +2447,152 @@ Password/kredensial apa pun tidak pernah ditulis ke chat, log, atau git
 sepanjang seluruh proses deploy ini — password database disalin lewat
 `scp` (file `.env.production`, permission 600 di kedua sisi), bukan lewat
 git atau pesan chat.
+
+---
+
+## 24. Sinkronisasi data master dev -> production & perbaikan zona waktu Majoo (2026-10-17)
+
+### 24.1 Ringkasan
+
+Setelah deploy #1 (§ 23), data master (item, menu, resep, harga channel,
+pemetaan item, pengaturan) di production masih berupa snapshot BEKU dari
+migrasi seed awal — sedangkan dev terus berubah lewat pemakaian aplikasi
+sungguhan oleh owner (koreksi harga, resep, pemetaan item sales-sync, dst).
+Sesi ini menyamakan keduanya lewat perbandingan isi PENUH (bukan cuma
+`count(*)`) di SEMUA tabel non-transaksional, dieksekusi lewat 3 skrip SQL
+tervalidasi (diuji dulu terhadap salinan production sungguhan sebelum
+dijalankan sungguhan), dan menutup satu bug nyata di import `raw-majoo`
+yang baru ketahuan selama proses ini.
+
+### 24.2 Metodologi perbandingan — pelajaran dari § 23 diterapkan di sini
+
+§ 23 sudah membuktikan `count(*)` yang sama TIDAK menjamin isi yang sama
+(resep M-002/M-006 kebetulan sama jumlah barisnya walau isinya beda). Sesi
+ini menerapkan pelajaran itu secara sistematis: SEMUA tabel dibandingkan
+baris-per-baris (bukan cuma dihitung), termasuk tabel yang hitungannya
+kebetulan identik. Satu kasus nyata ditemukan lewat ini:
+`salessync_platform_channel_map` awalnya kelihatan beda, ternyata cuma beda
+urutan *collation* Postgres antar instance (locale environment beda),
+bukan beda data — dikonfirmasi dengan `sort` locale-independent di shell
+sebelum disimpulkan "aman".
+
+Cakupan tabel yang DIBANDINGKAN (non-transaksional): `core_locations`,
+`hr_settings`, `hr_shift_template`, `inventory_channel_komisi`,
+`inventory_insight_rules`, `inventory_items`, `inventory_kategori_item`,
+`inventory_kategori_menu`, `inventory_menu`,
+`inventory_menu_channel_visibilitas`, `inventory_menu_harga_channel`,
+`inventory_menu_lokasi`, `inventory_menu_modifier_grup`,
+`inventory_menu_resep_baris`, `inventory_min_stok_lokasi`,
+`inventory_modifier_grup`, `inventory_modifier_opsi`,
+`inventory_paket_menu_baris`, `inventory_resep_produksi`,
+`inventory_resep_produksi_baris`, `inventory_sales_channel`,
+`inventory_satuan`, `inventory_settings`, `salessync_item_mapping`,
+`salessync_platform_channel_map`, `salessync_settings`.
+
+Cakupan tabel yang SENGAJA TIDAK disentuh (transaksi, stok/ledger, user,
+audit log, arsip penjualan): seluruh `inventory_transaksi_*`,
+`inventory_stock_ledger`, `inventory_permintaan_transfer`, `core_users`,
+`core_user_lokasi`, `core_audit_log`, `core_login_attempts`,
+`salessync_log_penjualan`, `salessync_raw_majoo`, `salessync_transaksi`,
+`salessync_biaya_platform`, `schema_migrations`.
+
+Tidak ditemukan baris sisa uji (`TEST-*`/`QA`) di tabel manapun yang
+diperiksa.
+
+### 24.3 Tiga skrip, tiga transaksi terpisah — `devops/data-migrations/`
+
+- **001** (menu & HPP): item baru `PK-015`, koreksi harga `BB-023`
+  (13.92 → 28.00 — perubahan sah owner 2026-10-12, production masih pakai
+  harga seed lama), menu baru `BURJOKET-004` + 6 baris resepnya, koreksi
+  resep `M-001`/`M-002`/`M-006` (penghapusan `OP-005`, penambahan `PK-015`
+  ke M-001 — riwayat lengkap insiden ini ada di komentar migrasi
+  `core/0006` § 23 & kode `hpp.test.ts`), visibilitas channel/lokasi untuk
+  menu baru.
+- **002** (konfigurasi sales-sync): 195 baris `salessync_item_mapping`,
+  230 baris `inventory_menu_harga_channel`, 1 baris `inventory_min_stok_lokasi`
+  (item `BB-004`) — **sengaja tidak menyentuh** 2 baris min-stok yang SUDAH
+  dientri langsung oleh owner di production pasca-deploy (`BB-057`, `BB-044`
+  — item berbeda total, tidak ada konflik unique constraint).
+- **003** (pengaturan): `inventory_settings.target_food_cost_persen`
+  (30 → 50 — satu-satunya selisih nyata dari seluruh perbandingan § 24.2).
+
+Semua kolom "siapa yang mengubah" (`dipetakan_oleh`, `diubah_oleh`) diisi
+`NULL` untuk baris hasil migrasi — ID user dev tidak merujuk user manapun
+yang valid di production (database user terpisah total), memalsukan
+atribusi ke user production yang kebetulan sama ID-nya lebih menyesatkan
+daripada `NULL` yang jujur "hasil migrasi, bukan aksi manusia real-time".
+
+Semua lookup pakai KUNCI NATURAL (`kode` item/menu, `name` lokasi/channel),
+BUKAN id numerik — id di dev dan production independen total, bisa beda
+urutan kapan saja.
+
+### 24.4 Verifikasi sebelum DAN sesudah eksekusi sungguhan
+
+Sebelum dijalankan ke production: `pg_dump` database `samsara` production
+ditarik ke lokal, direstore ke database test terpisah, KETIGA skrip
+dijalankan sungguhan (`COMMIT`, bukan sekadar cek sintaks) terhadap salinan
+itu, hasilnya dibandingkan byte-per-byte dengan dev — cocok persis
+kecuali `min_stok_lokasi` yang memang sengaja beda (3 baris: 2 milik owner
++ 1 dari dev). Database test dihapus setelah lolos.
+
+Backup pengaman production SENDIRI (`pg_dump`, bukan cuma salinan test)
+dibuat lebih dulu sebagai jaring pengaman nyata, permission 600, sebelum
+satu pun perubahan sungguhan dieksekusi.
+
+Setelah dieksekusi sungguhan ke production: jumlah baris tiap tabel
+dikonfirmasi ulang sama persis dengan dev. **HPP SEMUA 58 menu + 12 item
+setengah_jadi (70 total) dihitung lewat fungsi domain `getMenuHppReport`/
+`getItemCostReport` LANGSUNG** (bukan lewat login/API) di dev DAN di
+production sungguhan (skrip dijalankan di dalam container `api` production
+yang sudah terhubung ke database sebenarnya) — **0 selisih** di ke-70
+perhitungan. Ini pembuktian paling kuat bahwa sinkronisasi berhasil penuh
+secara fungsional, bukan cuma secara struktural.
+
+### 24.5 Bug nyata: label "Z" di `raw-majoo` salah — sebenarnya jam lokal, bukan UTC
+
+**Gejala**: HPP/match-rate aman, tapi jam transaksi Majoo di arsip
+`salessync_raw_majoo` tidak masuk akal dibanding jam di
+`salessync_log_penjualan` untuk order yang SAMA.
+
+**Pembuktian** (bukan satu contoh — SEMUA 5539 order Majoo yang match
+antara kedua arsip, toleransi ±65 detik): kalau label "Z" di sumber Majoo
+dipercaya sebagai UTC asli (perilaku lama), hasilnya meleset ~7 jam dari
+jam log yang genuinely lokal. Kalau angka mentah di balik "Z" itu
+diperlakukan LANGSUNG sebagai jam lokal Asia/Jakarta (tanpa konversi),
+hasilnya cocok 99.96% (5537/5539) — 2 pengecualian punya selisih yang
+masuk akal dijelaskan beda semantik "jam order" vs "jam closing transaksi",
+bukan kontradiksi pola.
+
+**Perbaikan** (`modules/sales-sync/src/domain/import-csv.ts`): fungsi baru
+`waktuWajibLokalPaksa`/`waktuOpsionalLokalPaksa`, dipakai KHUSUS untuk
+`transaction_date`/`payment_date`/`refund_date` di `importRawMajoo` —
+membuang offset/`Z` apa pun di sumber lalu memaksa `+07:00`. **Fungsi
+generik `waktuWajib`/`waktuOpsional` TIDAK diubah** — tetap dipakai apa
+adanya untuk sumber LAIN yang offset-nya genuinely benar (mis.
+`salessync_transaksi`), supaya fix ini tidak mengubah perilaku import
+lain yang sudah benar.
+
+**TIDAK ada backfill** — baris `salessync_raw_majoo` yang sudah tersimpan
+dari impor SEBELUM perbaikan ini TIDAK ikut diubah (sesuai instruksi
+eksplisit owner: "tanpa mengubah data lama"). Fix ini cuma berlaku untuk
+impor BARU setelah redeploy. 2 test baru ditambahkan di
+`import-csv.test.ts` membuktikan perilaku baru secara eksplisit.
+
+**Redeploy**: setelah 278 test (seluruh repo) lulus, HANYA container `api`
+production yang di-build ulang & direstart (`web` tidak disentuh, tidak
+ada perubahan di sana) — diverifikasi `n8n`/Postgres/VNC tetap `Up` dengan
+durasi waktu yang terus naik (tidak ter-reset), `/health` OK setelah
+restart.
+
+### 24.6 Status baru: production adalah sumber kebenaran data master
+
+Sejak sinkronisasi ini (2026-10-17), **production dianggap sumber
+kebenaran (source of truth) untuk data master** (item, menu, resep, harga
+channel, pemetaan item, pengaturan) — BUKAN dev lagi. Alasan: production
+sekarang menerima input sungguhan dari operasional real (owner mengisi
+data lewat UI production), sementara dev kembali jadi lingkungan
+eksperimen/testing yang bisa menyimpang kapan saja. Perubahan master data
+berikutnya (kalau dev dipakai eksperimen lagi) TIDAK otomatis disinkronkan
+balik ke production — kalau perlu sinkronisasi lagi di masa depan, ulangi
+metodologi § 24.2-24.4 (perbandingan isi penuh + validasi di salinan
+production dulu), jangan asumsikan arah sinkronisasi selalu dev->production.

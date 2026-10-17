@@ -1,10 +1,33 @@
 # Runbook Deploy Production — Samsara Backoffice
 
-Status per 2026-10-16 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
-disalin dari versi dokumen sebelumnya). **App sudah LIVE dan bisa diakses
-publik** di `https://burnas-app.duckdns.org` — satu-satunya yang tersisa
-adalah membuat akun owner & integrasi production (Langkah 7, sengaja
-**belum** dieksekusi, lihat di bawah).
+Status per 2026-10-17 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
+disalin dari versi dokumen sebelumnya). **App sudah LIVE, dipakai owner
+sungguhan, dan data masternya sudah disinkronkan penuh dengan dev** — lihat
+§ "Sinkronisasi data master" di bawah.
+
+## Sinkronisasi data master dev -> production (2026-10-17)
+
+Item, menu, resep, harga per channel, pemetaan item sales-sync, dan
+pengaturan sistem sekarang **identik** antara dev dan production — dibuktikan
+lewat perhitungan HPP 70 menu/item langsung lewat fungsi domain (bukan lewat
+login/API) di kedua sisi, **0 selisih**. Metodologi lengkap + isi 3 skrip
+yang dijalankan: `devops/data-migrations/001-003-*.sql` (sudah ditandai
+"SUDAH DIJALANKAN" di tiap file, disimpan sebagai arsip) dan
+`docs/architecture-decisions.md` § 24.
+
+**Sejak sinkronisasi ini, production adalah sumber kebenaran (source of
+truth) untuk data master** — bukan dev lagi. Kalau dev dipakai eksperimen
+lagi ke depan, perubahannya TIDAK otomatis masuk ke production — perlu
+diulang metodologinya (perbandingan isi penuh + validasi di salinan
+production dulu) kalau memang perlu sinkronisasi lagi, bukan diasumsikan
+arahnya selalu dev->production.
+
+Bug nyata juga ditemukan & diperbaiki dalam proses yang sama: label `Z` di
+import `raw-majoo` (`modules/sales-sync/src/domain/import-csv.ts`) ternyata
+SALAH — sebenarnya jam lokal Asia/Jakarta, bukan UTC asli (dikonfirmasi
+lintas 5539 order sungguhan, 99.96% konsisten). Diperbaiki di kode (data
+lama TIDAK ikut diubah), 278 test lulus, container `api` production
+di-rebuild & restart (`web`/n8n/Postgres/VNC tidak disentuh sama sekali).
 
 **Domain app: `burnas-app.duckdns.org`.** PENTING — jangan tertukar:
 `burnas-ops.duckdns.org` adalah domain **n8n** yang sudah live sejak lama —
@@ -15,7 +38,12 @@ adalah membuat akun owner & integrasi production (Langkah 7, sengaja
 (dikirim lewat `rsync` dari laptop, BUKAN `git clone` di VPS — menghindari
 urusan kredensial GitHub di server).
 
-## Status per item — SEMUA SELESAI kecuali Langkah 7 (seeding, sengaja ditahan)
+## Status per item — SEMUA SELESAI termasuk Langkah 7
+
+Akun production sudah dibuat owner sendiri (`owner`, `n8n-integrasi`) DAN
+owner sudah mulai memakai aplikasi sungguhan — menambah akun tim sendiri
+lewat UI (`hisyam`/supervisor, `naura`/staf per 2026-10-17). App bukan cuma
+live secara teknis, sudah benar-benar dipakai.
 
 | # | Item | Status |
 |---|------|--------|
@@ -30,7 +58,8 @@ urusan kredensial GitHub di server).
 | 9 | Migrasi ke database production | ✅ **Selesai, semua 42 file migrasi lintas 4 modul berhasil** (lihat bug migrasi yang ditemukan & diperbaiki di bawah) |
 | 10 | Monitoring dasar | ✅ Docker healthcheck aktif, keduanya `healthy` |
 | 11 | Smoke test | ✅ HTTPS valid, `/health` OK, restart `api` sekali → naik lagi sendiri otomatis, n8n/Postgres/VNC tidak terganggu (uptime tidak reset) |
-| 12 | Akun owner & integrasi production | 🛑 **SENGAJA BELUM** — lihat "Langkah 7" di bawah, dijalankan manual oleh owner sendiri |
+| 12 | Akun owner & integrasi production | ✅ **Selesai** — `owner` dan `n8n-integrasi` sudah dibuat owner sendiri (Langkah 7), owner juga sudah menambah akun tim sendiri (`hisyam`/supervisor, `naura`/staf) lewat UI |
+| 13 | Sinkronisasi data master dev -> production | ✅ **Selesai** (2026-10-17) — lihat § "Sinkronisasi data master" di atas dan `docs/architecture-decisions.md` § 24 |
 
 ## Bug migrasi yang ditemukan & diperbaiki saat deploy ini (penting)
 
@@ -74,15 +103,13 @@ berhasil tanpa error. Detail lengkap: `docs/architecture-decisions.md` § 23.
 - Permission backup harian diperketat ke 700 (folder)/600 (file) — sebelumnya
   default 755/644, diperbaiki langsung di `devops/backup-db.sh`.
 
-## Langkah 7 — SENGAJA BELUM dijalankan: buat akun owner & integrasi production
+## Langkah 7 — SUDAH dijalankan: akun owner & integrasi production
 
-**JANGAN migrasikan user dari dev.** Akun Ibnu/Fitri/Naura/Duhan dibuat ULANG
-lewat UI production nanti (bukan dari sini), supaya kredensial mereka baru
-dan belum pernah terekspos di percakapan mana pun.
-
-Jalankan PERSIS ini sendiri di terminal Anda (password diketik interaktif,
-tidak pernah lewat argumen command/environment yang bisa terlihat di `ps`
-atau log):
+**Selesai.** Owner sudah menjalankan sendiri kedua perintah di bawah (akun
+`owner` dan `n8n-integrasi` sudah ada di production), dan sudah mulai
+menambah akun tim lewat UI (`hisyam`/supervisor, `naura`/staf). Dicatat di
+sini sebagai arsip/referensi perintahnya, bukan langkah yang masih perlu
+dikerjakan:
 
 ```bash
 ssh samsara-vps
