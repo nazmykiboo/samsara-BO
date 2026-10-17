@@ -2596,3 +2596,110 @@ berikutnya (kalau dev dipakai eksperimen lagi) TIDAK otomatis disinkronkan
 balik ke production — kalau perlu sinkronisasi lagi di masa depan, ulangi
 metodologi § 24.2-24.4 (perbandingan isi penuh + validasi di salinan
 production dulu), jangan asumsikan arah sinkronisasi selalu dev->production.
+
+---
+
+## 25. Workflow n8n otomatis untuk 4 import sales-sync, sumber Google Sheets bukan Postgres (2026-10-17)
+
+### 25.1 Konteks
+
+Owner minta 4 workflow n8n siap-impor yang mengirim data penjualan
+terjadwal ke 4 endpoint `POST /sales-sync/import/*`. Instruksi awal
+mengasumsikan sumber datanya **query Postgres** (instance `n8n-stack-postgres-1`
+yang sudah jalan di VPS, dicek read-only lewat `ssh samsara-vps`).
+
+### 25.2 Temuan: Postgres cuma punya 1 dari 4 sumber, dan itu pun parsial
+
+Pencarian read-only exhaustif ke database `n8n` (129 tabel, termasuk tabel
+bisnis custom milik otomasi LAIN yang berbagi instance n8n yang sama —
+di luar scope, tidak disentuh) menemukan:
+
+- `transaksi_detail` (9382 baris) — HANYA data **Shopee** (5627 baris) +
+  3755 baris platform NULL. **GoFood/GrabFood tidak ada sama sekali** di
+  Postgres.
+- `transaksi` (0 baris, tidak aktif), `sales_summary` (612 baris, SUDAH
+  teragregasi — tidak cocok jadi sumber per-baris).
+- **Tidak ada tabel sama sekali** dengan skema yang cocok untuk
+  `biaya_platform` (dicari exhaustif lintas nama kolom
+  fee/commission/refund/gross/net_revenue/is_paid — nol hasil) atau untuk
+  `raw_majoo`.
+
+Owner mengklarifikasi: 3 workflow n8n yang **sudah berjalan** di instance
+ini (dibaca read-only, TIDAK diubah) — `"All - Get Product Details"`,
+`"Get sales & biaya online"`, `"Majoo - Sales"` — sebenarnya menulis hasil
+akhirnya ke **Google Sheets**, bukan ke Postgres (node Postgres di
+ketiganya hanya dipakai mengambil token API, bukan menyimpan data).
+Satu spreadsheet dipakai bersama, `BURNAS_DASHBOARD_V1`
+(`1k48yRkXBJmEy0n2Du75i8ODhPYXPsHobXMygjqOUPCQ`), dengan tab
+`LOG_PENJUALAN` (keempat platform), `transaksi`, `biaya_platform`,
+`RAW_TRANSAKSI_MAJOO` — dan kolom-kolomnya **sudah sejalan** dengan skema
+CSV Samsara (dibaca dari isi Code node "Map to X Columns" di workflow
+yang ada, read-only, bukan isi baris).
+
+### 25.3 Keputusan: 4 workflow baru sumbernya Google Sheets, bukan Postgres
+
+**Berbeda dari asumsi awal instruksi**, 4 workflow baru di `devops/n8n/`
+membaca dari `BURNAS_DASHBOARD_V1` (node Google Sheets), bukan query SQL
+ke Postgres — karena Sheets adalah satu-satunya sumber yang **lengkap**
+untuk keempat jenis data (Postgres cuma punya mirror parsial 1 platform
+untuk 1 dari 4 jenis). Konsekuensi: workflow butuh 1 credential tambahan
+di n8n (Google Sheets OAuth2) di luar 2 credential yang disebut instruksi
+awal (login app + Postgres) — credential Postgres akhirnya **tidak
+dipakai sama sekali** oleh 4 workflow baru ini (3 workflow LAMA yang masih
+memakainya untuk token API, tidak disentuh).
+
+Nama kolom tab Google Sheet **diasumsikan identik dengan nama target CSV**
+berdasarkan pembacaan Code node workflow lama (bukan dibaca langsung dari
+header sheet sungguhan — di luar akses baca yang dipakai, murni
+investigasi kode n8n read-only) — dipetakan lewat objek `PETA` yang
+sengaja diletakkan di baris paling atas tiap Code node "Susun CSV & Pecah
+Batch" supaya mudah dikoreksi manual kalau ternyata beda, tanpa perlu
+mengubah logika lain. Lihat `devops/n8n/README.md` § "Kalau mapping kolom
+salah".
+
+### 25.4 Bug nyata ditemukan & diperbaiki di `import-csv.ts` saat menyiapkan ini
+
+Uji langsung (bukan cuma baca kode) terhadap CSV gaya ekspor Postgres vs
+gaya Google Sheet menemukan 2 masalah nyata di
+`modules/sales-sync/src/domain/import-csv.ts`:
+
+1. `tanggalKalender`/`tambahOffsetJakarta` cuma menerima SATU keluarga
+   format tanggal masing-masing (ISO saja / M-D-Y saja) — diperbaiki
+   menerima KEDUANYA.
+2. **`angkaWajib` (dipakai `raw_majoo` & `biaya_platform`) tidak membuang
+   pemisah ribuan koma** — `parseFloat("-1,000")` diam-diam menghasilkan
+   `-1` (BUKAN error, SALAH 1000x lipat, senyap). Diperbaiki: `angkaWajib`
+   sekarang selalu membuang koma dulu (sama seperti `angkaRibuanWajib`,
+   yang sekarang jadi alias murni) — aman untuk sumber yang memang sudah
+   polos (membuang koma dari angka tanpa koma = no-op).
+
+8 kombinasi (4 endpoint x 2 gaya sumber) diuji ulang sampai semuanya lulus,
+ditambahkan sebagai test permanen di `import-csv.test.ts` (bukan cuma
+script sementara), 278 test (seluruh repo) lulus, `npm run typecheck`
+bersih. Spesifikasi kolom/format lengkap: `docs/integrasi-n8n.md` § 8.
+
+### 25.5 Desain dry-run & dedup `biaya_platform`
+
+- **Dry-run** = otomatis aktif setiap kali workflow dijalankan lewat
+  tombol "Execute Workflow" manual (`$execution.mode === "manual"`, bukan
+  field terpisah yang mudah lupa di-reset) — jendela dipersempit ke 1 hari,
+  TIDAK pernah memanggil endpoint import, TIDAK pernah menyentuh static
+  data `biaya_platform`. Login tetap dipanggil saat dry-run (aman,
+  read-only, cuma menerbitkan JWT) supaya sekaligus jadi uji credential.
+  Owner yang mau memaksa kirim sungguhan lewat tombol manual (tanpa
+  menunggu jadwal) bisa override field `dryRun` di node "Atur Mode" secara
+  manual — didokumentasikan di `devops/n8n/README.md`.
+- **`log_penjualan`/`transaksi`/`raw_majoo`**: jendela rolling 2 hari tiap
+  jalan terjadwal (aman, duplikat dilewati server lewat `ON CONFLICT`).
+- **`biaya_platform`**: TIDAK pakai jendela berulang — baris tanpa
+  `id_platform` tidak bisa di-dedup server (`NULL` tidak pernah dianggap
+  sama dengan `NULL` lain di constraint `UNIQUE`), jadi dipakai penanda
+  `synced_at` tersimpan di **workflow static data** n8n sendiri
+  (`$getWorkflowStaticData`), maju HANYA setelah POST sukses (HTTP 200),
+  dan TIDAK PERNAH dibaca/digeser oleh cabang dry-run. Belum pernah jalan
+  (static data kosong) -> default aman mundur 2 hari (BUKAN seluruh isi
+  sheet historis) — backfill lebih jauh dari itu, kalau suatu saat
+  dibutuhkan, adalah langkah manual terpisah di luar scope workflow ini.
+  Logika filter + kemajuan penanda diuji lewat harness Node.js yang
+  memalsukan global n8n (`$input`/`$('...')`/`$getWorkflowStaticData`) sebelum
+  file JSON final ditulis — bukan cuma dicek lewat `JSON.parse`.

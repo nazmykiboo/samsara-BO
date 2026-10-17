@@ -260,6 +260,25 @@ test("importLogPenjualan: header CSV tidak lengkap ditolak sebelum menyentuh dat
   });
 });
 
+test('importLogPenjualan: transaction_date/transaction_time format ISO ("gaya Postgres") diterima SAMA seperti M/D/YYYY ("gaya Google Sheet")', async () => {
+  // Sumber log_penjualan bisa berupa ekspor Postgres (tanggal ISO) atau
+  // Google Sheet (M/D/YYYY) -- lihat docs/integrasi-n8n.md. Keduanya harus
+  // menghasilkan nilai tersimpan yang IDENTIK.
+  await withRollback(async (client) => {
+    const csv = buatCsv(HEADER_LOG, [
+      barisLog(1, { transaction_date: "2026-07-22", transaction_time: "06:16:00" }),
+    ]);
+    assert.deepEqual(await importLogPenjualan(client, csv), { dibuat: 1, diperbarui: 0, dilewati: 0, errors: [] });
+
+    const { rows } = await client.query<{ transaction_date: string; transaction_time: string }>(
+      `SELECT transaction_date, transaction_time FROM salessync_log_penjualan WHERE unique_key = $1`,
+      [`${PREFIX}KEY-1`],
+    );
+    assert.equal(rows[0].transaction_date, "2026-07-22");
+    assert.equal(rows[0].transaction_time, "06:16:00");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 2. importTransaksi
 // ---------------------------------------------------------------------------
@@ -405,6 +424,22 @@ test("importTransaksi: raw_payload yang bukan JSON valid disimpan NULL dan baris
     );
     assert.equal(rows[0].raw_payload, null, "kolom pendukung gagal parse -> NULL, bukan error baris");
     assert.equal(Number(rows[0].net_revenue), 26600, "angka-angka utama tetap tersimpan");
+  });
+});
+
+test('importTransaksi: order_time format "M/D/YYYY H:MM:SS" (gaya Google Sheet) diterima SAMA seperti ISO+offset (gaya Postgres)', async () => {
+  await withRollback(async (client) => {
+    const csv = buatCsv(HEADER_TRANSAKSI, [
+      barisTransaksi(1, { order_time: "7/25/2026 13:30:00" }),
+    ]);
+    assert.deepEqual(await importTransaksi(client, csv), { dibuat: 1, diperbarui: 0, dilewati: 0, errors: [] });
+
+    const { rows } = await client.query<{ jam_lokal: string }>(
+      `SELECT to_char(order_time AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD HH24:MI:SS') AS jam_lokal
+       FROM salessync_transaksi WHERE source_id = $1`,
+      [`${PREFIX}SRC-1`],
+    );
+    assert.equal(rows[0].jam_lokal, "2026-07-25 13:30:00", '"7/25/2026 13:30:00" ditafsir sebagai jam lokal WIB');
   });
 });
 
@@ -557,6 +592,33 @@ test("importRawMajoo: refund_date (opsional) juga diperlakukan sebagai jam lokal
   });
 });
 
+test('importRawMajoo: angka "polos" (total_sales dkk.) TETAP benar walau sumber menuliskannya dengan pemisah ribuan koma (gaya Google Sheet)', async () => {
+  // Bug nyata yang pernah ditemukan: parseFloat("-1,000") diam-diam = -1
+  // (bukan error, bukan -1000) kalau koma tidak dibuang dulu. Sumber Majoo
+  // asli tidak pernah berkoma, tapi ekspor lewat Google Sheet BISA menambah
+  // koma -- harus tetap benar, bukan cuma "tidak error".
+  await withRollback(async (client) => {
+    const csv = buatCsv(HEADER_MAJOO, [
+      barisMajoo(1, {
+        transaction_date: "12/15/2025 15:12:22",
+        total_sales: "50,000",
+        receivables: "-1,000",
+      }),
+    ]);
+    assert.deepEqual(await importRawMajoo(client, csv), { dibuat: 1, diperbarui: 0, dilewati: 0, errors: [] });
+
+    const { rows } = await client.query<{ total_sales: string; receivables: string; jam_lokal: string }>(
+      `SELECT total_sales, receivables,
+              to_char(transaction_date AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD HH24:MI:SS') AS jam_lokal
+       FROM salessync_raw_majoo WHERE id = $1`,
+      [MAJOO_ID_DASAR + 1],
+    );
+    assert.equal(Number(rows[0].total_sales), 50000, 'bukan 50 dari parseFloat("50,000")');
+    assert.equal(Number(rows[0].receivables), -1000, 'bukan -1 dari parseFloat("-1,000")');
+    assert.equal(rows[0].jam_lokal, "2025-12-15 15:12:22", '"12/15/2025 15:12:22" (gaya Sheet) = jam lokal WIB');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 4. importBiayaPlatform
 // ---------------------------------------------------------------------------
@@ -683,5 +745,29 @@ test("importBiayaPlatform: amount tidak valid masuk errors[] tanpa menggagalkan 
     assert.equal(hasil.errors[0].baris, 2);
     assert.match(hasil.errors[0].pesan, /amount/);
     assert.equal(await hitungBiaya(client), 2);
+  });
+});
+
+test('importBiayaPlatform: tanggal M/D/YYYY dan angka berkoma ribuan (gaya Google Sheet) diterima dan BENAR, bukan sekadar lolos tanpa error', async () => {
+  await withRollback(async (client) => {
+    const csv = buatCsv(HEADER_BIAYA, [
+      barisBiaya(1, {
+        tanggal_closing: "8/4/2026",
+        create_time: "8/4/2026 10:15:00",
+        synced_at: "8/5/2026 01:00:00",
+        amount: "-1,000",
+      }),
+    ]);
+    assert.deepEqual(await importBiayaPlatform(client, csv), { dibuat: 1, diperbarui: 0, dilewati: 0, errors: [] });
+
+    const { rows } = await client.query<{ tanggal: string; amount: string; jam_create: string }>(
+      `SELECT to_char(tanggal_closing AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD') AS tanggal, amount::text AS amount,
+              to_char(create_time AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD HH24:MI:SS') AS jam_create
+       FROM salessync_biaya_platform WHERE id_platform = $1`,
+      [`${PREFIX}IDP-1`],
+    );
+    assert.equal(rows[0].tanggal, "2026-08-04", '"8/4/2026" (gaya Sheet) = tanggal lokal WIB yang sama');
+    assert.equal(Number(rows[0].amount), -1000, 'bukan -1 dari parseFloat("-1,000")');
+    assert.equal(rows[0].jam_create, "2026-08-04 10:15:00");
   });
 });

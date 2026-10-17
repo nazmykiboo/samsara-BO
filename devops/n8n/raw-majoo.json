@@ -1,0 +1,441 @@
+{
+  "name": "Sales-Sync: Import Raw Majoo",
+  "nodes": [
+    {
+      "id": "07eba73a-a07f-46bd-a48c-918085dd0f54",
+      "position": [
+        0,
+        0
+      ],
+      "name": "Jadwal Otomatis",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 23,
+              "triggerAtMinute": 45
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d80d1c6f-ff85-4fba-b654-e6a288062fba",
+      "position": [
+        0,
+        200
+      ],
+      "name": "Jalankan Manual (Uji Coba)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "parameters": {}
+    },
+    {
+      "id": "e7bc545e-93aa-49d5-a2f4-8fc495a32120",
+      "position": [
+        220,
+        100
+      ],
+      "name": "Atur Mode",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8154efde-8205-41dd-b0d2-e17874fb9042",
+              "name": "dryRun",
+              "type": "boolean",
+              "value": "={{ $execution.mode === \"manual\" }}"
+            },
+            {
+              "id": "1e51596b-76a5-4bd5-be7d-c874f23e6fa3",
+              "name": "windowDays",
+              "type": "number",
+              "value": "={{ $execution.mode === \"manual\" ? 1 : 2 }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "8f0ba0ea-d0d0-49c2-bad2-4070b7f941a9",
+      "position": [
+        440,
+        100
+      ],
+      "name": "Login ke App",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "https://burnas-app.duckdns.org/api/auth/login",
+        "authentication": "none",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"username\": $credentials.username, \"password\": $credentials.password } }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "",
+          "name": "Login App Samsara (n8n-integrasi)"
+        }
+      }
+    },
+    {
+      "id": "cbd4149b-e9f3-4e7e-bece-c43fe5f86f36",
+      "position": [
+        660,
+        100
+      ],
+      "name": "Simpan Token & Mode",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ef55e207-36f9-43ac-92ce-d0ef681df458",
+              "name": "token",
+              "type": "string",
+              "value": "={{ $json.token }}"
+            },
+            {
+              "id": "6957aeb1-20e7-4400-8eec-99ef969b5d04",
+              "name": "dryRun",
+              "type": "boolean",
+              "value": "={{ $('Atur Mode').item.json.dryRun }}"
+            },
+            {
+              "id": "04b9f4c5-b4d3-4e6e-acc8-f7230e973b03",
+              "name": "windowDays",
+              "type": "number",
+              "value": "={{ $('Atur Mode').item.json.windowDays }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "1b66c74b-f00d-4f5e-9186-a14f10bcba85",
+      "position": [
+        880,
+        100
+      ],
+      "name": "Ambil Data dari Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1k48yRkXBJmEy0n2Du75i8ODhPYXPsHobXMygjqOUPCQ"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "RAW_TRANSAKSI_MAJOO"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets - BURNAS_DASHBOARD_V1"
+        }
+      }
+    },
+    {
+      "id": "adc2b3e0-f803-4d7b-971c-b8f4f85a5799",
+      "position": [
+        1100,
+        100
+      ],
+      "name": "Susun CSV & Pecah Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "function csvField(v) {\n  const s = v === null || v === undefined ? \"\" : String(v);\n  return /[\",\\n\\r]/.test(s) ? '\"' + s.replace(/\"/g, '\"\"') + '\"' : s;\n}\nfunction buatBarisCsv(header, obj) {\n  return header.map((h) => csvField(obj[h])).join(\",\");\n}\nfunction parseTanggalFleksibel(raw) {\n  if (raw === null || raw === undefined || raw === \"\") return null;\n  const s = String(raw).trim();\n  let m = /^(\\d{4})-(\\d{2})-(\\d{2})(?:[ T](\\d{1,2}):(\\d{2})(?::(\\d{2}))?)?/.exec(s);\n  if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));\n  m = /^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})(?:[ T](\\d{1,2}):(\\d{2})(?::(\\d{2}))?)?/.exec(s);\n  if (m) return Date.UTC(+m[3], +m[1] - 1, +m[2], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));\n  return null;\n}\n// \"Sekarang\" dalam jam dinding Asia/Jakarta, dihitung sebagai UTC+0 palsu\n// supaya bisa dibandingkan apple-to-apple dengan parseTanggalFleksibel (yang\n// juga membaca digit jam mentah TANPA konversi timezone apa pun) -- cukup\n// akurat untuk jendela lookback per hari, TIDAK dipakai untuk simpan ke DB.\nfunction sekarangJakartaMs() {\n  return Date.now() + 7 * 60 * 60 * 1000;\n}\n\nconst mode = $('Simpan Token & Mode').first().json;\nconst { dryRun, windowDays, token } = mode;\nconst HEADER = [\"id\",\"transaction_no\",\"transaction_date\",\"payment_date\",\"order_type_name\",\"payment_method_name\",\"payment_cashier_name\",\"total_sales\",\"receivables\",\"total_discount_amount\",\"refund_amount\",\"is_paid\",\"outlet_id\",\"hasMore\",\"nextPage\",\"_empty\",\"refund_id\",\"refund_no\",\"refund_date\",\"refund_reason\"];\nconst MAKS_BARIS = 30000;\n\nconst cutoffMs = sekarangJakartaMs() - windowDays * 24 * 60 * 60 * 1000;\n\nconst PETA = {\n  id: \"id\",\n  transaction_no: \"transaction_no\",\n  transaction_date: \"transaction_date\",\n  payment_date: \"payment_date\",\n  order_type_name: \"order_type_name\",\n  payment_method_name: \"payment_method_name\",\n  payment_cashier_name: \"payment_cashier_name\",\n  total_sales: \"total_sales\",\n  receivables: \"receivables\",\n  total_discount_amount: \"total_discount_amount\",\n  refund_amount: \"refund_amount\",\n  is_paid: \"is_paid\",\n  outlet_id: \"outlet_id\",\n  hasMore: \"hasMore\",\n  nextPage: \"nextPage\",\n  _empty: \"_empty\",\n  refund_id: \"refund_id\",\n  refund_no: \"refund_no\",\n  refund_date: \"refund_date\",\n  refund_reason: \"refund_reason\",\n};\n\nconst barisTerfilter = [];\nfor (const item of $input.all()) {\n  const row = item.json;\n  const ms = parseTanggalFleksibel(row[PETA.transaction_date]);\n  if (ms === null || ms < cutoffMs) continue;\n  const obj = {};\n  for (const kolom of HEADER) obj[kolom] = row[PETA[kolom]] ?? \"\";\n  barisTerfilter.push(obj);\n}\n\nif (dryRun) {\n  return [{\n    json: {\n      dryRun: true,\n      jumlahBaris: barisTerfilter.length,\n      contohBaris: barisTerfilter.slice(0, 3),\n      csvHeader: HEADER.join(\",\"),\n    },\n  }];\n}\n\nconst hasil = [];\nfor (let i = 0; i < barisTerfilter.length; i += MAKS_BARIS) {\n  const potongan = barisTerfilter.slice(i, i + MAKS_BARIS);\n  const lines = [HEADER.join(\",\")];\n  for (const obj of potongan) lines.push(buatBarisCsv(HEADER, obj));\n  hasil.push({\n    json: {\n      dryRun: false,\n      token,\n      csvText: lines.join(\"\\n\") + \"\\n\",\n      jumlahBarisBatch: potongan.length,\n      batchKe: Math.floor(i / MAKS_BARIS) + 1,\n    },\n  });\n}\nif (hasil.length === 0) {\n  hasil.push({ json: { dryRun: false, token, csvText: HEADER.join(\",\") + \"\\n\", jumlahBarisBatch: 0, batchKe: 1 } });\n}\nreturn hasil;"
+      }
+    },
+    {
+      "id": "00864d35-b6cb-40f8-bfa2-19019f7b0d82",
+      "position": [
+        1320,
+        100
+      ],
+      "name": "Apakah Dry-Run?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "4d2c45b9-36fd-476b-a536-7a3122632ce0",
+              "leftValue": "={{ $json.dryRun }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "827de8db-f933-4313-a0b1-0af319e18cf6",
+      "position": [
+        1540,
+        0
+      ],
+      "name": "Pratinjau Dry-Run (lihat tab Output)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "parameters": {}
+    },
+    {
+      "id": "51fb632d-06f5-4622-ad83-a3def89f67db",
+      "position": [
+        1540,
+        200
+      ],
+      "name": "Kirim CSV ke App",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "https://burnas-app.duckdns.org/api/sales-sync/import/raw-majoo",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "text/csv"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "raw",
+        "rawContentType": "text/csv",
+        "body": "={{ $json.csvText }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "0657eba2-2abf-4bb9-ab61-005c3cc113b5",
+      "position": [
+        1760,
+        200
+      ],
+      "name": "Ada Baris Gagal?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "4c0c3cfe-c8e8-4ea5-8dd1-83d177a58733",
+              "leftValue": "={{ $json.errors.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "bf8735a1-3d76-4c29-ba23-da88dabf55ad",
+      "position": [
+        1980,
+        100
+      ],
+      "name": "Error: Ada Baris CSV Gagal",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "parameters": {
+        "errorMessage": "={{ 'Import ' + $('Atur Mode').item.json.windowDays + ' hari terakhir: ' + $json.errors.length + ' baris CSV gagal disimpan. Detail: ' + JSON.stringify($json.errors) }}"
+      }
+    },
+    {
+      "id": "cdcebed4-f199-4a4c-b031-7f37f8c21261",
+      "position": [
+        1980,
+        300
+      ],
+      "name": "Selesai",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Jadwal Otomatis": {
+      "main": [
+        [
+          {
+            "node": "Atur Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jalankan Manual (Uji Coba)": {
+      "main": [
+        [
+          {
+            "node": "Atur Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atur Mode": {
+      "main": [
+        [
+          {
+            "node": "Login ke App",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Login ke App": {
+      "main": [
+        [
+          {
+            "node": "Simpan Token & Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simpan Token & Mode": {
+      "main": [
+        [
+          {
+            "node": "Ambil Data dari Google Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Data dari Google Sheet": {
+      "main": [
+        [
+          {
+            "node": "Susun CSV & Pecah Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Susun CSV & Pecah Batch": {
+      "main": [
+        [
+          {
+            "node": "Apakah Dry-Run?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apakah Dry-Run?": {
+      "main": [
+        [
+          {
+            "node": "Pratinjau Dry-Run (lihat tab Output)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kirim CSV ke App",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kirim CSV ke App": {
+      "main": [
+        [
+          {
+            "node": "Ada Baris Gagal?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ada Baris Gagal?": {
+      "main": [
+        [
+          {
+            "node": "Error: Ada Baris CSV Gagal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Selesai",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta"
+  },
+  "staticData": null,
+  "meta": {
+    "instanceId": null
+  }
+}

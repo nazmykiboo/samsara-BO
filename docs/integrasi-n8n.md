@@ -395,3 +395,162 @@ aktif kalau ada baris yang terlewat.
 - [ ] Sudah dicoba manual run sekali untuk tiap endpoint, dicek
   `errors[]` di response kosong/sesuai ekspektasi.
 - [ ] (Opsional) Notifikasi error sudah disiapkan sesuai § 4.8.
+
+---
+
+## 8. Spesifikasi CSV lengkap per endpoint
+
+Detail presisi untuk membangun Node 4 (penyusun CSV) dengan benar, diambil
+langsung dari kode importer (`modules/sales-sync/src/domain/import-csv.ts`)
+dan diuji otomatis terhadap dua gaya sumber nyata (`import-csv.test.ts`):
+**gaya ekspor Postgres** (tanggal ISO `YYYY-MM-DD`, angka tanpa pemisah
+ribuan, kosong sebagai string kosong) dan **gaya Google Sheet** (tanggal
+`M/D/YYYY`, angka boleh berkutip dengan pemisah ribuan koma seperti
+`"29,600"`). **Kedua gaya ini DITERIMA KEDUANYA di keempat endpoint** —
+tidak perlu normalisasi format di sisi n8n sebelum kirim.
+
+### 8.1 Batas ukuran & jumlah baris per request
+
+- **Batas ukuran body: 15 MB per request** (`express.text({ limit: "15mb"
+  })`, `modules/sales-sync/src/api/router.ts`). Lebih dari itu, request
+  ditolak sebelum sempat diparse.
+- **Rekomendasi jumlah baris maksimal per request** (bukan limit keras dari
+  backend, tapi batas aman yang disarankan supaya satu batch tidak pernah
+  mendekati 15 MB, dan supaya satu kegagalan parsing tidak membuat response
+  `errors[]` terlalu panjang untuk dibaca manusia):
+
+  | Endpoint | Perkiraan ukuran/baris | Rekomendasi maks/baris per request |
+  |---|---|---|
+  | `log-penjualan` | ~100–150 byte (11 kolom pendek) | **50.000 baris** (~5–7 MB) |
+  | `transaksi` | ~150–1000+ byte (tergantung besar `raw_payload`) | **10.000 baris** (beri margin besar untuk `raw_payload` yang verbose) |
+  | `raw-majoo` | ~150–250 byte (20 kolom, mayoritas pendek) | **30.000 baris** |
+  | `biaya-platform` | ~150–200 byte (11 kolom pendek) | **30.000 baris** |
+
+  Kalau sumber data (mis. jendela 2 hari log_penjualan) realistis tidak
+  akan pernah mendekati angka ini, tidak perlu pecah batch sama sekali —
+  pecah batch cuma relevan kalau ekspor awal (first backfill) atau jendela
+  yang diperbesar manual menghasilkan jumlah baris sangat besar.
+
+### 8.2 `import/log-penjualan`
+
+Tabel tujuan: `salessync_log_penjualan`. **Kunci unik: `unique_key`**
+(baris dengan `unique_key` yang sama akan di-UPDATE, bukan dobel).
+
+| Kolom | Wajib? | Format diterima | Catatan |
+|---|---|---|---|
+| `transaction_date` | **Wajib** | `YYYY-MM-DD` ATAU `M/D/YYYY` | Tanggal kalender murni, tanpa jam. |
+| `transaction_time` | **Wajib** | `H:MM` atau `H:MM:SS` | Disimpan sebagai `HH:MM:SS`. |
+| `platform` | **Wajib** | teks bebas | |
+| `order_id` | **Wajib** | teks bebas | |
+| `item_name` | **Wajib** | teks bebas | |
+| `menu_id` | Opsional | teks bebas | Kosong -> `NULL` (bukan string kosong). |
+| `quantity` | **Wajib** | bilangan bulat | `parseInt`, harus bilangan bulat valid. |
+| `item_type` | **Wajib** | teks bebas | |
+| `parent_item` | Opsional | teks bebas | Kosong -> `NULL`. |
+| `unique_key` | **Wajib** | teks bebas | **KUNCI UNIK** — harus benar-benar unik per baris sumber (biasanya kombinasi order+item). |
+| `inv_status` | **Wajib** | teks bebas | Biasanya `OK`. |
+
+Contoh header:
+```
+transaction_date,transaction_time,platform,order_id,item_name,menu_id,quantity,item_type,parent_item,unique_key,inv_status
+```
+
+### 8.3 `import/transaksi`
+
+Tabel tujuan: `salessync_transaksi`. **Kunci unik: kombinasi
+`(source_id, platform_order_number)`** — BUKAN `source_id` sendirian
+(satu `source_id`/satu laporan harian bisa berisi banyak order sebagai
+baris terpisah).
+
+| Kolom | Wajib? | Format diterima | Catatan |
+|---|---|---|---|
+| `platform` | **Wajib** | teks bebas | |
+| `platform_order_number` | **Wajib** | teks bebas | Bagian dari kunci unik. |
+| `platform_transaction_id` | Opsional | teks bebas | Kosong -> `NULL`. |
+| `order_time` | **Wajib** | ISO+offset (`2026-07-25T13:30:00+07:00`), ISO tanpa offset (`2026-07-25 13:30:00`, dianggap WIB), atau `M/D/YYYY[ H:MM[:SS]]` (`7/25/2026 13:30:00`, juga dianggap WIB) | Timestamp lengkap, bukan tanggal saja. |
+| `settled_time` | Opsional | sama seperti `order_time` | Kosong -> `NULL`. |
+| `status` | **Wajib** | teks bebas | |
+| `gross_amount` | **Wajib** | angka, boleh berkutip dengan pemisah ribuan koma (`"29,600"`) | Koma dibuang otomatis sebelum diparse. |
+| `total_fees` | **Wajib** | sama seperti `gross_amount` | |
+| `net_revenue` | **Wajib** | sama seperti `gross_amount` | |
+| `currency` | **Wajib** | teks bebas | Biasanya `IDR`. |
+| `source` | **Wajib** | teks bebas | |
+| `source_id` | **Wajib** | teks bebas | Bagian dari kunci unik. |
+| `raw_payload` | Opsional | teks JSON | Kalau bukan JSON valid (atau kosong), disimpan `NULL` — **baris TETAP diproses**, tidak pernah menggagalkan baris. |
+
+Catatan kompatibilitas: 2 kolom tanpa nama di akhir header file sumber
+(artefak export spreadsheet) diabaikan otomatis, tidak perlu dibersihkan.
+
+Contoh header:
+```
+platform,platform_order_number,platform_transaction_id,order_time,settled_time,status,gross_amount,total_fees,net_revenue,currency,source,source_id,raw_payload
+```
+
+### 8.4 `import/raw-majoo`
+
+Tabel tujuan: `salessync_raw_majoo`. **Kunci unik: `id`** (primary key,
+diisi apa adanya dari id asli Majoo — bukan auto-increment).
+
+| Kolom | Wajib? | Format diterima | Catatan |
+|---|---|---|---|
+| `id` | **Wajib** | bilangan bulat | **KUNCI UNIK**, id asli dari Majoo. |
+| `transaction_no` | **Wajib** | teks bebas | |
+| `transaction_date` | **Wajib** | diakhiri `Z` di sumber ASLI, tapi diperlakukan sebagai **jam lokal Asia/Jakarta**, bukan UTC — lihat catatan di bawah | |
+| `payment_date` | Opsional | sama seperti `transaction_date` | Kosong -> `NULL`. |
+| `order_type_name` | Opsional | teks bebas | |
+| `payment_method_name` | Opsional | teks bebas | |
+| `payment_cashier_name` | Opsional | teks bebas | |
+| `total_sales` | **Wajib** | angka, boleh polos atau berkutip dengan koma ribuan | Koma dibuang otomatis (sama seperti `transaksi`). |
+| `receivables` | **Wajib** | sama seperti `total_sales` | |
+| `total_discount_amount` | **Wajib** | sama seperti `total_sales` | |
+| `refund_amount` | **Wajib** | sama seperti `total_sales` | |
+| `is_paid` | **Wajib** (kolom harus ada di header) | `"1"` atau `"0"` | `"1"` -> `true`, nilai lain (termasuk kosong) -> `false`. |
+| `outlet_id` | **Wajib** | teks bebas | |
+| `hasMore` | Opsional | teks bebas | Artefak pagination API Majoo, boleh kosong. |
+| `nextPage` | Opsional | teks bebas | |
+| `_empty` | Opsional | teks bebas | Dipetakan ke kolom `empty_field`. |
+| `refund_id` | Opsional | teks bebas | |
+| `refund_no` | Opsional | teks bebas | |
+| `refund_date` | Opsional | sama seperti `transaction_date` | |
+| `refund_reason` | Opsional | teks bebas | |
+
+> **Penting soal label "Z" di `transaction_date`/`payment_date`/
+> `refund_date`:** sumber Majoo SELALU menuliskan sufiks "Z" (klaim UTC),
+> tapi klaim itu **salah** — dikonfirmasi 2026-10-17 lintas 5539 order
+> sungguhan (99,96% konsisten, lihat `docs/architecture-decisions.md`
+> § 24). Backend SELALU membuang offset apa pun yang tertulis (termasuk
+> "Z") dan menafsirkan digit jamnya sebagai WIB (`+07:00`). n8n tidak perlu
+> melakukan apa pun soal ini — cukup teruskan nilai dari sumber apa adanya.
+
+Contoh header:
+```
+id,transaction_no,transaction_date,payment_date,order_type_name,payment_method_name,payment_cashier_name,total_sales,receivables,total_discount_amount,refund_amount,is_paid,outlet_id,hasMore,nextPage,_empty,refund_id,refund_no,refund_date,refund_reason
+```
+
+### 8.5 `import/biaya-platform`
+
+Tabel tujuan: `salessync_biaya_platform`. **Kunci unik: `id_platform`,
+NULLABLE** — baris dengan `id_platform` kosong **tidak pernah bisa
+di-dedup** (Postgres tidak menganggap `NULL` sama dengan `NULL` lain di
+kolom `UNIQUE`), jadi re-import CSV yang sama tanpa menggeser jendela akan
+menggandakan baris-baris ini. Lihat § "Pemilihan baris" di workflow
+(`synced_at` sebagai penanda maju, bukan jendela tanggal berulang).
+
+| Kolom | Wajib? | Format diterima | Catatan |
+|---|---|---|---|
+| `tanggal_closing` | **Wajib** | ISO+offset, ISO tanpa offset (dianggap WIB), atau `M/D/YYYY[ H:MM[:SS]]` (dianggap WIB) | Walau namanya "tanggal", kolom ini **TIMESTAMPTZ** (jam ikut tersimpan kalau ada). |
+| `platform` | **Wajib** | teks bebas | |
+| `kategori_biaya` | **Wajib** | teks bebas | |
+| `deskripsi` | Opsional | teks bebas | |
+| `transaction_type_raw` | Opsional | teks bebas (boleh angka-sebagai-string) | Disimpan sebagai STRING apa adanya, tidak pernah diparse jadi angka. |
+| `amount` | **Wajib** | angka, boleh polos atau berkutip dengan koma ribuan, boleh negatif/desimal | Koma dibuang otomatis. |
+| `amount_raw` | Opsional | sama seperti `amount` | `NUMERIC(18,4)`, tidak dibulatkan. |
+| `reference_id` | Opsional | teks bebas | |
+| `id_platform` | Opsional (tapi lihat catatan kunci unik di atas) | teks bebas | **KUNCI UNIK saat terisi**; kosong -> `NULL`, selalu `INSERT` baru (tidak pernah dedup). |
+| `create_time` | Opsional | sama seperti `tanggal_closing` | Kosong -> `NULL`. |
+| `synced_at` | Opsional | sama seperti `tanggal_closing` | Kosong -> `NULL`. Ini kolom DATA dari sumber, **beda** dari penanda `synced_at` yang disimpan workflow n8n sendiri di static data (lihat workflow `biaya-platform.json`) — jangan tertukar. |
+
+Contoh header:
+```
+tanggal_closing,platform,kategori_biaya,deskripsi,transaction_type_raw,amount,amount_raw,reference_id,id_platform,create_time,synced_at
+```

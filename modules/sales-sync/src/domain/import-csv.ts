@@ -63,22 +63,35 @@ function teksOpsional(cols: string[], idx: number): string | null {
 }
 
 /**
- * Tanggal kalender MURNI dari format sumber `M/D/YYYY` -> `YYYY-MM-DD`.
- * SENGAJA disusun ulang sebagai STRING (split by "/"), TIDAK pakai
- * `new Date(...)`/`toISOString()` sama sekali: ini tanggal kalender tanpa jam,
- * dan mengonversinya lewat objek Date akan menggeser tanggal tergantung
- * timezone proses (bug yang sudah berulang di repo ini -- lihat komentar
- * `todayIso()` di `apps/web/src/utils/format.ts`).
+ * Tanggal kalender MURNI dari DUA format sumber yang mungkin:
+ * - `M/D/YYYY` (ekspor Majoo/dashboard asli, atau Google Sheets dengan locale
+ *   US -- `toLocaleDateString("en-US", ...)` di workflow n8n menghasilkan ini)
+ * - `YYYY-MM-DD` (ekspor langsung dari Postgres/`to_char(...)`, atau Google
+ *   Sheets locale lain yang menyimpan ISO -- dikonfirmasi 2026-10-17 lewat
+ *   pengujian eksplisit, lihat `import-csv.test.ts`)
+ * -> selalu dikembalikan sebagai `YYYY-MM-DD`.
+ *
+ * SENGAJA disusun ulang sebagai STRING (split, bukan regex capture lalu
+ * dirangkai manual), TIDAK pakai `new Date(...)`/`toISOString()` sama sekali:
+ * ini tanggal kalender tanpa jam, dan mengonversinya lewat objek Date akan
+ * menggeser tanggal tergantung timezone proses (bug yang sudah berulang di
+ * repo ini -- lihat komentar `todayIso()` di `apps/web/src/utils/format.ts`).
  */
 function tanggalKalender(cols: string[], idx: number, nama: string): string {
   const raw = teksWajib(cols, idx, nama);
+
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+
   const bagian = raw.split("/");
-  if (bagian.length !== 3) throw new Error(`Kolom "${nama}" bukan tanggal M/D/YYYY yang valid: "${raw}"`);
-  const [bulan, hari, tahun] = bagian as [string, string, string];
-  if (!/^\d{1,2}$/.test(bulan) || !/^\d{1,2}$/.test(hari) || !/^\d{4}$/.test(tahun)) {
-    throw new Error(`Kolom "${nama}" bukan tanggal M/D/YYYY yang valid: "${raw}"`);
+  if (bagian.length === 3) {
+    const [bulan, hari, tahun] = bagian as [string, string, string];
+    if (/^\d{1,2}$/.test(bulan) && /^\d{1,2}$/.test(hari) && /^\d{4}$/.test(tahun)) {
+      return `${tahun}-${pad2(bulan)}-${pad2(hari)}`;
+    }
   }
-  return `${tahun}-${pad2(bulan)}-${pad2(hari)}`;
+
+  throw new Error(`Kolom "${nama}" bukan tanggal M/D/YYYY atau YYYY-MM-DD yang valid: "${raw}"`);
 }
 
 /** Jam dari format sumber `H:MM`/`HH:MM` -> `HH:MM:00` untuk kolom TIME. */
@@ -97,8 +110,22 @@ const SUDAH_ADA_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$/;
  * eksplisit. Tanpa ini, `new Date("2026-07-22 6:16:03")` diperlakukan sebagai
  * waktu lokal proses (atau UTC untuk bentuk date-only), yang salah: semua
  * sumber data Samsara dicatat dalam waktu WIB.
+ *
+ * Menerima DUA keluarga format tanpa offset (dikonfirmasi 2026-10-17 lewat
+ * pengujian eksplisit terhadap gaya ekspor Postgres vs Google Sheets, lihat
+ * `import-csv.test.ts`):
+ * - `YYYY-MM-DD[ T]HH:MM[:SS][.ffff]` atau `YYYY-MM-DD` saja (gaya Postgres/
+ *   `to_char`, format asli fungsi ini).
+ * - `M/D/YYYY[ H:MM[:SS]]` (gaya Google Sheets locale US, mis.
+ *   `toLocaleDateString("en-US", ...)` di workflow n8n) -- BARU.
  */
 function tambahOffsetJakarta(raw: string): string {
+  const mdy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(raw);
+  if (mdy) {
+    const [, bulan, hari, tahun, jam, menit, detik] = mdy;
+    return `${tahun}-${pad2(bulan!)}-${pad2(hari!)}T${pad2(jam ?? "0")}:${menit ?? "00"}:${detik ?? "00"}+07:00`;
+  }
+
   const s = raw.replace(" ", "T");
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T00:00:00+07:00`;
   const m = /^(\d{4}-\d{2}-\d{2})T(\d{1,2}):(\d{2})(?::(\d{2}))?(\.\d+)?$/.exec(s);
@@ -171,16 +198,27 @@ function waktuOpsionalLokalPaksa(cols: string[], idx: number, nama: string): str
  * menghasilkan 29 -- salah tanpa error).
  */
 function angkaRibuanWajib(cols: string[], idx: number, nama: string): number {
-  const raw = teksWajib(cols, idx, nama);
-  const n = Number.parseFloat(raw.replace(/,/g, ""));
-  if (!Number.isFinite(n)) throw new Error(`Kolom "${nama}" bukan angka valid: "${raw}"`);
-  return n;
+  return angkaWajib(cols, idx, nama);
 }
 
-/** Angka polos (tanpa pemisah ribuan) -- format sumber raw Majoo & biaya platform. */
+/**
+ * Angka dari sumber -- SELALU membuang pemisah ribuan koma dulu (mis.
+ * `"29,600"` -> `29600`) sebelum `parseFloat`, APA PUN sumbernya.
+ *
+ * Awalnya fungsi ini ("polos, tanpa pemisah ribuan") dan `angkaRibuanWajib`
+ * ("berkoma") dipisah karena sumber asli raw Majoo/biaya platform memang
+ * tidak pernah berkoma. Diperbaiki 2026-10-17 (lihat `import-csv.test.ts`):
+ * Google Sheets BISA mengekspor angka dengan pemisah ribuan untuk kolom
+ * manapun, termasuk yang "seharusnya" polos -- tanpa perbaikan ini,
+ * `parseFloat("-1,000")` diam-diam menghasilkan `-1` (BUKAN error, data
+ * senyap salah 1000x lipat). Membuang koma pada angka yang memang sudah
+ * polos tidak berefek apa pun (no-op), jadi aman untuk SEMUA sumber --
+ * `angkaRibuanWajib` sekarang murni alias, dipertahankan di call site demi
+ * kejelasan sumber data mana yang secara native berkoma.
+ */
 function angkaWajib(cols: string[], idx: number, nama: string): number {
   const raw = teksWajib(cols, idx, nama);
-  const n = Number.parseFloat(raw);
+  const n = Number.parseFloat(raw.replace(/,/g, ""));
   if (!Number.isFinite(n)) throw new Error(`Kolom "${nama}" bukan angka valid: "${raw}"`);
   return n;
 }

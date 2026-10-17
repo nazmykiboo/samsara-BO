@@ -234,7 +234,27 @@ menyatakan dirinya modul "aktif/nonaktif".
 
 - Import CSV 4 jenis (log penjualan, transaksi rekonsiliasi platform, raw
   data Majoo, biaya platform) ke tabel arsip — ✅, bisa diakses akun
-  `integrasi` (n8n) maupun manual oleh owner/manajer_ops.
+  `integrasi` (n8n) maupun manual oleh owner/manajer_ops. Parser CSV
+  menerima **dua gaya sumber** (ekspor Postgres: tanggal ISO, angka tanpa
+  pemisah ribuan; Google Sheet: tanggal `M/D/YYYY`, angka boleh berkutip
+  dengan koma ribuan) — diuji eksplisit untuk 8 kombinasi (4 endpoint x 2
+  gaya), termasuk perbaikan bug nyata `angkaWajib` yang dulu diam-diam
+  salah parse angka berkoma (`parseFloat("-1,000")` -> `-1`, bukan error).
+  Spesifikasi kolom lengkap: `docs/integrasi-n8n.md` § 8.
+- **4 workflow n8n siap-impor** (`devops/n8n/*.json`, non-aktif saat
+  diimpor, belum pernah dicoba jalan sungguhan di instance n8n owner) —
+  mengambil data dari spreadsheet `BURNAS_DASHBOARD_V1` yang sudah dipakai
+  3 workflow n8n LAMA (bukan query Postgres — Postgres cuma punya mirror
+  parsial 1 platform untuk 1 dari 4 jenis data, lihat
+  `docs/architecture-decisions.md` § 25), lalu POST ke 4 endpoint import
+  di atas lewat akun `integrasi`. Fitur: jendela rolling 2 hari
+  (`log_penjualan`/`transaksi`/`raw_majoo`) atau penanda `synced_at` di
+  static data workflow (`biaya_platform`, menghindari dobel baris tanpa
+  `id_platform`), mode dry-run otomatis saat dijalankan manual (tidak
+  pernah mengirim apa pun), notifikasi gagal lewat node error n8n bawaan
+  (belum ada notifikasi Telegram/WhatsApp — sengaja, belum diminta).
+  **Belum aktif** — owner masih perlu mengimpor, membuat 2 credential di
+  UI n8n, dan mengaktifkan manual. Langkah lengkap: `devops/n8n/README.md`.
 - Item mapping: pemetaan kode eksternal platform → kode menu internal
   Samsara, antrian disegarkan otomatis dari arsip log — ✅
 - Proses sinkronisasi (`POST /proses`): ubah arsip log jadi transaksi
@@ -265,10 +285,13 @@ Daftar murni fakta ketiadaan di kode saat ini, bukan roadmap:
   sama sekali) — bukan fitur arsitektur multi-tenant di dalam aplikasi ini.
 - **Layer agent/AI otomatis di dalam aplikasi** — tidak ada. Satu-satunya
   "otomasi" yang menyentuh sistem ini dari luar adalah workflow n8n untuk
-  import CSV terjadwal (lihat `docs/integrasi-n8n.md`), yang scope-nya
+  import CSV terjadwal (file JSON siap-impor ada di `devops/n8n/`, lihat
+  `devops/n8n/README.md` dan `docs/integrasi-n8n.md`), yang scope-nya
   sempit (4 endpoint import saja, murni kirim data, tidak memproses
-  keputusan apa pun). Tidak ada agent/AI yang berjalan sebagai bagian dari
-  aplikasi itu sendiri — beda dari Claude Code yang membangun sistem ini.
+  keputusan apa pun) — **dan per penulisan ini belum diaktifkan** oleh
+  owner di instance n8n sungguhan. Tidak ada agent/AI yang berjalan
+  sebagai bagian dari aplikasi itu sendiri — beda dari Claude Code yang
+  membangun sistem ini.
 - **PWA / mobile app native** — tidak ada. Frontend adalah SPA React biasa
   via browser.
 - **Modul Marketing/Finance/Ekspansi** — tidak ada di repo ini sama sekali.
