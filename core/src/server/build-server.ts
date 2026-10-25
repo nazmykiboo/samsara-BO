@@ -2,6 +2,7 @@ import express from "express";
 import type { LoadedModule } from "../manifest/types.js";
 import { createAuthRouter } from "../auth/router.js";
 import { initPermissionRegistry, requireAuth } from "../auth/permissions.js";
+import { createPublicCoreRouter } from "../public/router.js";
 
 /**
  * @param allModules Semua modul terdaftar (dipakai untuk `/health`, termasuk yang nonaktif).
@@ -33,6 +34,13 @@ export function buildServer(allModules: LoadedModule[], enabledInOrder: LoadedMo
   // router ini (mis. /api/auth/users) sudah pasang requireAuth sendiri di
   // dalam auth/router.ts.
   app.use("/api/auth", createAuthRouter());
+
+  // Identitas bisnis (nama+logo) dan daftar lokasi publik -- juga HARUS
+  // di-mount sebelum requireAuth global (pola sama seperti /api/auth di
+  // atas): dipakai halaman login, judul tab, dan flow pilih-lokasi login
+  // PIN staf, semuanya sebelum ada token auth. Endpoint PUT di dalamnya
+  // tetap memasang requireAuth/requirePermission sendiri (lihat public/router.ts).
+  app.use("/api/core", createPublicCoreRouter());
 
   // Semua endpoint SETELAH baris ini wajib login (CLAUDE.md/instruksi owner:
   // "semua endpoint wajib login" -- /health dan /api/auth/login adalah

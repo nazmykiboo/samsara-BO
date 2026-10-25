@@ -1,5 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
+import { LokasiProvider } from "./data/LokasiContext";
+import { IdentitasBisnisProvider } from "./data/IdentitasBisnisContext";
 import { RequireAuth } from "./auth/RequireAuth";
 import { bisaLihatLaporanHarian } from "./auth/permissions";
 import { AppLayout } from "./layout/AppLayout";
@@ -29,69 +31,79 @@ function BerandaRedirect() {
 
 export function App() {
   return (
-    <AuthProvider>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
+    <IdentitasBisnisProvider>
+      <LokasiProvider>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </LokasiProvider>
+    </IdentitasBisnisProvider>
+  );
+}
 
+function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+
+      <Route
+        element={
+          <RequireAuth>
+            <AppLayout />
+          </RequireAuth>
+        }
+      >
+        <Route index element={<BerandaRedirect />} />
+        <Route path="/menu" element={<MenuHppPage />} />
+        <Route path="/stok" element={<StokPage />} />
+        <Route path="/transaksi" element={<TransaksiIndexPage />} />
+        <Route path="/jadwal-izin" element={<JadwalIzinPage />} />
+        <Route path="/panduan" element={<PanduanPage />} />
         <Route
+          path="/laporan-harian"
           element={
-            <RequireAuth>
-              <AppLayout />
+            <RequireAuth roles={["owner", "manajer_ops", "supervisor"]}>
+              <LaporanHarianPage />
             </RequireAuth>
           }
-        >
-          <Route index element={<BerandaRedirect />} />
-          <Route path="/menu" element={<MenuHppPage />} />
-          <Route path="/stok" element={<StokPage />} />
-          <Route path="/transaksi" element={<TransaksiIndexPage />} />
-          <Route path="/jadwal-izin" element={<JadwalIzinPage />} />
-          <Route path="/panduan" element={<PanduanPage />} />
-          <Route
-            path="/laporan-harian"
-            element={
-              <RequireAuth roles={["owner", "manajer_ops", "supervisor"]}>
-                <LaporanHarianPage />
-              </RequireAuth>
-            }
-          />
-          {/* Analitik LEBIH SEMPIT dari Laporan Harian: supervisor tidak ikut (permission
-              `analitik.lihat` di backend cuma owner/manajer_ops). */}
-          <Route
-            path="/analitik"
-            element={
-              <RequireAuth roles={["owner", "manajer_ops"]}>
-                <AnalitikPage />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/sinkronisasi-penjualan"
-            element={
-              <RequireAuth roles={["owner", "manajer_ops"]}>
-                <SinkronisasiPenjualanPage />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/master"
-            element={
-              <RequireAuth roles={["owner", "manajer_ops"]}>
-                <MasterIndexPage />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/pengaturan"
-            element={
-              <RequireAuth roles={["owner", "manajer_ops"]}>
-                <PengaturanPage />
-              </RequireAuth>
-            }
-          />
-        </Route>
+        />
+        {/* Analitik LEBIH SEMPIT dari Laporan Harian: supervisor tidak ikut (permission
+            `analitik.lihat` di backend cuma owner/manajer_ops). */}
+        <Route
+          path="/analitik"
+          element={
+            <RequireAuth roles={["owner", "manajer_ops"]}>
+              <AnalitikPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/sinkronisasi-penjualan"
+          element={
+            <RequireAuth roles={["owner", "manajer_ops"]}>
+              <SinkronisasiPenjualanPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/master"
+          element={
+            <RequireAuth roles={["owner", "manajer_ops"]}>
+              <MasterIndexPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/pengaturan"
+          element={
+            <RequireAuth roles={["owner", "manajer_ops"]}>
+              <PengaturanPage />
+            </RequireAuth>
+          }
+        />
+      </Route>
 
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </AuthProvider>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }

@@ -9,7 +9,10 @@ import { pool } from "../db/pool.js";
  * mis. kelola user. Digabung dengan permission yang dideklarasikan tiap
  * modul di `module.json` § `api.endpoints[].permission`.
  */
-const CORE_PERMISSIONS: PermissionDef[] = [{ action: "user.manage", roles: ["owner"] }];
+const CORE_PERMISSIONS: PermissionDef[] = [
+  { action: "user.manage", roles: ["owner"] },
+  { action: "identitas_bisnis.manage", roles: ["owner"] },
+];
 
 let registry: Map<string, PermissionDef> | null = null;
 

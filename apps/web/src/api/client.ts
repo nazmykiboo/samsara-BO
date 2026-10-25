@@ -13,9 +13,12 @@ export function setToken(token: string | null): void {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** Body JSON error APA ADANYA (selain `.error` yang sudah jadi `.message`) -- dipakai endpoint yang menyertakan field tambahan, mis. `penghalang` di PATCH /lokasi/:id. */
+  body: unknown;
+  constructor(status: number, message: string, body?: unknown) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -76,7 +79,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (!res.ok) {
     const message = (data as ApiErrorBody | null)?.error ?? `Permintaan gagal (${res.status})`;
     if (res.status === 401) handleUnauthorized(path, message);
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, data);
   }
 
   return data as T;
@@ -112,7 +115,37 @@ export async function postCsv<T>(path: string, csvText: string): Promise<T> {
   if (!res.ok) {
     const message = (data as ApiErrorBody | null)?.error ?? `Permintaan gagal (${res.status})`;
     if (res.status === 401) handleUnauthorized(path, message);
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, data);
+  }
+
+  return data as T;
+}
+
+/**
+ * PUT dengan body FILE MENTAH (Content-Type = tipe file aslinya) -- pola
+ * sama seperti `postCsv` di atas, dipakai upload logo identitas bisnis.
+ * Backend memasang `express.raw({ type: [...] })` khusus per-route (lihat
+ * `core/src/public/router.ts`), menolak (400) Content-Type di luar
+ * PNG/JPG/WebP atau ukuran di atas 500KB.
+ */
+export async function putFile<T>(path: string, file: File): Promise<T> {
+  const token = getToken();
+  const res = await fetch(path, {
+    method: "PUT",
+    headers: {
+      "Content-Type": file.type,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: file,
+  });
+
+  const isJson = res.headers.get("content-type")?.includes("application/json");
+  const data = isJson ? await res.json() : null;
+
+  if (!res.ok) {
+    const message = (data as ApiErrorBody | null)?.error ?? `Permintaan gagal (${res.status})`;
+    if (res.status === 401) handleUnauthorized(path, message);
+    throw new ApiError(res.status, message, data);
   }
 
   return data as T;

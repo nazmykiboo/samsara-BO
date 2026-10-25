@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { getMenuHppReport, isPaketMenu, resolveItemCost, type HppMethod } from "./hpp.js";
 import { getHppDefaultMethod } from "./pengaturan.js";
+import { catatHargaDariPembelian } from "./vendor.js";
 
 /**
  * Mesin stok. Stok TIDAK PERNAH diedit langsung -- semua fungsi di sini
@@ -70,6 +71,8 @@ export interface PembelianBarisInput {
 export interface PembelianInput {
   locationId: number;
   supplier?: string;
+  /** Opsional (Tahap 3) -- kalau diisi, katalog vendor (harga terakhir + riwayat) diperbarui otomatis untuk tiap baris. TIDAK menggantikan `supplier` (lihat COMMENT di migrasi 0030). */
+  vendorId?: number;
   noReferensi?: string;
   tanggal: string;
   /** Diisi otomatis dari user yang login (lihat api/router.ts), bukan input client. */
@@ -77,9 +80,18 @@ export interface PembelianInput {
   baris: PembelianBarisInput[];
 }
 
+export interface PeringatanKenaikanHarga {
+  itemKode: string;
+  hargaLama: number;
+  hargaBaru: number;
+  persenKenaikan: number;
+}
+
 export interface PembelianResult {
   headerId: number;
   baris: Array<{ itemKode: string; qtyRecipeUnit: number }>;
+  /** Terisi kalau `vendorId` dikirim DAN ada baris yang harganya naik melewati ambang `kenaikan_harga_vendor_persen` (inventory_insight_rules) dibanding harga terakhir di katalog. Informasional -- TIDAK pernah menggagalkan pembelian. */
+  peringatanHarga: PeringatanKenaikanHarga[];
 }
 
 /** Pembelian: qty diinput dalam satuan beli, dikonversi otomatis ke satuan resep. */
@@ -87,13 +99,21 @@ export async function createPembelian(client: PoolClient, input: PembelianInput)
   if (input.baris.length === 0) throw new Error("Pembelian harus punya minimal 1 baris");
 
   const { rows: headerRows } = await client.query<{ id: number }>(
-    `INSERT INTO inventory_transaksi_pembelian (location_id, supplier, no_referensi, tanggal, dibuat_oleh)
-     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-    [input.locationId, input.supplier ?? null, input.noReferensi ?? null, input.tanggal, input.createdByUserId ?? null],
+    `INSERT INTO inventory_transaksi_pembelian (location_id, supplier, vendor_id, no_referensi, tanggal, dibuat_oleh)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [
+      input.locationId,
+      input.supplier ?? null,
+      input.vendorId ?? null,
+      input.noReferensi ?? null,
+      input.tanggal,
+      input.createdByUserId ?? null,
+    ],
   );
   const headerId = headerRows[0].id;
 
   const resultBaris: PembelianResult["baris"] = [];
+  const peringatanHarga: PeringatanKenaikanHarga[] = [];
 
   for (const baris of input.baris) {
     const { rows: itemRows } = await client.query<{ id: number; purchase_to_recipe_factor: string | null }>(
@@ -127,10 +147,22 @@ export async function createPembelian(client: PoolClient, input: PembelianInput)
       qtyChange: qtyRecipeUnit,
     });
 
+    if (input.vendorId !== undefined) {
+      const hasil = await catatHargaDariPembelian(client, {
+        vendorId: input.vendorId,
+        itemId: item.id,
+        hargaBaru: baris.hargaSatuan,
+        pembelianHeaderId: headerId,
+      });
+      if (hasil.peringatanKenaikan) {
+        peringatanHarga.push({ itemKode: baris.itemKode, ...hasil.peringatanKenaikan });
+      }
+    }
+
     resultBaris.push({ itemKode: baris.itemKode, qtyRecipeUnit });
   }
 
-  return { headerId, baris: resultBaris };
+  return { headerId, baris: resultBaris, peringatanHarga };
 }
 
 // ---------------------------------------------------------------------------

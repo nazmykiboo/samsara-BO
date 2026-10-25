@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { LokasiPicker, useLokasiOptions } from "../components/pickers/LokasiPicker";
+import { LokasiPicker, useLokasiOptions, type LokasiOption } from "../components/pickers/LokasiPicker";
 import { getDalamPerjalanan, getStok } from "../api/stok";
 import { getMinStok, setMinStok } from "../api/minStok";
 import { listItems } from "../api/master";
 import { ApiError } from "../api/client";
 import type { DalamPerjalananRow, ItemListItem } from "../api/types";
-import { type MockLokasi } from "../mock/referenceData";
 import { Card } from "../components/ui/Card";
 import { Spinner } from "../components/ui/Spinner";
 import { Badge } from "../components/ui/Badge";
@@ -242,7 +241,7 @@ export function StokPage() {
         )
       : items;
 
-    const built: { key: string; item: StokItem; location: MockLokasi; state: QtyState | undefined; minStok: number | null }[] = [];
+    const built: { key: string; item: StokItem; location: LokasiOption; state: QtyState | undefined; minStok: number | null }[] = [];
     for (const item of filteredItems) {
       for (const loc of visibleLocations) {
         const key = rowKey(item.kode, loc.id);
@@ -399,7 +398,7 @@ function StokRow({
   onEditMinStok,
 }: {
   item: StokItem;
-  location: MockLokasi;
+  location: LokasiOption;
   state: QtyState | undefined;
   minStok: number | null;
   canEditMinStok: boolean;
@@ -520,7 +519,7 @@ function MinStokModal({
   );
 }
 
-function DalamPerjalananSection({ allowedLocations, items }: { allowedLocations: MockLokasi[]; items: StokItem[] }) {
+function DalamPerjalananSection({ allowedLocations, items }: { allowedLocations: LokasiOption[]; items: StokItem[] }) {
   const [locationId, setLocationId] = useState<number | null>(allowedLocations[0]?.id ?? null);
   const [keluar, setKeluar] = useState<DalamPerjalananRow[] | null>(null);
   const [masuk, setMasuk] = useState<DalamPerjalananRow[] | null>(null);

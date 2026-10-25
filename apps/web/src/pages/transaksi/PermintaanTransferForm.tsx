@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useLokasiOptions } from "../../components/pickers/LokasiPicker";
+import { useLokasiContext } from "../../data/LokasiContext";
 import { ItemPicker } from "../../components/pickers/ItemPicker";
 import { Card } from "../../components/ui/Card";
 import { Field, Input } from "../../components/ui/Input";
@@ -11,7 +12,7 @@ import { ErrorBox, ResultBox } from "../../components/ResultBox";
 import { batalkanPermintaanTransfer, createPermintaanTransfer, listPermintaanTransfer } from "../../api/transaksi";
 import { ApiError } from "../../api/client";
 import type { PermintaanTransferListItem } from "../../api/types";
-import { MOCK_ITEMS, MOCK_LOKASI, type MockItemRef } from "../../mock/referenceData";
+import { MOCK_ITEMS, type MockItemRef } from "../../mock/referenceData";
 import { todayIso } from "../../utils/format";
 
 interface Baris {
@@ -22,18 +23,27 @@ interface Baris {
 export function PermintaanTransferForm() {
   const options = useLokasiOptions();
   // Lokasi asal (Central Kitchen yang diminta mengirim) SENGAJA diambil dari daftar lokasi
-  // LENGKAP (MOCK_LOKASI), bukan useLokasiOptions() yang dibatasi lokasi milik user --
+  // LENGKAP (LokasiContext), bukan useLokasiOptions() yang dibatasi lokasi milik user --
   // backend tidak membatasi locationAsalId berdasarkan lokasi yang di-assign ke user (lihat
   // extractLocationIds POST /transaksi/permintaan-transfer di router.ts, cuma mengecek
   // locationTujuanId). Staf outlet yang hanya di-assign ke lokasi outletnya tetap harus bisa
   // memilih CK sebagai tujuan permintaan.
-  const asalOptions = MOCK_LOKASI.filter((l) => l.entitas === "samsara_ck");
+  const { lokasi: daftarLokasi } = useLokasiContext();
+  const asalOptions = daftarLokasi.filter((l) => l.isActive && l.entitas === "samsara_ck");
   // Lokasi tujuan (outlet yang mengajukan) TETAP dibatasi ke lokasi milik user -- ini yang
   // discoped backend (locationTujuanId wajib salah satu lokasi milik staf/supervisor).
   const tujuanOptions = options.filter((l) => l.entitas !== "samsara_ck");
 
-  const [locationAsalId, setLocationAsalId] = useState<number | null>(asalOptions[0]?.id ?? null);
-  const [locationTujuanId, setLocationTujuanId] = useState<number | null>(tujuanOptions[0]?.id ?? null);
+  const [locationAsalId, setLocationAsalId] = useState<number | null>(null);
+  const [locationTujuanId, setLocationTujuanId] = useState<number | null>(null);
+
+  // Daftar lokasi dimuat async -- lihat catatan sama di TransferKirimForm.tsx.
+  useEffect(() => {
+    if (locationAsalId === null && asalOptions.length > 0) setLocationAsalId(Number(asalOptions[0].id));
+  }, [asalOptions, locationAsalId]);
+  useEffect(() => {
+    if (locationTujuanId === null && tujuanOptions.length > 0) setLocationTujuanId(Number(tujuanOptions[0].id));
+  }, [tujuanOptions, locationTujuanId]);
   const [tanggal, setTanggal] = useState(todayIso());
   const [catatan, setCatatan] = useState("");
   const [baris, setBaris] = useState<Baris[]>([]);

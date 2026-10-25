@@ -42,11 +42,26 @@ import {
   updateResepProduksi,
 } from "../domain/master.js";
 import {
+  catatHargaManual,
+  createVendor,
+  getAmbangKenaikanHargaPersen,
+  getHargaTerakhir,
+  laporkanSupplierLama,
+  listKatalogByVendor,
+  listRiwayatHarga,
+  listVendor,
+  listVendorUntukItem,
+  updateVendor,
+} from "../domain/vendor.js";
+import {
+  LokasiTidakBisaNonaktifError,
   createChannel,
   createLokasi,
   getHppDefaultMethod,
   getTargetFoodCostPersen,
+  listLokasi,
   resolveHppMethod,
+  salinKonfigurasiLokasi,
   setHppDefaultMethod,
   setTargetFoodCostPersen,
   updateChannel,
@@ -942,6 +957,167 @@ export function createRouter(): Router {
     }),
   );
 
+  // --- Vendor & Katalog (Tahap 3) ------------------------------------------
+  // vendor.lihat (owner/manajer_ops/supervisor): dipakai dua tempat --
+  // tab Master > Vendor (owner/manajer_ops saja yang bisa BUKA tab-nya,
+  // lihat RequireAuth di App.tsx frontend) DAN dropdown vendor di form
+  // Pembelian (supervisor juga boleh pembelian.create). vendor.edit
+  // (owner/manajer_ops) khusus CRUD vendor + isi harga katalog manual.
+  //
+  // Harga (hargaTerakhir/riwayat) di-strip untuk role tanpa hpp.lihat_harga
+  // di endpoint BROWSE/LIST (sesuai instruksi: "harga difilter dari
+  // response supervisor dan staf") -- TAPI endpoint harga-terakhir SATU
+  // vendor+item (dipakai isi-otomatis form Pembelian) dan peringatan
+  // kenaikan harga di response POST /transaksi/pembelian SENGAJA TIDAK
+  // ikut di-strip: supervisor yang mengisi Pembelian perlu lihat harga
+  // terakhir untuk tahu apakah harga yang ditawarkan vendor wajar, beda
+  // dari "lihat katalog harga vendor secara umum" yang memang sensitif.
+  router.get(
+    "/vendor",
+    requirePermission("vendor.lihat"),
+    asyncHandler(async (req, res) => {
+      const client = await pool.connect();
+      try {
+        res.json(await listVendor(client, typeof req.query.cari === "string" ? req.query.cari : undefined));
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  router.post(
+    "/vendor",
+    requirePermission("vendor.edit"),
+    asyncHandler(async (req, res) => {
+      const result = await withTransaction((client) => createVendor(client, req.body));
+      res.status(201).json(result);
+    }),
+  );
+
+  router.patch(
+    "/vendor/:id",
+    requirePermission("vendor.edit"),
+    asyncHandler(async (req, res) => {
+      await withTransaction((client) => updateVendor(client, Number(req.params.id), req.body));
+      res.json({ id: Number(req.params.id) });
+    }),
+  );
+
+  router.get(
+    "/vendor/:id/katalog",
+    requirePermission("vendor.lihat"),
+    asyncHandler(async (req, res) => {
+      const user = getAuthUser(req);
+      const client = await pool.connect();
+      try {
+        const rows = await listKatalogByVendor(client, Number(req.params.id));
+        if (!hasPermission(user, "hpp.lihat_harga")) {
+          res.json(rows.map(({ hargaTerakhir, ...rest }) => rest));
+          return;
+        }
+        res.json(rows);
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  router.post(
+    "/vendor/:id/katalog",
+    requirePermission("vendor.edit"),
+    asyncHandler(async (req, res) => {
+      const itemKode = String(req.body?.itemKode ?? "");
+      const harga = Number(req.body?.harga);
+      await withTransaction((client) => catatHargaManual(client, Number(req.params.id), itemKode, harga));
+      res.status(201).json({ vendorId: Number(req.params.id), itemKode });
+    }),
+  );
+
+  // "Pencarian barang ke vendor": untuk satu item, vendor mana saja yang
+  // pernah mencatatkan harganya -- urut harga TERMURAH dulu (membantu
+  // bandingkan vendor saat mau beli).
+  router.get(
+    "/vendor/untuk-item/:itemKode",
+    requirePermission("vendor.lihat"),
+    asyncHandler(async (req, res) => {
+      const user = getAuthUser(req);
+      const client = await pool.connect();
+      try {
+        const rows = await listVendorUntukItem(client, req.params.itemKode);
+        if (!hasPermission(user, "hpp.lihat_harga")) {
+          res.json(rows.map(({ hargaTerakhir, ...rest }) => rest));
+          return;
+        }
+        res.json(rows);
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  // Dipakai form Pembelian untuk isi-otomatis harga -- lihat catatan
+  // permission harga di atas (SENGAJA tidak di-strip di sini).
+  router.get(
+    "/vendor/:id/item/:itemKode/harga-terakhir",
+    requirePermission("pembelian.create"),
+    asyncHandler(async (req, res) => {
+      const client = await pool.connect();
+      try {
+        const hargaTerakhir = await getHargaTerakhir(client, Number(req.params.id), req.params.itemKode);
+        res.json({ hargaTerakhir });
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  router.get(
+    "/vendor/:id/item/:itemKode/riwayat-harga",
+    requirePermission("vendor.lihat"),
+    asyncHandler(async (req, res) => {
+      const user = getAuthUser(req);
+      if (!hasPermission(user, "hpp.lihat_harga")) {
+        res.status(403).json({ error: `Role "${user.role}" tidak punya izin untuk aksi "hpp.lihat_harga"` });
+        return;
+      }
+      const client = await pool.connect();
+      try {
+        res.json(await listRiwayatHarga(client, Number(req.params.id), req.params.itemKode));
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  router.get(
+    "/vendor/laporan-supplier-lama",
+    requirePermission("vendor.edit"),
+    asyncHandler(async (_req, res) => {
+      const client = await pool.connect();
+      try {
+        res.json(await laporkanSupplierLama(client));
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  // Dipakai frontend form Pembelian untuk bandingkan harga yang diketik
+  // user secara real-time (sebelum submit) -- POST /transaksi/pembelian
+  // sendiri tetap menghitung ulang di server sebagai sumber kebenaran.
+  router.get(
+    "/vendor/ambang-kenaikan-harga",
+    requirePermission("pembelian.create"),
+    asyncHandler(async (_req, res) => {
+      const client = await pool.connect();
+      try {
+        res.json({ persen: await getAmbangKenaikanHargaPersen(client) });
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
   // --- Min stok per lokasi (reorder alert) -------------------------------
   // PUT (upsert ambang batas) dibatasi owner/manajer_ops lewat master_item.edit
   // -- tidak ada locationScope: kedua role ini allLocations=true, sama seperti
@@ -1259,6 +1435,19 @@ export function createRouter(): Router {
     }),
   );
 
+  router.get(
+    "/lokasi",
+    requirePermission("pengaturan.manage"),
+    asyncHandler(async (_req, res) => {
+      const client = await pool.connect();
+      try {
+        res.json(await listLokasi(client));
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
   router.post(
     "/lokasi",
     requirePermission("pengaturan.manage"),
@@ -1272,8 +1461,21 @@ export function createRouter(): Router {
     "/lokasi/:id",
     requirePermission("pengaturan.manage"),
     asyncHandler(async (req, res) => {
-      await withTransaction((client) => updateLokasi(client, Number(req.params.id), req.body));
+      await withTransaction((client) =>
+        updateLokasi(client, Number(req.params.id), req.body, req.headers.authorization),
+      );
       res.json({ id: Number(req.params.id) });
+    }),
+  );
+
+  router.post(
+    "/lokasi/salin-konfigurasi",
+    requirePermission("pengaturan.manage"),
+    asyncHandler(async (req, res) => {
+      const dari = Number(req.body?.dariLocationId);
+      const ke = Number(req.body?.keLocationId);
+      await withTransaction((client) => salinKonfigurasiLokasi(client, dari, ke));
+      res.json({ dariLocationId: dari, keLocationId: ke });
     }),
   );
 
@@ -1301,6 +1503,10 @@ export function createRouter(): Router {
   // dll) -> 400. Bukan 500, supaya jelas ini kesalahan input/data, bukan
   // bug server.
   router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (err instanceof LokasiTidakBisaNonaktifError) {
+      res.status(400).json({ error: err.message, penghalang: err.penghalang });
+      return;
+    }
     const message = err instanceof Error ? err.message : "Terjadi kesalahan";
     const status = /tidak ditemukan/i.test(message) ? 404 : 400;
     res.status(status).json({ error: message });

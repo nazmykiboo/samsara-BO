@@ -736,6 +736,218 @@ test("PATCH /api/auth/users/:id: tidak bisa menonaktifkan owner terakhir yang ak
   }
 });
 
+// ---------------------------------------------------------------------------
+// Tahap 2 "Kelola User": ubah role + nomor WhatsApp
+// ---------------------------------------------------------------------------
+
+async function getAuditLastValue(userId: number): Promise<{ old_value: string | null; new_value: string | null } | undefined> {
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query<{ old_value: string | null; new_value: string | null }>(
+      `SELECT old_value, new_value FROM core_audit_log
+       WHERE table_name = 'core_users' AND record_id = $1 AND field_name = 'role'
+       ORDER BY created_at DESC LIMIT 1`,
+      [userId],
+    );
+    return rows[0];
+  } finally {
+    client.release();
+  }
+}
+
+test("PATCH /api/auth/users/:id: owner ubah role (sama-sama password role) -- audit log tercatat, token lama ditolak", async () => {
+  const ownerToken = await getOwnerToken("ubahrole_sejajar");
+  const targetId = await createTestUser("test_target_ubahrole_sejajar", "rahasia123", "manajer_ops");
+  const targetTokenLama = await login("test_target_ubahrole_sejajar", "rahasia123");
+
+  const res = await fetch(`${baseUrl}/api/auth/users/${targetId}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ role: "supervisor" }),
+  });
+  const body = (await res.json()) as { generatedPassword?: string; generatedPin?: string; error?: string };
+  assert.equal(res.status, 200, body.error);
+  assert.equal(body.generatedPassword, undefined, "sesama keluarga password TIDAK membuat kredensial baru");
+  assert.equal(body.generatedPin, undefined);
+
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query<{ role: string }>(
+      `SELECT r.name AS role FROM core_users u JOIN core_roles r ON r.id = u.role_id WHERE u.id = $1`,
+      [targetId],
+    );
+    assert.equal(rows[0].role, "supervisor");
+  } finally {
+    client.release();
+  }
+
+  const audit = await getAuditLastValue(targetId);
+  assert.equal(audit?.old_value, "manajer_ops");
+  assert.equal(audit?.new_value, "supervisor");
+
+  // Password LAMA masih valid (tidak diganti), tapi TOKEN lama harus basi
+  // (role ikut payload JWT).
+  const loginLagi = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "test_target_ubahrole_sejajar", password: "rahasia123" }),
+  });
+  assert.equal(loginLagi.status, 200, "password lama TETAP valid, cuma role yang berubah");
+
+  const cekTokenLama = await fetch(`${baseUrl}/api/auth/users`, {
+    headers: { Authorization: `Bearer ${targetTokenLama}` },
+  });
+  assert.equal(cekTokenLama.status, 401, "token lama (role basi) harus ditolak -- token_version wajib naik saat role berubah");
+});
+
+test("PATCH /api/auth/users/:id: tidak bisa mengubah role owner terakhir yang aktif ke role lain", async () => {
+  const ownerAId = await createTestUser("test_ownerA_ubahrole_terakhir", "rahasia123", "owner");
+  const ownerAToken = await login("test_ownerA_ubahrole_terakhir", "rahasia123");
+
+  let previouslyActiveOwnerIds: number[] = [];
+  const setupClient = await pool.connect();
+  try {
+    const { rows } = await setupClient.query<{ id: number }>(
+      `SELECT u.id FROM core_users u JOIN core_roles r ON r.id = u.role_id
+       WHERE r.name = 'owner' AND u.is_active = true AND u.id != $1`,
+      [ownerAId],
+    );
+    previouslyActiveOwnerIds = rows.map((r) => r.id);
+    await setupClient.query(
+      `UPDATE core_users SET is_active = false
+       WHERE role_id = (SELECT id FROM core_roles WHERE name = 'owner') AND id != $1`,
+      [ownerAId],
+    );
+  } finally {
+    setupClient.release();
+  }
+
+  try {
+    const res = await fetch(`${baseUrl}/api/auth/users/${ownerAId}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${ownerAToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "manajer_ops" }),
+    });
+    assert.equal(res.status, 400, "ditolak -- ownerA satu-satunya owner aktif tersisa");
+    const body = (await res.json()) as { error: string };
+    assert.match(body.error, /owner/i);
+
+    const client = await pool.connect();
+    try {
+      const { rows } = await client.query<{ role: string }>(
+        `SELECT r.name AS role FROM core_users u JOIN core_roles r ON r.id = u.role_id WHERE u.id = $1`,
+        [ownerAId],
+      );
+      assert.equal(rows[0].role, "owner", "role ownerA TIDAK jadi berubah");
+    } finally {
+      client.release();
+    }
+  } finally {
+    const restoreClient = await pool.connect();
+    try {
+      if (previouslyActiveOwnerIds.length > 0) {
+        await restoreClient.query(`UPDATE core_users SET is_active = true WHERE id = ANY($1)`, [
+          previouslyActiveOwnerIds,
+        ]);
+      }
+    } finally {
+      restoreClient.release();
+    }
+  }
+});
+
+test("PATCH /api/auth/users/:id: ubah role LINTAS keluarga auth (staf -> supervisor) menghasilkan password baru, PIN lama langsung tidak berlaku", async () => {
+  const ownerToken = await getOwnerToken("ubahrole_lintas_ke_password");
+  const stafId = await createTestStafUser("Staf Ubah Role", "135790", [outletLocationId]);
+  const pinTokenLama = await loginPin(stafId, "135790");
+
+  const res = await fetch(`${baseUrl}/api/auth/users/${stafId}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ role: "supervisor" }),
+  });
+  const body = (await res.json()) as { generatedPassword?: string; error?: string };
+  assert.equal(res.status, 200, body.error);
+  assert.ok(body.generatedPassword, "role staf->supervisor WAJIB menghasilkan password baru (tidak ada password lama)");
+
+  // PIN lama sudah tidak relevan (role bukan staf lagi) DAN token lamanya basi.
+  const cekPinLama = await fetch(`${baseUrl}/api/auth/login-pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId: stafId, pin: "135790" }),
+  });
+  assert.equal(cekPinLama.status, 401, "login-pin harus ditolak -- role sudah bukan staf");
+
+  const cekTokenLama = await fetch(`${baseUrl}/api/auth/users`, { headers: { Authorization: `Bearer ${pinTokenLama}` } });
+  assert.equal(cekTokenLama.status, 401, "token PIN lama harus basi");
+
+  // Password BARU benar-benar bisa dipakai login.
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query<{ username: string }>(`SELECT username FROM core_users WHERE id = $1`, [
+      stafId,
+    ]);
+    const loginBaru = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: rows[0].username, password: body.generatedPassword }),
+    });
+    assert.equal(loginBaru.status, 200, "password baru hasil ubah role harus benar-benar bisa dipakai login");
+  } finally {
+    client.release();
+  }
+});
+
+test("PATCH /api/auth/users/:id: ubah role LINTAS keluarga auth (supervisor -> staf) menghasilkan PIN baru, wajib locationIds", async () => {
+  const ownerToken = await getOwnerToken("ubahrole_lintas_ke_pin");
+  // SENGAJA tanpa locationIds di fixture -- supervisor TIDAK WAJIB
+  // core_user_lokasi saat dibuat (beda dari staf, lihat createUser), jadi
+  // user ini representasi "supervisor yang belum pernah di-assign lokasi
+  // apa pun". Kirim role=staf tanpa locationIds di body harus ditolak
+  // (lihat `tanpaLokasi` di bawah) justru karena TIDAK ada fallback apa pun.
+  const supervisorId = await createTestUser("test_supervisor_ubahrole_pin", "rahasia123", "supervisor");
+  const tanpaLokasi = await fetch(`${baseUrl}/api/auth/users/${supervisorId}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ role: "staf" }),
+  });
+  assert.equal(tanpaLokasi.status, 400, "ditolak -- staf wajib locationIds, tidak ada yang ter-assign sebelumnya");
+
+  const res = await fetch(`${baseUrl}/api/auth/users/${supervisorId}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ role: "staf", locationIds: [outletLocationId] }),
+  });
+  const body = (await res.json()) as { generatedPin?: string; error?: string };
+  assert.equal(res.status, 200, body.error);
+  assert.ok(body.generatedPin, "role supervisor->staf WAJIB menghasilkan PIN baru");
+  assert.match(body.generatedPin!, /^\d{6}$/);
+
+  const cekPinBaru = await fetch(`${baseUrl}/api/auth/login-pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId: supervisorId, pin: body.generatedPin }),
+  });
+  assert.equal(cekPinBaru.status, 200, "PIN baru hasil ubah role harus benar-benar bisa dipakai login");
+});
+
+test("PATCH /api/auth/users/:id: nomorWhatsapp tersimpan dan muncul di GET /users", async () => {
+  const ownerToken = await getOwnerToken("whatsapp");
+  const targetId = await createTestUser("test_target_whatsapp", "rahasia123", "manajer_ops");
+
+  const res = await fetch(`${baseUrl}/api/auth/users/${targetId}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ nomorWhatsapp: "081234567890" }),
+  });
+  assert.equal(res.status, 200, await res.text());
+
+  const list = await fetch(`${baseUrl}/api/auth/users`, { headers: { Authorization: `Bearer ${ownerToken}` } });
+  const users = (await list.json()) as Array<{ id: number; nomorWhatsapp: string | null }>;
+  const target = users.find((u) => u.id === targetId);
+  assert.equal(target?.nomorWhatsapp, "081234567890");
+});
+
 test("POST /api/auth/users/:id/reset: staf dapat PIN baru, PIN lama langsung tidak berlaku", async () => {
   const token = await getOwnerToken("resetpin");
   const created = await createUserViaApi(token, {

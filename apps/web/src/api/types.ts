@@ -62,14 +62,28 @@ export interface UserListItem {
   isActive: boolean;
   locationIds: number[];
   authMethod: "password" | "pin";
+  /** Nullable, Tahap 2 "Kelola User" -- kolom sudah ada sejak migrasi 0007 (Fase 2 WhatsApp). */
+  nomorWhatsapp: string | null;
 }
 
 /** PATCH /api/auth/users/:id -- locationIds kalau dikirim berarti FULL REPLACE, bukan merge.
- * isActive bisa dua arah (true MAUPUN false) -- nonaktifkan dan aktifkan kembali. */
+ * isActive bisa dua arah (true MAUPUN false) -- nonaktifkan dan aktifkan kembali.
+ * `role` ubah role (owner saja) -- lintas keluarga auth (staf/PIN <-> password)
+ * menghasilkan kredensial baru, lihat UpdateUserResult. */
 export interface UpdateUserInput {
   name?: string;
   isActive?: boolean;
   locationIds?: number[];
+  role?: Role;
+  nomorWhatsapp?: string | null;
+}
+
+/** Hasil PATCH /api/auth/users/:id -- generatedPin/generatedPassword HANYA
+ * terisi kalau `role` pindah lintas keluarga auth (staf/PIN <-> password). */
+export interface UpdateUserResult {
+  id: string;
+  generatedPin?: string;
+  generatedPassword?: string;
 }
 
 /** POST /api/auth/users/:id/reset -- ganti kredensial lama TOTAL (tidak bisa dipakai login lagi).
@@ -80,6 +94,52 @@ export interface ResetCredentialResult {
   role: Role;
   generatedPin?: string;
   generatedPassword?: string;
+}
+
+export type LokasiTipe = "outlet" | "kitchen";
+
+/** GET /api/core/lokasi -- PUBLIK (tanpa login, dipakai juga flow login PIN staf). id string karena BIGINT. */
+export interface LokasiPublik {
+  id: string;
+  name: string;
+  entitas: string;
+  isActive: boolean;
+  kode: string | null;
+  tipe: LokasiTipe | null;
+}
+
+/** POST/PATCH /api/inventory/lokasi -- field detail Tahap 1 "Outlet & Kitchen", semua opsional. */
+export interface LokasiDetailInput {
+  kode?: string | null;
+  tipe?: LokasiTipe | null;
+  alamat?: string | null;
+  kota?: string | null;
+  telepon?: string | null;
+  jamBuka?: string | null;
+  jamTutup?: string | null;
+  penanggungJawab?: string | null;
+  tanggalBuka?: string | null;
+  kitchenDefaultId?: number | null;
+}
+
+/** GET /api/inventory/lokasi/:id (lewat listLokasi lengkap -- lihat api/pengaturan.ts) -- owner saja, field lengkap termasuk detail. */
+export interface LokasiLengkap extends LokasiDetailInput {
+  id: number;
+  name: string;
+  entitas: string;
+  isActive: boolean;
+}
+
+/** Body error PATCH /lokasi/:id saat nonaktifkan ditolak -- lihat LokasiTidakBisaNonaktifError di backend. */
+export interface LokasiPenolakanNonaktif {
+  error: string;
+  penghalang: string[];
+}
+
+/** GET/PUT /api/core/identitas-bisnis -- GET publik, PUT owner saja. */
+export interface IdentitasBisnis {
+  displayName: string;
+  hasLogo: boolean;
 }
 
 export type HppMethod = "harga_master" | "harga_beli_terakhir";
@@ -100,6 +160,53 @@ export interface ItemListItem {
   hargaMaster?: number | null;
   isActive: boolean;
   minStok: number | null;
+}
+
+// --- Vendor & Katalog (Tahap 3) ---------------------------------------------
+
+export interface Vendor {
+  id: number;
+  name: string;
+  kontakNama: string | null;
+  telepon: string | null;
+  alamat: string | null;
+  isActive: boolean;
+}
+
+export interface VendorInput {
+  name: string;
+  kontakNama?: string | null;
+  telepon?: string | null;
+  alamat?: string | null;
+}
+
+/** GET /vendor/:id/katalog -- hargaTerakhir tidak ada di respons untuk role supervisor/staf (hpp.lihat_harga). */
+export interface KatalogItem {
+  itemId: number;
+  itemKode: string | null;
+  itemName: string;
+  hargaTerakhir?: number;
+  updatedAt: string;
+}
+
+/** GET /vendor/untuk-item/:itemKode -- hargaTerakhir tidak ada di respons untuk role supervisor/staf. */
+export interface VendorUntukItem {
+  vendorId: number;
+  vendorName: string;
+  hargaTerakhir?: number;
+  updatedAt: string;
+}
+
+export interface RiwayatHargaItem {
+  harga: number;
+  sumber: string;
+  dicatatPada: string;
+}
+
+export interface SupplierLamaItem {
+  supplier: string;
+  jumlahPembelian: number;
+  pembelianTerakhir: string;
 }
 
 /** GET /items/:kode/hpp -- cost_per_recipe_unit tidak ada sama sekali di respons untuk role supervisor/staf. */
@@ -277,9 +384,17 @@ export interface PembelianBarisInput {
   satuanBeli: string;
   hargaSatuan: number;
 }
+export interface PeringatanKenaikanHarga {
+  itemKode: string;
+  hargaLama: number;
+  hargaBaru: number;
+  persenKenaikan: number;
+}
 export interface PembelianResult {
   headerId: string;
   baris: Array<{ itemKode: string; qtyRecipeUnit: number }>;
+  /** Tahap 3 -- terisi kalau `vendorId` dikirim dan ada baris yang harganya naik di atas ambang. Informasional, tidak pernah menggagalkan pembelian. */
+  peringatanHarga: PeringatanKenaikanHarga[];
 }
 
 export interface ProduksiInput {

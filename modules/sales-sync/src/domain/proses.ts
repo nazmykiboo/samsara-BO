@@ -51,7 +51,27 @@ interface GrupOrder {
   platform: string;
   tanggal: string;
   orderId: string;
+  /** Dari baris PERTAMA grup, sama seperti `jam` -- satu order = satu outlet, lihat `resolveLocationId`. Null kalau sumber tidak menyertakan (CSV lama). */
+  outletRef: string | null;
   baris: BarisLog[];
+}
+
+/**
+ * Lokasi tujuan transaksi Penjualan untuk satu order: pakai pemetaan
+ * `salessync_outlet_location_map` kalau outlet_ref order ini ADA dan
+ * terpetakan, kalau tidak (outlet_ref kosong ATAU tidak ada baris
+ * pemetaan yang cocok) jatuh ke lokasi default -- TIDAK PERNAH jadi
+ * alasan men-skip/meng-gagalkan order (beda dari item belum terpetakan,
+ * yang memang di-skip, lihat `dilewatiBelumTerpetakan`).
+ */
+function resolveLocationId(data: DataBaca, grup: GrupOrder): number {
+  if (!grup.outletRef) return data.defaultLocationId;
+  const dipetakan = data.outletLocation.get(kunciOutlet(grup.platform, grup.outletRef));
+  return dipetakan ?? data.defaultLocationId;
+}
+
+function kunciOutlet(platform: string, outletRef: string): string {
+  return `${platform}|${outletRef}`;
 }
 
 interface IdentitasGrup {
@@ -79,6 +99,8 @@ interface DataBaca {
   pemetaan: Map<string, string>;
   /** Key: platform_raw -> channel_internal. */
   channel: Map<string, string>;
+  /** Key: `${platform}|${outlet_ref}` -> location_id Samsara. Lihat `resolveLocationId`. */
+  outletLocation: Map<string, number>;
   grup: GrupOrder[];
 }
 
@@ -104,6 +126,12 @@ async function bacaDataProses(client: PoolClient): Promise<DataBaca> {
   const channel = new Map<string, string>();
   for (const row of channelRows) channel.set(row.platform_raw, row.channel_internal);
 
+  const { rows: outletRows } = await client.query<{ platform: string; outlet_ref: string; location_id: number }>(
+    `SELECT platform, outlet_ref, location_id FROM salessync_outlet_location_map`,
+  );
+  const outletLocation = new Map<string, number>();
+  for (const row of outletRows) outletLocation.set(kunciOutlet(row.platform, row.outlet_ref), row.location_id);
+
   // to_char, BUKAN kolom DATE mentah: driver `pg` mengubah tipe DATE jadi objek
   // Date (tengah malam waktu LOKAL proses), yang bisa menggeser tanggal
   // kalender saat dikirim balik ke API Inventory. Tanggal kalender murni
@@ -123,9 +151,10 @@ async function bacaDataProses(client: PoolClient): Promise<DataBaca> {
     order_id: string;
     menu_id: string | null;
     quantity: number;
+    outlet_ref: string | null;
   }>(
     `SELECT id, platform, to_char(transaction_date, 'YYYY-MM-DD') AS transaction_date,
-            transaction_time, order_id, menu_id, quantity
+            transaction_time, order_id, menu_id, quantity, outlet_ref
      FROM salessync_log_penjualan
      WHERE inv_status = 'OK' AND processed_at IS NULL
      ORDER BY transaction_date, platform, order_id, id`,
@@ -136,7 +165,13 @@ async function bacaDataProses(client: PoolClient): Promise<DataBaca> {
     const key = `${row.platform}|${row.transaction_date}|${row.order_id}`;
     let grup = peta.get(key);
     if (!grup) {
-      grup = { platform: row.platform, tanggal: row.transaction_date, orderId: row.order_id, baris: [] };
+      grup = {
+        platform: row.platform,
+        tanggal: row.transaction_date,
+        orderId: row.order_id,
+        outletRef: row.outlet_ref,
+        baris: [],
+      };
       peta.set(key, grup);
     }
     grup.baris.push({
@@ -150,7 +185,7 @@ async function bacaDataProses(client: PoolClient): Promise<DataBaca> {
     });
   }
 
-  return { defaultLocationId, pemetaan, channel, grup: [...peta.values()] };
+  return { defaultLocationId, pemetaan, channel, outletLocation, grup: [...peta.values()] };
 }
 
 /**
@@ -265,7 +300,7 @@ export async function prosesSinkronisasi(
       // sekecil mungkin (UPDATE sederhana tepat setelah panggilan sukses).
       await withTransaction(async (client) => {
         const dibuat = await createPenjualanViaApi(authHeader, {
-          locationId: data.defaultLocationId,
+          locationId: resolveLocationId(data, grup),
           sumber: channelInternal,
           noReferensi: grup.orderId,
           tanggal: grup.tanggal,

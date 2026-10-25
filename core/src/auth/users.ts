@@ -2,6 +2,7 @@ import { randomBytes, randomInt } from "node:crypto";
 import bcrypt from "bcryptjs";
 import type { PoolClient } from "pg";
 import type { AuthUser, Role } from "./types.js";
+import { writeAuditLog } from "./audit.js";
 
 const BCRYPT_ROUNDS = 12;
 
@@ -308,6 +309,17 @@ export interface UpdateUserInput {
   isActive?: boolean;
   /** Full-replace (sama pola seperti baris resep di modul inventory) -- diabaikan untuk role owner/manajer_ops. */
   locationIds?: number[];
+  /** Owner saja (digerbang di router). Lintas keluarga auth (staf/PIN <-> password) MEMBUAT KREDENSIAL BARU -- lihat UpdateUserResult. */
+  role?: Role;
+  /** Nullable -- kirim string kosong/null untuk mengosongkan. Kolom sudah ada sejak migrasi 0007 (Fase 2 WhatsApp), BARU dipakai di sini. */
+  nomorWhatsapp?: string | null;
+}
+
+export interface UpdateUserResult {
+  /** Terisi HANYA kalau `role` pindah KE staf dari keluarga password -- PIN lama tidak ada, PIN baru digenerate otomatis (pola sama seperti resetCredential). */
+  generatedPin?: string;
+  /** Terisi HANYA kalau `role` pindah DARI staf ke keluarga password -- password lama tidak ada, password baru digenerate otomatis. */
+  generatedPassword?: string;
 }
 
 /**
@@ -317,25 +329,19 @@ export interface UpdateUserInput {
  * lewat `String(...)` di kedua sisi, tidak pernah `===` angka langsung).
  * Dipakai untuk guard "tidak bisa menonaktifkan akun sendiri".
  *
- * REVOKE TOKEN (`core_users.token_version`): dinaikkan di sini untuk dua
- * perubahan yang membuat token lama menyesatkan -- (1) user dinonaktifkan
- * (`isActive: false`), (2) `locationIds` diubah (locationIds ikut disisipkan
- * ke payload JWT, jadi token lama masih mengklaim daftar lokasi LAMA).
- *
- * TIDAK dinaikkan untuk perubahan ROLE, karena role saat ini TIDAK BISA
- * diubah lewat endpoint mana pun di aplikasi ini (`UpdateUserInput` cuma
- * menerima `name`, `isActive`, `locationIds` -- tidak ada jalur ubah-role
- * sama sekali, baik di router maupun di CLI). KALAU fitur ubah-role
- * ditambahkan nanti, `token_version` WAJIB ikut dinaikkan di situ juga --
- * tanpa itu, token lama akan terus dipercaya membawa role LAMA sampai TTL
- * 12 jam habis (termasuk kasus penurunan hak akses, mis. owner -> staf).
+ * REVOKE TOKEN (`core_users.token_version`): dinaikkan untuk perubahan yang
+ * membuat token lama menyesatkan -- user dinonaktifkan, `locationIds`
+ * diubah, ATAU role diubah (role ikut masuk payload JWT; token lama akan
+ * terus dipercaya membawa role LAMA sampai TTL 12 jam habis kalau tidak
+ * dibasikan, termasuk kasus penurunan hak akses mis. owner -> staf -- ini
+ * sudah diimplementasikan di bawah, lihat § "Ubah role").
  */
 export async function updateUser(
   client: PoolClient,
   userId: number,
   input: UpdateUserInput,
   requestingUserId?: string,
-): Promise<void> {
+): Promise<UpdateUserResult> {
   const { rows } = await client.query<{ id: number; role: Role; is_active: boolean }>(
     `SELECT u.id, r.name AS role, u.is_active FROM core_users u JOIN core_roles r ON r.id = u.role_id WHERE u.id = $1`,
     [userId],
@@ -349,31 +355,110 @@ export async function updateUser(
     if (requestingUserId !== undefined && String(userId) === requestingUserId) {
       throw new Error("Tidak bisa menonaktifkan akun sendiri.");
     }
-    // Guard 2: tidak boleh menyisakan nol owner AKTIF di sistem -- lebih
-    // umum dari Guard 1 (relevan kalau nanti ada owner kedua, dan juga
-    // menutup celah token basi: akun yang SUDAH dinonaktifkan tapi
-    // token lamanya masih valid secara kriptografis -- sistem ini belum
-    // punya mekanisme revoke token, lihat §13.6/14 architecture-decisions.md
-    // -- tidak bisa dipakai untuk menonaktifkan owner aktif terakhir).
-    if (row.role === "owner" && row.is_active) {
-      const { rows: activeOwners } = await client.query<{ count: string }>(
-        `SELECT count(*) FROM core_users u JOIN core_roles r ON r.id = u.role_id
-         WHERE r.name = 'owner' AND u.is_active = true AND u.id != $1`,
-        [userId],
-      );
-      if (Number(activeOwners[0].count) === 0) {
-        throw new Error("Tidak bisa menonaktifkan owner terakhir yang aktif -- sistem wajib punya minimal 1 owner aktif.");
-      }
-    }
   }
 
-  if (input.name !== undefined || input.isActive !== undefined) {
+  // Guard "jangan sisakan nol owner AKTIF" dipakai DUA kondisi: nonaktifkan
+  // ATAU ubah role owner -> role lain. Fungsi kecil supaya tidak diulang.
+  async function pastikanBukanOwnerAktifTerakhir(aksi: string): Promise<void> {
+    if (row.role !== "owner" || !row.is_active) return;
+    const { rows: activeOwners } = await client.query<{ count: string }>(
+      `SELECT count(*) FROM core_users u JOIN core_roles r ON r.id = u.role_id
+       WHERE r.name = 'owner' AND u.is_active = true AND u.id != $1`,
+      [userId],
+    );
+    if (Number(activeOwners[0].count) === 0) {
+      throw new Error(`Tidak bisa ${aksi} owner terakhir yang aktif -- sistem wajib punya minimal 1 owner aktif.`);
+    }
+  }
+  if (input.isActive === false) await pastikanBukanOwnerAktifTerakhir("menonaktifkan");
+
+  const hasil: UpdateUserResult = {};
+
+  // --- Ubah role (owner saja, digerbang router) ---------------------------
+  if (input.role !== undefined && input.role !== row.role) {
+    const { rows: roleRows } = await client.query<{ id: number }>(`SELECT id FROM core_roles WHERE name = $1`, [
+      input.role,
+    ]);
+    if (!roleRows[0]) throw new Error(`Role "${input.role}" tidak dikenal`);
+    await pastikanBukanOwnerAktifTerakhir("mengubah role");
+
+    const dariKeluargaPassword = PASSWORD_ROLES.includes(row.role);
+    const keKeluargaPassword = PASSWORD_ROLES.includes(input.role);
+
+    if (dariKeluargaPassword !== keKeluargaPassword) {
+      // Lintas keluarga auth -- kredensial LAMA tidak cocok lagi dengan
+      // metode login role BARU, jadi dibuat ulang (pola sama seperti
+      // resetCredential): username yang sudah ada TETAP dipakai, cuma
+      // password_hash/pin_hash yang diganti.
+      if (keKeluargaPassword) {
+        const password = generatePassword();
+        const passwordHash = await hashPassword(password);
+        await client.query(
+          `UPDATE core_users SET role_id = $1, password_hash = $2, pin_hash = NULL, updated_at = now() WHERE id = $3`,
+          [roleRows[0].id, passwordHash, userId],
+        );
+        hasil.generatedPassword = password;
+      } else {
+        // Jadi staf -- WAJIB minimal 1 lokasi (sama aturan createUser),
+        // dari locationIds yang DIKIRIM di request ini kalau ada, atau
+        // yang SUDAH ter-assign sebelumnya kalau tidak.
+        const locationIdsUntukPin = input.locationIds ?? (await getUserLocationIds(client, userId));
+        if (locationIdsUntukPin.length === 0) {
+          throw new Error("Staf wajib ditetapkan ke minimal satu lokasi -- isi 'locationIds' sekaligus saat mengubah role ke staf.");
+        }
+        let pin = "";
+        let attempts = 0;
+        do {
+          pin = generatePin();
+          attempts += 1;
+          if (attempts > 20) throw new Error("Gagal membuat PIN unik setelah beberapa percobaan -- coba lagi.");
+        } while (await isPinTakenAtLocations(client, pin, locationIdsUntukPin, userId));
+        const pinHash = await hashPin(pin);
+        await client.query(
+          `UPDATE core_users SET role_id = $1, pin_hash = $2, password_hash = NULL, updated_at = now() WHERE id = $3`,
+          [roleRows[0].id, pinHash, userId],
+        );
+        hasil.generatedPin = pin;
+      }
+    } else {
+      await client.query(`UPDATE core_users SET role_id = $1, updated_at = now() WHERE id = $2`, [
+        roleRows[0].id,
+        userId,
+      ]);
+    }
+
+    // Audit log: role adalah field sensitif (naik/turun hak akses).
+    await writeAuditLog(client, {
+      userId: requestingUserId !== undefined ? Number(requestingUserId) : null,
+      tableName: "core_users",
+      recordId: userId,
+      fieldName: "role",
+      oldValue: row.role,
+      newValue: input.role,
+    });
+
+    // Role ikut masuk payload JWT -- token lama WAJIB dibasikan, baik naik
+    // maupun turun hak akses (lihat catatan di atas fungsi ini).
+    await client.query(`UPDATE core_users SET token_version = token_version + 1, updated_at = now() WHERE id = $1`, [
+      userId,
+    ]);
+
+    // Role EFEKTIF dipakai pengecekan isAllLocationsRole di bawah (blok
+    // locationIds) HARUS role BARU, bukan `row.role` yang sudah basi.
+    row.role = input.role;
+  }
+
+  if (input.name !== undefined || input.isActive !== undefined || input.nomorWhatsapp !== undefined) {
     const sets: string[] = [];
     const params: unknown[] = [];
     if (input.name !== undefined) {
       if (!input.name.trim()) throw new Error("Nama tidak boleh kosong");
       params.push(input.name.trim());
       sets.push(`name = $${params.length}`);
+    }
+    if (input.nomorWhatsapp !== undefined) {
+      params.push(input.nomorWhatsapp?.trim() || null);
+      sets.push(`nomor_whatsapp = $${params.length}`);
     }
     if (input.isActive !== undefined) {
       params.push(input.isActive);
@@ -408,6 +493,8 @@ export async function updateUser(
       userId,
     ]);
   }
+
+  return hasil;
 }
 
 export async function listUsers(client: PoolClient): Promise<
@@ -420,10 +507,19 @@ export async function listUsers(client: PoolClient): Promise<
     isActive: boolean;
     locationIds: number[];
     authMethod: "password" | "pin";
+    /** Nullable, kolom sejak migrasi 0007, baru dipakai sejak Tahap 2 "Kelola User". */
+    nomorWhatsapp: string | null;
   }>
 > {
-  const { rows } = await client.query<{ id: string; username: string; name: string; role: Role; is_active: boolean }>(
-    `SELECT u.id, u.username, u.name, r.name AS role, u.is_active
+  const { rows } = await client.query<{
+    id: string;
+    username: string;
+    name: string;
+    role: Role;
+    is_active: boolean;
+    nomor_whatsapp: string | null;
+  }>(
+    `SELECT u.id, u.username, u.name, r.name AS role, u.is_active, u.nomor_whatsapp
      FROM core_users u
      JOIN core_roles r ON r.id = u.role_id
      ORDER BY u.id`,
@@ -439,6 +535,7 @@ export async function listUsers(client: PoolClient): Promise<
       isActive: row.is_active,
       locationIds,
       authMethod: (PASSWORD_ROLES.includes(row.role) ? "password" : "pin") as "password" | "pin",
+      nomorWhatsapp: row.nomor_whatsapp,
     });
   }
   return result;

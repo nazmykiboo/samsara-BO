@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { LokasiPicker, useLokasiOptions } from "../../components/pickers/LokasiPicker";
 import { ItemPicker } from "../../components/pickers/ItemPicker";
 import { Card } from "../../components/ui/Card";
@@ -9,7 +9,7 @@ import { ErrorBox, ResultBox } from "../../components/ResultBox";
 import { createTransferKirim } from "../../api/transaksi";
 import { ApiError } from "../../api/client";
 import type { TransferKirimResult } from "../../api/types";
-import { MOCK_LOKASI, type MockItemRef } from "../../mock/referenceData";
+import { type MockItemRef } from "../../mock/referenceData";
 import { todayIso } from "../../utils/format";
 
 interface Baris {
@@ -21,7 +21,7 @@ interface Baris {
 
 export function TransferKirimForm() {
   const options = useLokasiOptions();
-  const [locationAsalId, setLocationAsalId] = useState<number | null>(options[0]?.id ?? null);
+  const [locationAsalId, setLocationAsalId] = useState<number | null>(null);
   const [locationTujuanId, setLocationTujuanId] = useState<number | null>(null);
   const [tanggal, setTanggal] = useState(todayIso());
   const [baris, setBaris] = useState<Baris[]>([]);
@@ -29,7 +29,15 @@ export function TransferKirimForm() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<TransferKirimResult | null>(null);
 
-  const tujuanOptions = MOCK_LOKASI.filter((l) => l.id !== locationAsalId);
+  // Daftar lokasi dimuat async (lihat LokasiContext) -- `options` masih
+  // kosong di render pertama, jadi default "lokasi asal = yang pertama"
+  // tidak bisa lagi diisi langsung di useState initializer seperti dulu
+  // (MOCK_LOKASI statis). Cuma mengisi SEKALI kalau belum pernah dipilih.
+  useEffect(() => {
+    if (locationAsalId === null && options.length > 0) setLocationAsalId(Number(options[0].id));
+  }, [options, locationAsalId]);
+
+  const tujuanOptions = options.filter((l) => Number(l.id) !== locationAsalId);
 
   function handleAddItem(item: MockItemRef) {
     if (baris.some((b) => b.item.kode === item.kode)) return;

@@ -3,6 +3,18 @@ import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { bisaAksesPengaturan, bisaKelolaMaster, bisaLihatLaporanHarian } from "../auth/permissions";
 import { usePermission } from "../auth/usePermission";
+import { useIdentitasBisnis } from "../data/IdentitasBisnisContext";
+
+/** Nama + logo (kalau ada) -- dipakai di 3 tempat di layout ini (sidebar desktop, top bar mobile, drawer mobile). */
+function BrandHeader() {
+  const { displayName, logoUrl } = useIdentitasBisnis();
+  return (
+    <span className="flex items-center gap-2">
+      {logoUrl ? <img src={logoUrl} alt="" className="h-6 w-6 rounded object-contain" /> : null}
+      <p className="text-sm font-semibold text-slate-900">{displayName}</p>
+    </span>
+  );
+}
 
 interface NavItem {
   to: string;
@@ -117,7 +129,7 @@ export function AppLayout() {
       {/* Sidebar -- tampil mulai breakpoint sm ke atas */}
       <aside className="hidden w-56 shrink-0 border-r border-slate-200 bg-white sm:flex sm:flex-col">
         <div className="border-b border-slate-200 px-4 py-4">
-          <p className="text-sm font-semibold text-slate-900">Samsara Backoffice</p>
+          <BrandHeader />
         </div>
         <nav className="flex-1 overflow-y-auto p-3">
           <NavGroupList groups={groups} />
@@ -137,7 +149,7 @@ export function AppLayout() {
           >
             <span aria-hidden>☰</span>
           </button>
-          <p className="text-sm font-semibold text-slate-900">Samsara Backoffice</p>
+          <BrandHeader />
         </div>
         <div className="text-right text-xs text-slate-500">
           <p className="font-medium text-slate-700">{user?.username}</p>
@@ -163,7 +175,7 @@ export function AppLayout() {
           />
           <div className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-4">
-              <p className="text-sm font-semibold text-slate-900">Samsara Backoffice</p>
+              <BrandHeader />
               <button
                 type="button"
                 onClick={() => setDrawerOpen(false)}

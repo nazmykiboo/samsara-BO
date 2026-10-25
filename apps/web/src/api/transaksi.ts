@@ -27,6 +27,8 @@ import type {
 export function createPembelian(input: {
   locationId: number;
   supplier?: string;
+  /** Tahap 3, opsional -- BEDA dari `supplier` (teks bebas), lihat docs/architecture-decisions.md §28. */
+  vendorId?: number;
   noReferensi?: string;
   tanggal: string;
   baris: PembelianBarisInput[];

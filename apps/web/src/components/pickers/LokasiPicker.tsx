@@ -1,24 +1,41 @@
 import { useMemo } from "react";
 import { useAuth } from "../../auth/AuthContext";
-import { MOCK_LOKASI } from "../../mock/referenceData";
+import { useLokasiContext } from "../../data/LokasiContext";
 import { Field } from "../ui/Input";
 import { Select } from "../ui/Select";
 
-/** Lokasi yang boleh dipilih user ini -- dibatasi locationIds kalau bukan allLocations.
+/** Bentuk yang dipakai SELURUH app lewat `useLokasiOptions()` -- `id: number`
+ * (BUKAN string seperti `LokasiPublik.id` dari API/BIGINT) supaya konsumen
+ * lama (perbandingan `l.id === locationFilter`, key berbasis angka, dst,
+ * mis. di StokPage.tsx) tidak perlu diubah sama sekali -- ini PERSIS bentuk
+ * `MockLokasi` lama sebelum Tahap 1 "Outlet & Kitchen", cuma sumbernya
+ * sekarang live API bukan snapshot statis. */
+export interface LokasiOption {
+  id: number;
+  name: string;
+  entitas: string;
+}
+
+/** Lokasi AKTIF yang boleh dipilih user ini -- dibatasi locationIds kalau bukan
+ * allLocations. Sumbernya `LokasiContext` (GET /api/core/lokasi, live) sejak
+ * Tahap 1 "Outlet & Kitchen" -- SEBELUMNYA snapshot statis `MOCK_LOKASI` (2
+ * baris hardcode), lihat docs/architecture-decisions.md.
+ *
  * Di-memo-kan (bukan `.filter()` polos tiap render): untuk role non-allLocations
  * (supervisor/staf), `.filter()` tanpa memo mengembalikan array BARU tiap render,
  * yang bikin `visibleLocations`/efek fetch qty di StokPage.tsx yang bergantung ke
  * hasil hook ini re-run tiap render -- infinite loop fetch (dikonfirmasi lewat
  * network tab: ratusan ribu request GET /stok berulang, kolom qty macet "Memuat..."
- * selamanya). Role allLocations (owner/manajer_ops) tidak kena karena cabang itu
- * mengembalikan `MOCK_LOKASI` langsung, referensi konstanta modul yang stabil. */
-export function useLokasiOptions() {
+ * selamanya). */
+export function useLokasiOptions(): LokasiOption[] {
   const { user } = useAuth();
+  const { lokasi } = useLokasiContext();
   return useMemo(() => {
     if (!user) return [];
-    if (user.allLocations) return MOCK_LOKASI;
-    return MOCK_LOKASI.filter((l) => user.locationIds.includes(l.id));
-  }, [user]);
+    const aktif = lokasi.filter((l) => l.isActive).map((l) => ({ id: Number(l.id), name: l.name, entitas: l.entitas }));
+    if (user.allLocations) return aktif;
+    return aktif.filter((l) => user.locationIds.includes(l.id));
+  }, [user, lokasi]);
 }
 
 export function LokasiPicker({

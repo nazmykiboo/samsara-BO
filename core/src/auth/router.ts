@@ -176,19 +176,27 @@ export function createAuthRouter(): Router {
     requireAuth,
     requirePermission("user.manage"),
     asyncHandler(async (req, res) => {
-      const { name, isActive, locationIds } = req.body ?? {};
+      const { name, isActive, locationIds, role, nomorWhatsapp } = req.body ?? {};
       const userId = Number(req.params.id);
 
       // Guard "tidak bisa nonaktifkan akun sendiri" + "tidak boleh nol owner
-      // aktif tersisa" sekarang di `updateUser` (satu sumber kebenaran,
-      // dipakai baik untuk endpoint ini) -- di sini cuma meneruskan siapa
-      // yang sedang login (sebagai string, lihat catatan di auth/types.ts).
+      // aktif tersisa" (nonaktifkan MAUPUN ubah role) sekarang di
+      // `updateUser` (satu sumber kebenaran, dipakai baik untuk endpoint
+      // ini) -- di sini cuma meneruskan siapa yang sedang login (sebagai
+      // string, lihat catatan di auth/types.ts).
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        await updateUser(client, userId, { name, isActive, locationIds }, String(getAuthUser(req).id));
+        const hasil = await updateUser(
+          client,
+          userId,
+          { name, isActive, locationIds, role, nomorWhatsapp },
+          String(getAuthUser(req).id),
+        );
         await client.query("COMMIT");
-        res.json({ id: userId });
+        // generatedPin/generatedPassword HANYA terisi kalau role pindah
+        // lintas keluarga auth (staf/PIN <-> password) -- lihat UpdateUserResult.
+        res.json({ id: userId, ...hasil });
       } catch (err) {
         await client.query("ROLLBACK");
         throw err;

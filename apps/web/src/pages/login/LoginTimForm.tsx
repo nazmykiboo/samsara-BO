@@ -5,7 +5,7 @@ import { ApiError } from "../../api/client";
 import { Card } from "../../components/ui/Card";
 import { ErrorBox } from "../../components/ResultBox";
 import { PinKeypad } from "../../components/PinKeypad";
-import { MOCK_LOKASI } from "../../mock/referenceData";
+import { useLokasiContext } from "../../data/LokasiContext";
 import type { StafOption } from "../../api/types";
 
 type Step = "lokasi" | "nama" | "pin";
@@ -13,15 +13,16 @@ type Step = "lokasi" | "nama" | "pin";
 const PIN_LENGTH = 6;
 
 /**
- * Flow 3 langkah untuk staf: pilih lokasi (dari snapshot MOCK_LOKASI, sama
- * seperti dipakai di tempat lain di app ini -- tidak ada endpoint publik
- * untuk list lokasi, dan TIDAK boleh pakai useLokasiOptions/LokasiPicker di
- * sini karena itu bergantung pada useAuth() yang belum ada user sebelum
- * login) -> pilih nama (dari GET /api/auth/staf, publik & live) -> PIN
- * (keypad besar, auto-submit begitu 6 digit terisi).
+ * Flow 3 langkah untuk staf: pilih lokasi (dari `LokasiContext`, endpoint
+ * publik `GET /api/core/lokasi` -- TIDAK boleh pakai useLokasiOptions/
+ * LokasiPicker di sini karena hook itu bergantung ke useAuth() yang belum
+ * ada user sebelum login) -> pilih nama (dari GET /api/auth/staf, publik &
+ * live) -> PIN (keypad besar, auto-submit begitu 6 digit terisi).
  */
 export function LoginTimForm() {
   const { loginPin } = useAuth();
+  const { lokasi, loading: loadingLokasi } = useLokasiContext();
+  const lokasiAktif = lokasi.filter((l) => l.isActive);
   const [step, setStep] = useState<Step>("lokasi");
   const [locationId, setLocationId] = useState<number | null>(null);
   const [stafList, setStafList] = useState<StafOption[]>([]);
@@ -83,13 +84,14 @@ export function LoginTimForm() {
       <Card>
         <h2 className="mb-1 text-base font-semibold text-slate-900">Pilih lokasi</h2>
         <p className="mb-4 text-sm text-slate-500">Pilih outlet tempat kamu bertugas hari ini.</p>
+        {loadingLokasi ? <p className="py-6 text-center text-sm text-slate-500">Memuat daftar lokasi...</p> : null}
         <div className="space-y-2">
-          {MOCK_LOKASI.map((lokasi) => (
+          {lokasiAktif.map((lokasi) => (
             <button
               key={lokasi.id}
               type="button"
               onClick={() => {
-                setLocationId(lokasi.id);
+                setLocationId(Number(lokasi.id));
                 setStafList([]);
                 setStep("nama");
               }}
@@ -104,7 +106,7 @@ export function LoginTimForm() {
   }
 
   if (step === "nama") {
-    const lokasiName = MOCK_LOKASI.find((l) => l.id === locationId)?.name ?? "";
+    const lokasiName = lokasiAktif.find((l) => Number(l.id) === locationId)?.name ?? "";
     return (
       <Card>
         <button

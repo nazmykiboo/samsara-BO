@@ -126,12 +126,14 @@ async function insertBarisLog(input: {
   itemName: string;
   menuIdEksternal: string;
   quantity: number;
+  /** Kolom opsional Tahap 1 "Outlet & Kitchen" -- lihat salessync_outlet_location_map. */
+  outletRef?: string;
 }): Promise<string> {
   const rows = await query<{ id: string }>(
     `INSERT INTO salessync_log_penjualan
        (transaction_date, transaction_time, platform, order_id, item_name, menu_id, quantity,
-        item_type, parent_item, unique_key, inv_status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'menu', NULL, $8, 'OK')
+        item_type, parent_item, unique_key, inv_status, outlet_ref)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'menu', NULL, $8, 'OK', $9)
      RETURNING id`,
     [
       input.tanggal,
@@ -142,6 +144,7 @@ async function insertBarisLog(input: {
       input.menuIdEksternal,
       input.quantity,
       `${input.orderId}|${input.menuIdEksternal}`,
+      input.outletRef ?? null,
     ],
   );
   return rows[0].id;
@@ -177,6 +180,7 @@ async function bersihkanArtefakTest(): Promise<void> {
     }
     await client.query(`DELETE FROM salessync_item_mapping WHERE kode_eksternal LIKE $1`, [`${PREFIX}%`]);
     await client.query(`DELETE FROM salessync_log_penjualan WHERE order_id LIKE $1`, [`${PREFIX}%`]);
+    await client.query(`DELETE FROM salessync_outlet_location_map WHERE outlet_ref LIKE $1`, [`${PREFIX}%`]);
   } finally {
     client.release();
   }
@@ -622,6 +626,85 @@ test("POST /proses + tanggalMulai: order SEBELUM tanggal tidak menyentuh stok & 
       baselineLogProcessed + 1,
       "hanya baris log SINTETIS yang ditandai processed_at -- arsip asli tidak tersentuh",
     );
+  } finally {
+    await bersihkanArtefakTest();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Tahap 1 "Outlet & Kitchen": outlet_ref -> lokasi (bukan selalu default)
+// ---------------------------------------------------------------------------
+
+test("POST /proses: order dengan outlet_ref yang TERPETAKAN -> transaksi di lokasi hasil pemetaan, BUKAN lokasi default", async () => {
+  const kodeEksternal = `${PREFIX}EXT-OUTLETREF`;
+  const orderId = `${PREFIX}ORDER-OUTLETREF`;
+  const outletRef = `${PREFIX}OUTLET-A`;
+  // Lokasi id 1 = Central Kitchen (REAL, sudah ada) -- sengaja BEDA dari
+  // defaultLocationId (id 2, Outlet 1 Malang) supaya test ini membuktikan
+  // pemetaan BENAR-BENAR dipakai, bukan kebetulan sama dengan default.
+  const lokasiTujuan = 1;
+  assert.notEqual(lokasiTujuan, defaultLocationId, "prasyarat: lokasi tujuan pemetaan harus beda dari default");
+
+  try {
+    await insertBarisLog({
+      orderId,
+      tanggal: TANGGAL_SESUDAH_MULAI,
+      itemName: namaMenu,
+      menuIdEksternal: kodeEksternal,
+      quantity: 1,
+      outletRef,
+    });
+    await query(`INSERT INTO salessync_outlet_location_map (platform, outlet_ref, location_id) VALUES ($1, $2, $3)`, [
+      PLATFORM,
+      outletRef,
+      lokasiTujuan,
+    ]);
+    await petakanLewatApi(kodeEksternal, KODE_MENU);
+
+    const { status, body: hasil } = await postProses(TANGGAL_MULAI);
+    assert.equal(status, 200, JSON.stringify(hasil));
+    assert.equal(hasil.transaksiDibuat, 1);
+
+    const header = await query<{ location_id: string }>(
+      `SELECT location_id FROM inventory_transaksi_penjualan WHERE no_referensi = $1`,
+      [orderId],
+    );
+    assert.equal(header.length, 1);
+    assert.equal(
+      Number(header[0].location_id),
+      lokasiTujuan,
+      "lokasi transaksi harus hasil pemetaan outlet_ref, bukan default",
+    );
+  } finally {
+    await bersihkanArtefakTest();
+  }
+});
+
+test("POST /proses: order dengan outlet_ref yang TIDAK terpetakan -> tetap jatuh ke lokasi default (tidak di-skip/gagal)", async () => {
+  const kodeEksternal = `${PREFIX}EXT-OUTLETREF-UNMAPPED`;
+  const orderId = `${PREFIX}ORDER-OUTLETREF-UNMAPPED`;
+
+  try {
+    await insertBarisLog({
+      orderId,
+      tanggal: TANGGAL_SESUDAH_MULAI,
+      itemName: namaMenu,
+      menuIdEksternal: kodeEksternal,
+      quantity: 1,
+      outletRef: `${PREFIX}OUTLET-TIDAK-ADA-PEMETAAN`,
+    });
+    await petakanLewatApi(kodeEksternal, KODE_MENU);
+
+    const { status, body: hasil } = await postProses(TANGGAL_MULAI);
+    assert.equal(status, 200, JSON.stringify(hasil));
+    assert.equal(hasil.transaksiDibuat, 1, "order TETAP diproses, bukan di-skip cuma karena outlet_ref belum terpetakan");
+    assert.deepEqual(hasil.gagal, []);
+
+    const header = await query<{ location_id: string }>(
+      `SELECT location_id FROM inventory_transaksi_penjualan WHERE no_referensi = $1`,
+      [orderId],
+    );
+    assert.equal(Number(header[0].location_id), defaultLocationId, "jatuh ke lokasi default");
   } finally {
     await bersihkanArtefakTest();
   }

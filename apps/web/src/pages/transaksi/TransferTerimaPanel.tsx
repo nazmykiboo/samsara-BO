@@ -9,7 +9,8 @@ import { getDalamPerjalanan } from "../../api/stok";
 import { createTransferTerima } from "../../api/transaksi";
 import { ApiError } from "../../api/client";
 import type { DalamPerjalananRow, TransferTerimaResult } from "../../api/types";
-import { MOCK_ITEMS, MOCK_LOKASI } from "../../mock/referenceData";
+import { MOCK_ITEMS } from "../../mock/referenceData";
+import { useLokasiContext } from "../../data/LokasiContext";
 
 interface TransferGroup {
   transferId: string;
@@ -19,12 +20,19 @@ interface TransferGroup {
 
 export function TransferTerimaPanel() {
   const options = useLokasiOptions();
-  const [locationTujuanId, setLocationTujuanId] = useState<number | null>(options[0]?.id ?? null);
+  const { lokasi: daftarLokasi } = useLokasiContext();
+  const [locationTujuanId, setLocationTujuanId] = useState<number | null>(null);
   const [rows, setRows] = useState<DalamPerjalananRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedTransferId, setSelectedTransferId] = useState<string | null>(null);
   const [reloadCounter, setReloadCounter] = useState(0);
+
+  // Lihat catatan sama di TransferKirimForm.tsx -- daftar lokasi dimuat
+  // async, jadi default "lokasi pertama" diisi lewat efek, bukan initializer.
+  useEffect(() => {
+    if (locationTujuanId === null && options.length > 0) setLocationTujuanId(Number(options[0].id));
+  }, [options, locationTujuanId]);
 
   useEffect(() => {
     if (locationTujuanId === null) return;
@@ -82,7 +90,7 @@ export function TransferTerimaPanel() {
               <p className="text-sm text-slate-500">Tidak ada transfer yang menunggu diterima di lokasi ini.</p>
             ) : (
               groups.map((g) => {
-                const asal = MOCK_LOKASI.find((l) => l.id === Number(g.locationAsalId));
+                const asal = daftarLokasi.find((l) => Number(l.id) === Number(g.locationAsalId));
                 return (
                   <button
                     key={g.transferId}

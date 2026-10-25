@@ -6,9 +6,10 @@ import { ErrorBox, ResultBox } from "../../components/ResultBox";
 import { listOpname, decideOpname } from "../../api/transaksi";
 import { ApiError } from "../../api/client";
 import type { DecideOpnameResult, OpnameDecision, OpnameListItem } from "../../api/types";
-import { MOCK_LOKASI } from "../../mock/referenceData";
+import { useLokasiContext } from "../../data/LokasiContext";
 
 export function OpnameApprovalPanel() {
+  const { lokasi: daftarLokasi } = useLokasiContext();
   const [drafts, setDrafts] = useState<OpnameListItem[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +59,7 @@ export function OpnameApprovalPanel() {
             <p className="py-6 text-center text-sm text-slate-500">Tidak ada draft opname yang menunggu persetujuan.</p>
           ) : (
             drafts.map((d) => {
-              const lokasi = MOCK_LOKASI.find((l) => l.id === Number(d.locationId));
+              const lokasi = daftarLokasi.find((l) => Number(l.id) === Number(d.locationId));
               return (
                 <button
                   key={d.headerId}
@@ -96,7 +97,8 @@ function OpnameDecisionCard({
   const [saving, setSaving] = useState<OpnameDecision | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DecideOpnameResult | null>(null);
-  const lokasi = MOCK_LOKASI.find((l) => l.id === Number(opname.locationId));
+  const { lokasi: daftarLokasi } = useLokasiContext();
+  const lokasi = daftarLokasi.find((l) => Number(l.id) === Number(opname.locationId));
 
   async function handleDecide(decision: OpnameDecision) {
     setError(null);

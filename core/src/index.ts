@@ -9,3 +9,5 @@ export * from "./auth/users.js";
 export * from "./auth/rate-limit.js";
 export * from "./auth/jwt.js";
 export * from "./auth/audit.js";
+export * from "./business-identity/identity.js";
+export * from "./locations/locations.js";

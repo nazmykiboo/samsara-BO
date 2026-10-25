@@ -2,7 +2,7 @@
 
 > **Cara baca dokumen ini:** ini bukan rencana/roadmap. Setiap klaim "sudah
 > ada" di bawah **diverifikasi langsung ke kode, skema database, dan hasil
-> `npm test`/`npm run typecheck`** pada tanggal penulisan (2026-10-16), bukan
+> `npm test`/`npm run typecheck`** pada tanggal pembaruan terakhir (2026-10-26), bukan
 > ditulis dari ingatan sesi-sesi sebelumnya. Kalau pembaca menemukan sesuatu
 > di sini yang sudah tidak cocok dengan kode saat dibaca nanti, itu tandanya
 > dokumen ini perlu diperbarui lagi — jangan dianggap kode yang salah.
@@ -95,7 +95,7 @@ Lima role terdaftar di tabel `core_roles` (diverifikasi ke
 
 | Role | Jenis | Gambaran akses |
 |---|---|---|
-| `owner` | Manusia | Akses paling luas. Satu-satunya yang boleh: ubah harga jual & visibilitas menu per channel, atur metode HPP & target food cost global, kelola lokasi/channel, kelola user (buat/nonaktifkan/reset kredensial). Juga ikut di semua permission `manajer_ops`. |
+| `owner` | Manusia | Akses paling luas. Satu-satunya yang boleh: ubah harga jual & visibilitas menu per channel, atur metode HPP & target food cost global, kelola lokasi/channel, kelola identitas bisnis (nama+logo), kelola user (buat/edit nama-lokasi-WhatsApp/**ubah role**/nonaktifkan/reset kredensial). Juga ikut di semua permission `manajer_ops`. |
 | `manajer_ops` | Manusia | Operasional harian lintas lokasi: approve opname & pengajuan libur, kelola jadwal shift, lihat laporan harian & analitik (penjualan + operasional), kelola sinkronisasi penjualan (`sales-sync`), transaksi apa pun di lokasi mana pun. **Tidak** bisa ubah harga jual, visibilitas channel, pengaturan global, atau kelola user. |
 | `supervisor` | Manusia | Operasional harian **di lokasi yang ditugaskan saja** (`locationScope: own`): catat pembelian/produksi/penjualan, kirim transfer, lihat laporan harian lokasinya. **Tidak** bisa approve opname/cuti, tidak bisa lihat analitik. |
 | `staf` | Manusia | Paling terbatas, dibatasi lokasi sendiri: input opname (draft saja), mutasi lain, terima transfer, ajukan permintaan transfer, ajukan cuti sendiri. **Tidak** bisa lihat laporan harian/analitik, tidak bisa approve apa pun. Login pakai **PIN** (pilih nama dari daftar staf aktif di satu lokasi, lalu input PIN), bukan username+password seperti 3 role manusia lainnya. |
@@ -159,7 +159,21 @@ bisa FK langsung tanpa bergantung ke modul bisnis tertentu, lihat
 dengan Inventory/HR/Sales-Sync — tidak punya `module.json` sendiri yang
 menyatakan dirinya modul "aktif/nonaktif".
 
-### Inventory (v0.9.0) — modul paling matang
+Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
+- `core_locations` punya **detail operasional lengkap** (kode, tipe
+  outlet/kitchen, alamat, kota, telepon, jam buka/tutup, penanggung jawab,
+  tanggal buka, kitchen pemasok default) — sebelumnya cuma name/entitas.
+  CRUD detailnya tetap di modul Inventory (`/api/inventory/lokasi`, owner
+  saja) sesuai preseden § "Keputusan desain penting" di bawah, tapi daftar
+  **ringkas publik** (tanpa login, dipakai flow login PIN staf & picker
+  lokasi di seluruh app) ada di `GET /api/core/lokasi`.
+- `core_business_identity` (BARU, satu baris): nama tampilan + logo
+  (PNG/JPG/WebP maks 500KB, disimpan sebagai bytea). `GET
+  /api/core/identitas-bisnis`(`/logo`) publik; `PUT` owner saja (action
+  `identitas_bisnis.manage`). Dipakai sidebar, halaman login, judul tab —
+  menggantikan "Samsara Backoffice" yang sebelumnya hardcode.
+
+### Inventory (v0.10.0) — modul paling matang
 
 - Master data (item, kategori item, satuan, resep produksi 1 level, menu,
   kategori menu, paket menu) — ✅
@@ -173,7 +187,7 @@ menyatakan dirinya modul "aktif/nonaktif".
   untuk heatmap) ✅, Transfer 2 tahap kirim→terima dengan susut tercatat ✅,
   Mutasi Lain dengan 6 jenis terstruktur (waste_rusak, hilang_tidak_diketahui,
   staff_meal, sampel, retur_supplier, koreksi_tambah) ✅, Opname 2 tahap
-  draft→keputusan ✅ — **semuanya teruji** (151 test domain + test regresi
+  draft→keputusan ✅ — **semuanya teruji** (165 test domain + test regresi
   permission di `apps/api`).
 - Channel penjualan & harga per channel (termasuk komisi channel, saran
   harga otomatis berdasar target food cost, export/import CSV harga massal)
@@ -216,6 +230,38 @@ menyatakan dirinya modul "aktif/nonaktif".
   ada endpoint API di `module.json`/`router.ts`, dan tidak ada satu pun
   referensi di frontend (`apps/web`). Tabelnya ada di database, kosong
   fungsinya.
+- **Vendor & Katalog** (Tahap 3, dalam modul Inventory — **bukan modul PO/
+  hutang/retur/QC terpisah, sengaja tidak dibangun**) — ✅ teruji (14 test
+  domain + verifikasi langsung lewat browser/API):
+  - CRUD vendor (nama, kontak, telepon, alamat, aktif/nonaktif) + pencarian
+    nama ILIKE — tab **Master > Vendor**, `vendor.edit` (owner/manajer_ops).
+  - Katalog vendor-item: harga per vendor+item, **riwayat harga selalu
+    bertambah** (tidak pernah overwrite, jadi tren harga vendor tetap
+    terlacak). "Pencarian barang ke vendor" (`GET
+    /vendor/untuk-item/:itemKode`) — lintas vendor, urut harga termurah
+    dulu, untuk bandingkan sebelum beli.
+  - Form Pembelian: dropdown vendor opsional (terpisah dari field
+    "Supplier" teks bebas lama, keduanya tetap ada berdampingan), item
+    dari katalog mengisi **harga terakhir otomatis**, dan peringatan
+    **real-time** (sebelum submit) + di **response setelah submit** kalau
+    kenaikan harga di atas ambang (`inventory_insight_rules`, default 10%,
+    owner bisa ubah). `vendorId` di tabel pembelian **nullable** — pembelian
+    tanpa vendor (cuma teks supplier) tetap jalan seperti sebelumnya.
+  - **Harga difilter berdasar permission `hpp.lihat_harga`** (role
+    supervisor/staf): katalog per vendor, "pencarian barang ke vendor", dan
+    riwayat harga semuanya **menyembunyikan/403 harga** untuk role tanpa
+    izin itu — KECUALI satu endpoint sempit "harga terakhir untuk satu
+    vendor+item" (`GET /vendor/:id/item/:itemKode/harga-terakhir`) yang
+    **sengaja tetap tampil ke supervisor**, karena itu yang dipakai form
+    Pembelian untuk isi-otomatis & supervisor memang boleh bikin pembelian
+    — tanpa itu dia tidak bisa menilai wajar-tidaknya harga yang
+    ditawarkan vendor. Alasan lengkap: `docs/architecture-decisions.md`
+    § 28.
+  - **Supplier teks lama tidak digabung otomatis** ke vendor baru — endpoint
+    "laporan supplier lama" (`GET /vendor/laporan-supplier-lama`, owner/
+    manajer_ops) cuma mengelompokkan & melaporkan daftar teks supplier yang
+    `vendor_id`-nya masih NULL, supaya owner yang putuskan manual mana yang
+    mau dijadikan vendor resmi.
 
 ### HR (v0.1.0)
 
@@ -274,10 +320,12 @@ menyatakan dirinya modul "aktif/nonaktif".
 
 Daftar murni fakta ketiadaan di kode saat ini, bukan roadmap:
 
-- **Modul Purchasing/vendor management** — tidak ada. Transaksi Pembelian
-  di Inventory hanya punya kolom `supplier TEXT` bebas di header (diverifikasi
-  ke `inventory_transaksi_pembelian`), tidak ada master vendor/supplier,
-  tidak ada hutang/termin pembayaran, tidak ada riwayat harga per vendor.
+- **Modul Purchasing penuh (PO, hutang/termin pembayaran, retur ke vendor,
+  QC penerimaan)** — tidak ada, **sengaja tidak dibangun** di Tahap 3.
+  Master vendor + katalog harga + riwayat harga per vendor **sudah ada**
+  (lihat § 4 Inventory, "Vendor & Katalog"); kolom `supplier TEXT` bebas di
+  header Pembelian juga **masih ada berdampingan** dengan `vendor_id`
+  (nullable) — bukan diganti.
 - **Isolasi multi-tenant/multi-brand sungguhan di level kode** — tidak ada.
   Satu database `samsara` untuk satu brand (Burnas/Samsara). "Satu Jarvis,
   banyak bisnis" di `CLAUDE.md` § 1 adalah konteks operasional Claude Code
@@ -336,11 +384,12 @@ Daftar murni fakta ketiadaan di kode saat ini, bukan roadmap:
   request** (query tambahan, bukan lagi fully-stateless seperti sebelumnya
   — overhead-nya diukur <0.1 ms untuk skala pilot outlet saat ini, lihat
   `docs/architecture-decisions.md` § 22). Versi dinaikkan otomatis saat user
-  dinonaktifkan, password/PIN di-reset, atau `locationIds`-nya diubah —
-  token lama langsung ditolak 401 ("Sesi berakhir, silakan login ulang")
-  walau belum lewat TTL 12 jam. **Perubahan role TIDAK memicu ini** karena
-  tidak ada jalur ubah-role di aplikasi sama sekali saat ini (lihat § 5).
-  Tombol Keluar di frontend tetap murni hapus token lokal (tanpa endpoint
+  dinonaktifkan, password/PIN di-reset, `locationIds`-nya diubah, **atau
+  role-nya diubah** (fitur ubah role ditambahkan Tahap 2 "Kelola User",
+  2026-10-26 — PATCH `/api/auth/users/:id` body `role`, owner saja, lihat
+  § 7) — token lama langsung ditolak 401 ("Sesi berakhir, silakan login
+  ulang") walau belum lewat TTL 12 jam. Tombol Keluar di frontend tetap
+  murni hapus token lokal (tanpa endpoint
   logout baru); 401 di tengah sesi sekarang ditangani global oleh
   `apps/web/src/api/client.ts` — redirect otomatis ke halaman login dengan
   notice singkat, bukan error mentah.
@@ -348,8 +397,8 @@ Daftar murni fakta ketiadaan di kode saat ini, bukan roadmap:
   (bukan satu baris per aksi). Dipakai untuk **himpunan field sensitif yang
   terus bertambah** seiring modul berkembang — harga beli/konversi item,
   resep, harga jual & visibilitas channel menu, min-stok, kategori
-  item/menu, satuan, kelola user (reset kredensial, nonaktifkan),
-  perubahan jadwal shift/shift template, pengajuan libur via jalur
+  item/menu, satuan, kelola user (reset kredensial, nonaktifkan, **ubah
+  role** sejak Tahap 2), perubahan jadwal shift/shift template, pengajuan libur via jalur
   override, dan tag `created_via=sales-sync` untuk transaksi Penjualan
   hasil sinkronisasi otomatis. **Bukan audit universal otomatis** untuk
   semua tabel/semua write — tiap domain function yang mau dicatat harus
@@ -420,3 +469,21 @@ Ringkasan eksekutif — detail lengkap selalu di `docs/architecture-decisions.md
   2026-10-16 bersamaan dengan menambahkan gate permission ke 6 endpoint
   Inventory yang sebelumnya terbuka untuk siapa pun yang login. Detail:
   § 20, § 21.
+- **Endpoint publik (tanpa login) wajib hidup di router core SEBELUM
+  `requireAuth` global, tidak bisa di modul bisnis** — ditemukan saat
+  membangun `GET /api/core/lokasi` dan `/identitas-bisnis` (Tahap 1):
+  modul bisnis (inventory/hr/sales-sync) selalu di-mount SETELAH
+  `requireAuth` global di `build-server.ts`, jadi endpoint publik apa pun
+  (dipakai flow login PIN staf, sidebar, halaman login) harus masuk router
+  core-level baru (`core/src/public/router.ts`), bukan router modul mana
+  pun. Detail: § 27.
+- **Ubah role LINTAS keluarga auth (staf/PIN <-> owner/manajer_ops/
+  supervisor/password) otomatis membuat KREDENSIAL BARU** — Tahap 2
+  "Kelola User" (2026-10-26): kredensial lama (PIN/password) tidak cocok
+  lagi dengan metode login role baru, jadi `updateUser` men-generate yang
+  baru otomatis (pola sama seperti `resetCredential`) dan
+  mengembalikannya sekali ke response (ditampilkan sekali di UI, sama
+  seperti create/reset). Alternatif yang dipertimbangkan (menolak ubah
+  role lintas keluarga, minta admin reset manual sesudahnya) ditolak
+  karena akan membuat akun langsung tidak bisa login tanpa langkah
+  lanjutan yang jelas. Detail: § 27.

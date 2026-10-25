@@ -2,13 +2,15 @@ import { useState } from "react";
 import { ItemTab } from "./ItemTab";
 import { ResepProduksiTab } from "./ResepProduksiTab";
 import { ResepMenuTab } from "./ResepMenuTab";
+import { VendorTab } from "./VendorTab";
 
-type Tab = "item" | "resep_produksi" | "resep_menu";
+type Tab = "item" | "resep_produksi" | "resep_menu" | "vendor";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "item", label: "Item" },
   { key: "resep_produksi", label: "Resep Produksi" },
   { key: "resep_menu", label: "Resep Menu" },
+  { key: "vendor", label: "Vendor" },
 ];
 
 export function MasterIndexPage() {
@@ -38,6 +40,7 @@ export function MasterIndexPage() {
       {tab === "item" ? <ItemTab /> : null}
       {tab === "resep_produksi" ? <ResepProduksiTab /> : null}
       {tab === "resep_menu" ? <ResepMenuTab /> : null}
+      {tab === "vendor" ? <VendorTab /> : null}
     </div>
   );
 }

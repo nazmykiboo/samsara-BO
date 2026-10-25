@@ -6,6 +6,7 @@ import type {
   ResetCredentialResult,
   StafOption,
   UpdateUserInput,
+  UpdateUserResult,
   UserListItem,
 } from "./types";
 
@@ -32,8 +33,8 @@ export function listUsers(): Promise<UserListItem[]> {
   return api.get<UserListItem[]>("/api/auth/users");
 }
 
-export function updateUser(id: string, input: UpdateUserInput): Promise<{ id: string }> {
-  return api.patch<{ id: string }>(`/api/auth/users/${id}`, input);
+export function updateUser(id: string, input: UpdateUserInput): Promise<UpdateUserResult> {
+  return api.patch<UpdateUserResult>(`/api/auth/users/${id}`, input);
 }
 
 /** Ganti kredensial user total (PIN baru untuk staf, password baru untuk role lain) -- lama langsung tidak berlaku. */

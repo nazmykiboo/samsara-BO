@@ -28,6 +28,9 @@ export type PermissionAction =
   | "master_item.lihat"
   | "master_menu.lihat"
   | "resep_produksi.lihat"
+  // --- modul inventory: vendor & katalog (Tahap 3) ---
+  | "vendor.lihat"
+  | "vendor.edit"
   // --- modul inventory: harga & HPP ---
   | "harga_jual.edit"
   | "hpp.lihat_harga"
@@ -52,6 +55,8 @@ export type PermissionAction =
   | "pengaturan.manage"
   // --- core: akun login ---
   | "user.manage"
+  // --- core: identitas bisnis (nama + logo tampilan) ---
+  | "identitas_bisnis.manage"
   // --- modul hr ---
   | "jadwal.lihat"
   | "jadwal.manage"
@@ -89,6 +94,13 @@ export const PERMISSION_ROLES: Record<PermissionAction, Role[]> = {
   "master_menu.lihat": SEMUA_ROLE,
   "resep_produksi.lihat": SEMUA_ROLE,
 
+  // GET /vendor dkk. -- owner/manajer_ops/supervisor (supervisor ikut karena
+  // dropdown vendor di form Pembelian, bukan cuma tab Master > Vendor yang
+  // owner/manajer_ops saja). vendor.edit (CRUD vendor + katalog manual) lebih
+  // sempit, owner/manajer_ops saja.
+  "vendor.lihat": ["owner", "manajer_ops", "supervisor"],
+  "vendor.edit": ["owner", "manajer_ops"],
+
   // PATCH /menu/:kode/harga-jual DAN PATCH /menu/:kode/harga-channel -- OWNER SAJA.
   "harga_jual.edit": ["owner"],
   // Bukan gate endpoint: menentukan field harga/HPP/margin di-strip atau tidak dari response.
@@ -124,6 +136,10 @@ export const PERMISSION_ROLES: Record<PermissionAction, Role[]> = {
 
   // core_user: buat/ubah/nonaktifkan/reset kredensial akun login.
   "user.manage": ["owner"],
+
+  // PUT /api/core/identitas-bisnis dan .../logo -- nama tampilan + logo. GET-nya publik
+  // (tanpa login), yang digerbang action ini cuma PUT (ubah).
+  "identitas_bisnis.manage": ["owner"],
 
   "jadwal.lihat": SEMUA_ROLE,
   // Buat/ubah/pindah/hapus jadwal shift + salin jadwal satu minggu ke minggu lain.

@@ -1,6 +1,6 @@
 {
   "name": "inventory",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Manajemen stok, resep, HPP, dan transaksi bahan baku untuk outlet Samsara.",
   "enabled": true,
   "dependsOn": [],
@@ -116,7 +116,7 @@
       {
         "method": "POST",
         "path": "/transaksi/pembelian",
-        "description": "Catat pembelian; qty diinput satuan beli, dikonversi otomatis ke satuan resep, stok bertambah.",
+        "description": "Catat pembelian; qty diinput satuan beli, dikonversi otomatis ke satuan resep, stok bertambah. Body boleh menyertakan 'vendorId' opsional (Tahap 3, BEDA dari 'supplier' teks bebas yang sudah ada) -- kalau diisi, katalog vendor (harga terakhir + riwayat) diperbarui otomatis untuk tiap baris. Response menyertakan 'peringatanHarga' (array, informasional, tidak pernah menggagalkan pembelian) untuk baris yang harganya naik melewati ambang persen di inventory_insight_rules (kode 'kenaikan_harga_vendor_persen').",
         "permission": {
           "action": "pembelian.create",
           "roles": ["owner", "manajer_ops", "supervisor"],
@@ -306,6 +306,66 @@
         "permission": { "action": "master_item.edit", "roles": ["owner", "manajer_ops"] }
       },
       {
+        "method": "GET",
+        "path": "/vendor",
+        "description": "Daftar vendor (query opsional ?cari= filter ILIKE nama). Tahap 3 'Vendor & Katalog'. roles owner/manajer_ops/supervisor: dipakai tab Master > Vendor (owner/manajer_ops saja yang bisa buka tab-nya di frontend) DAN dropdown vendor di form Pembelian (supervisor juga boleh pembelian.create).",
+        "permission": { "action": "vendor.lihat", "roles": ["owner", "manajer_ops", "supervisor"] }
+      },
+      {
+        "method": "POST",
+        "path": "/vendor",
+        "description": "Tambah vendor baru (name wajib unik, kontakNama/telepon/alamat opsional).",
+        "permission": { "action": "vendor.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "PATCH",
+        "path": "/vendor/:id",
+        "description": "Ubah detail vendor dan/atau status aktif.",
+        "permission": { "action": "vendor.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/vendor/:id/katalog",
+        "description": "Katalog (daftar item + harga terakhir) satu vendor. Field hargaTerakhir di-strip untuk role tanpa hpp.lihat_harga (supervisor/staf) -- pola sama seperti GET /items.",
+        "permission": { "action": "vendor.lihat", "roles": ["owner", "manajer_ops", "supervisor"] }
+      },
+      {
+        "method": "POST",
+        "path": "/vendor/:id/katalog",
+        "description": "Catat/perbarui SATU harga katalog manual (body {itemKode, harga}) -- upsert inventory_vendor_katalog + selalu tambah baris inventory_vendor_harga_riwayat (sumber='manual'). Beda dari harga yang masuk otomatis lewat POST /transaksi/pembelian (sumber='pembelian').",
+        "permission": { "action": "vendor.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/vendor/untuk-item/:itemKode",
+        "description": "'Pencarian barang ke vendor': vendor mana saja yang pernah mencatatkan harga untuk SATU item, urut termurah dulu. Field hargaTerakhir di-strip untuk supervisor/staf (hpp.lihat_harga).",
+        "permission": { "action": "vendor.lihat", "roles": ["owner", "manajer_ops", "supervisor"] }
+      },
+      {
+        "method": "GET",
+        "path": "/vendor/:id/item/:itemKode/harga-terakhir",
+        "description": "Harga terakhir SATU kombinasi vendor+item (null kalau belum pernah dicatat) -- dipakai form Pembelian isi-otomatis. SENGAJA TIDAK di-strip hpp.lihat_harga (beda dari GET .../katalog) -- supervisor yang mengisi Pembelian perlu lihat harga terakhir untuk menilai wajar/tidaknya harga yang ditawarkan vendor saat itu.",
+        "permission": { "action": "pembelian.create", "roles": ["owner", "manajer_ops", "supervisor"] }
+      },
+      {
+        "method": "GET",
+        "path": "/vendor/:id/item/:itemKode/riwayat-harga",
+        "description": "Riwayat SEMUA titik harga (manual + dari pembelian) untuk satu kombinasi vendor+item, terbaru dulu. owner/manajer_ops saja (hpp.lihat_harga, dicek manual di handler karena ini bukan endpoint katalog ringkas).",
+        "permission": { "action": "vendor.lihat", "roles": ["owner", "manajer_ops", "supervisor"] }
+      },
+      {
+        "method": "GET",
+        "path": "/vendor/laporan-supplier-lama",
+        "description": "Daftar nilai TEKS BEBAS kolom supplier (sebelum ada master vendor) yang belum terkait vendor_id, dengan jumlah pembelian & tanggal terakhir -- MURNI laporan untuk ditinjau manual owner, TIDAK pernah digabung/dimigrasikan otomatis ke inventory_vendor (lihat COMMENT migrasi 0030).",
+        "permission": { "action": "vendor.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/vendor/ambang-kenaikan-harga",
+        "description": "Ambang persen kenaikan harga (dari inventory_insight_rules kode 'kenaikan_harga_vendor_persen', default 10) -- dipakai frontend form Pembelian untuk bandingkan harga yang diketik secara real-time sebelum submit.",
+        "permission": { "action": "pembelian.create", "roles": ["owner", "manajer_ops", "supervisor"] }
+      },
+      {
         "method": "PUT",
         "path": "/min-stok",
         "description": "Set/ubah ambang batas minimum stok untuk satu item di satu lokasi (upsert, body {itemKode, locationId, minStok}). Dicatat ke core_audit_log (table inventory_min_stok_lokasi).",
@@ -447,15 +507,27 @@
         "permission": { "action": "pengaturan.manage", "roles": ["owner"] }
       },
       {
+        "method": "GET",
+        "path": "/lokasi",
+        "description": "Daftar SEMUA lokasi (aktif & nonaktif) dengan field DETAIL LENGKAP (kode, tipe, alamat, kota, telepon, jamBuka, jamTutup, penanggungJawab, tanggalBuka, kitchenDefaultId) -- owner saja. Daftar RINGKAS publik (tanpa field detail, tanpa login) ada di `GET /api/core/lokasi`, dipakai flow login PIN staf dan picker lokasi di seluruh app.",
+        "permission": { "action": "pengaturan.manage", "roles": ["owner"] }
+      },
+      {
         "method": "POST",
         "path": "/lokasi",
-        "description": "Tambah lokasi baru (name, entitas). Catatan: tabelnya (core_locations) sekarang dimiliki core, bukan inventory lagi (2026-10-06) -- endpoint CRUD-nya sengaja dibiarkan tetap di sini (bukan dipindah ke core) supaya tidak perlu ubah frontend/URL yang sudah terintegrasi; modul lain (mis. hr) boleh FK langsung ke core_locations tanpa lewat endpoint ini.",
+        "description": "Tambah lokasi baru (name, entitas, dan sejak Tahap 1 'Outlet & Kitchen': kode, tipe ('outlet'|'kitchen'), alamat, kota, telepon, jamBuka, jamTutup, penanggungJawab, tanggalBuka, kitchenDefaultId -- semua opsional kecuali name/entitas). Catatan: tabelnya (core_locations) sekarang dimiliki core, bukan inventory lagi (2026-10-06) -- endpoint CRUD-nya sengaja dibiarkan tetap di sini (bukan dipindah ke core) supaya tidak perlu ubah frontend/URL yang sudah terintegrasi; modul lain (mis. hr) boleh FK langsung ke core_locations tanpa lewat endpoint ini. Daftar lokasi PUBLIK (GET, tanpa login) ada di `GET /api/core/lokasi` -- BUKAN di modul ini, karena modul bisnis selalu mount SETELAH requireAuth global.",
         "permission": { "action": "pengaturan.manage", "roles": ["owner"] }
       },
       {
         "method": "PATCH",
         "path": "/lokasi/:id",
-        "description": "Ubah nama/entitas/status aktif lokasi (tabel core_locations, lihat catatan di POST /lokasi).",
+        "description": "Ubah detail lokasi (lihat field di POST /lokasi) dan/atau status aktif. Menonaktifkan (isActive:false) DITOLAK 400 kalau masih ada penghalang: stok tersisa, transfer berjalan, permintaan transfer pending, draft opname, atau jadwal shift ke depan (dicek lewat HTTP ke modul HR) -- body error-nya menyertakan array `penghalang` berisi daftar alasan. Staf yang HANYA bertugas di lokasi yang baru dinonaktifkan langsung di-revoke token-nya (token_version naik).",
+        "permission": { "action": "pengaturan.manage", "roles": ["owner"] }
+      },
+      {
+        "method": "POST",
+        "path": "/lokasi/salin-konfigurasi",
+        "description": "Salin konfigurasi channel aktif/nonaktif (tabel inventory_location_channel) dari satu lokasi (body dariLocationId) ke lokasi lain (body keLocationId) -- REPLACE penuh di tujuan, bukan merge. Mempermudah setup outlet baru supaya tidak perlu set ulang channel satu-satu.",
         "permission": { "action": "pengaturan.manage", "roles": ["owner"] }
       },
       {

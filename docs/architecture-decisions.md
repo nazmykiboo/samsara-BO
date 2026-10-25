@@ -2703,3 +2703,294 @@ bersih. Spesifikasi kolom/format lengkap: `docs/integrasi-n8n.md` § 8.
   Logika filter + kemajuan penanda diuji lewat harness Node.js yang
   memalsukan global n8n (`$input`/`$('...')`/`$getWorkflowStaticData`) sebelum
   file JSON final ditulis — bukan cuma dicek lewat `JSON.parse`.
+
+---
+
+## 26. Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26)
+
+### 26.1 Lingkup
+
+Dikerjakan di dev saja (instruksi eksplisit owner, tidak di-deploy ke
+production di sesi ini). Tiga migrasi terpisah dijalankan SATU-SATU
+(bukan paralel), masing-masing diverifikasi (`npm run migrate`, cek skema
+lewat `psql`) sebelum lanjut ke migrasi berikutnya:
+
+1. `core/0010_tambah_detail_lokasi_dan_identitas_bisnis.sql` — 10 kolom
+   detail baru di `core_locations` (kode, tipe, alamat, kota, telepon,
+   jam buka/tutup, penanggung jawab, tanggal buka, kitchen pemasok
+   default self-referencing FK) + tabel baru `core_business_identity`
+   (satu baris, nama tampilan + logo bytea, default seed `'Burnas'` —
+   nama brand produksi SUNGGUHAN per CLAUDE.md §1, BUKAN "Samsara
+   Backoffice" yang sebelumnya hardcode di frontend).
+2. `inventory/0029_create_lokasi_channel_aktif.sql` — tabel pivot
+   `inventory_location_channel` (channel penjualan aktif/nonaktif PER
+   LOKASI; "tidak ada baris = aktif", pola sama seperti visibilitas menu
+   migrasi 0024).
+3. `sales-sync/0002_tambah_outlet_ref_dan_pemetaan_lokasi.sql` — kolom
+   opsional `outlet_ref` di `salessync_log_penjualan` + tabel
+   `salessync_outlet_location_map` (platform+outlet_ref -> location_id).
+
+### 26.2 Endpoint publik HARUS di router core, bukan modul bisnis
+
+`GET /api/core/lokasi` (daftar ringkas, dipakai flow login PIN staf
+SEBELUM ada token) dan `GET /api/core/identitas-bisnis`(`/logo`) WAJIB
+bisa diakses tanpa login. Modul bisnis (inventory/hr/sales-sync) SELALU
+di-mount setelah `app.use(requireAuth)` global di `build-server.ts`,
+jadi endpoint publik apa pun tidak mungkin hidup di router modul manapun
+— harus jadi router core BARU (`core/src/public/router.ts`), di-mount
+SEBELUM `requireAuth`, persis seperti pola `/api/auth/login` yang sudah
+ada. Endpoint PUT di router yang sama tetap pasang
+`requireAuth`/`requirePermission` sendiri per-route (pola identik
+`auth/router.ts`).
+
+CRUD detail lokasi (create/update LENGKAP, termasuk guard nonaktifkan)
+TETAP di modul Inventory (`/api/inventory/lokasi`, owner saja) — bukan
+dipindah ke core — karena guard-nya butuh query tabel transaksi milik
+Inventory (stok, transfer, opname). `GET /api/inventory/lokasi` (detail
+LENGKAP, owner saja) ditambahkan terpisah dari `GET /api/core/lokasi`
+(ringkas, publik).
+
+### 26.3 Guard nonaktifkan lokasi: 4 cek lokal + 1 cek lintas-modul lewat HTTP
+
+Ditolak (400, body menyertakan array `penghalang`) kalau masih ada:
+stok tersisa (`inventory_current_stock`), transfer berjalan
+(`inventory_transfer_dalam_perjalanan`), permintaan transfer pending
+(status `'diminta'`), draft opname (status `'draft'`) — keempatnya query
+langsung (tabel milik Inventory sendiri) — **dan** jadwal shift ke depan,
+yang HARUS dicek lewat HTTP ke modul HR (`modules/inventory/src/lib/
+internal-api.ts`, `adaJadwalKeDepanViaApi`, reuse endpoint HR yang sudah
+ada `GET /jadwal-shift?dari=...&sampai=...&lokasiId=...`) — Inventory
+tidak boleh query `hr_jadwal_shift` langsung (isolasi antar modul
+bisnis, CLAUDE.md § "Module manifest"). Lokasi yang berhasil
+dinonaktifkan ikut menaikkan `token_version` staf yang HANYA bertugas di
+lokasi itu (pola sama seperti lokasi dicabut dari user).
+
+### 26.4 Tiga bug nyata ditemukan lewat verifikasi browser (bukan test otomatis)
+
+Instruksi eksplisit "tiap tahap diverifikasi di browser sebelum lanjut"
+terbukti perlu — ketiganya LOLOS test otomatis (`npm test` semua hijau)
+tapi gagal nyata saat dicoba di browser:
+
+1. **Migrasi sempat dijalankan sebagai role Postgres yang salah.**
+   `DB_USER="$USER"` (superuser macOS) dipakai alih-alih default role
+   `samsara` yang dipakai proses `api` sungguhan — 3 tabel baru jadi
+   dimiliki role yang beda, app dapat `permission denied for table
+   core_business_identity` nyata di browser begitu endpoint dipanggil.
+   Test otomatis TIDAK menangkap ini karena ikut dijalankan dengan
+   override yang sama (superuser bypass semua grant). Diperbaiki (`ALTER
+   TABLE ... OWNER TO samsara` lewat superuser), dikonfirmasi `npm run
+   migrate`/`npm test` TANPA override memang cara yang benar di repo ini.
+2. **Tab "Identitas Bisnis" tidak muncul sama sekali di UI.** Ada tabel
+   permission TERPISAH di frontend (`apps/web/src/auth/usePermission.ts`,
+   murni cerminan tampilan — bukan penegak akses sungguhan) yang
+   ketinggalan ditambahkan action baru `identitas_bisnis.manage` — fail
+   closed by design (action tidak dikenal = `false`), jadi gagal DIAM-DIAM
+   tanpa error apa pun. Test backend tidak menyentuh file ini sama
+   sekali (bukan scope-nya). Ditambahkan.
+3. **Lokasi tanpa penghalang tetap salah tidak diproses dengan baik** —
+   bukan ditemukan di sini, tapi di Tahap 2 lewat pola serupa, lihat § 27.4.
+
+### 26.5 Frontend: `MOCK_LOKASI` (snapshot statis) diganti `LokasiContext` (live)
+
+`apps/web/src/mock/referenceData.ts` punya `MOCK_LOKASI` (2 baris
+hardcode) sejak lama sebagai pengganti sementara untuk endpoint GET list
+yang belum ada. Diganti `LokasiProvider`/`useLokasiContext` (fetch sekali
+saat app mount dari `GET /api/core/lokasi`, dipasang SEJAJAR
+`AuthProvider` di `App.tsx` — bukan di dalamnya — supaya tersedia juga di
+halaman `/login` sebelum ada user). `useLokasiOptions()` (hook lama,
+dipakai banyak konsumen) SENGAJA mengembalikan bentuk `{id: number, ...}`
+(bukan `LokasiPublik.id: string` langsung dari API) supaya konsumen lama
+yang membandingkan `l.id === locationFilter` (angka) tidak perlu diubah
+sama sekali.
+
+---
+
+## 27. Tahap 2 "Kelola User": ubah role + nomor WhatsApp (2026-10-26)
+
+### 27.1 Ubah role lintas keluarga auth -> kredensial baru otomatis
+
+`updateUser` (`core/src/auth/users.ts`) sekarang menerima `role` (owner
+saja, digerbang router) dan `nomorWhatsapp` (kolom sudah ada sejak
+migrasi 0007 "Fase 2 WhatsApp", baru dipakai di sini). Kalau role baru
+pindah KELUARGA AUTH (staf/PIN <-> owner/manajer_ops/supervisor/
+password, dicek lewat `PASSWORD_ROLES`) dari role lama, kredensial LAMA
+sudah tidak cocok dengan metode login role BARU — fungsi men-generate
+PIN/password baru otomatis (pola identik `resetCredential`) dan
+mengembalikannya SEKALI di response (`UpdateUserResult.generatedPin`/
+`generatedPassword`), ditampilkan ke owner lewat dialog "tampil sekali"
+yang sama dipakai create/reset. Alternatif yang dipertimbangkan (tolak
+ubah role lintas keluarga, suruh admin reset manual sesudahnya) ditolak
+— akan membuat akun langsung tidak bisa login tanpa langkah lanjutan
+yang jelas di UI.
+
+Role EFEKTIF (`row.role`) di-update di tengah fungsi SETELAH blok ubah
+role selesai, supaya blok `locationIds` di bawahnya (yang mengecek
+`isAllLocationsRole`) memakai role BARU bukan yang basi.
+
+Guard "jangan sisakan nol owner aktif" (sudah ada untuk nonaktifkan)
+di-reuse untuk ubah role owner -> role lain (fungsi kecil
+`pastikanBukanOwnerAktifTerakhir`, dipanggil di dua tempat). Role
+TIDAK PERNAH bisa dipromosikan KE owner lewat form edit (preseden sama
+seperti `ROLE_OPTIONS` di `CreateUserForm`: "cuma ada 1 akun owner by
+design, bukan dibuat lewat UI self-service") — tapi owner EXISTING tetap
+bisa diturunkan ke role lain.
+
+### 27.2 Role berubah -> `token_version` WAJIB naik
+
+Komentar lama di `updateUser` eksplisit menandai ini sebagai TODO
+("KALAU fitur ubah-role ditambahkan nanti, token_version WAJIB ikut
+dinaikkan") — sekarang diimplementasikan: role ikut payload JWT, token
+lama akan terus dipercaya membawa role LAMA sampai TTL 12 jam habis kalau
+tidak dibasikan (termasuk kasus penurunan hak akses, mis. owner -> staf).
+
+### 27.3 Audit log untuk perubahan role
+
+Field sensitif baru yang dicatat: `core_audit_log` baris
+`table_name='core_users', field_name='role'` tiap kali role berubah,
+`old_value`/`new_value` nama role, `user_id` = owner yang melakukan
+perubahan (bukan user yang diubah).
+
+### 27.4 Dua bug nyata ditemukan lewat verifikasi browser + test manual
+
+1. **Hint "kredensial akan dibuat ulang" salah muncul/tidak muncul.**
+   Frontend awalnya memakai `butuhLokasi(role)` (true untuk staf DAN
+   supervisor, keduanya location-scoped) untuk mendeteksi "lintas
+   keluarga auth" — padahal predikat yang benar adalah
+   `isPasswordRole(role)` (staf = satu-satunya role PIN; supervisor tetap
+   password). Baru ketahuan saat dicoba sungguhan di browser: ubah staf
+   jadi supervisor TIDAK menampilkan peringatan kredensial baru padahal
+   seharusnya tampil. Ditambahkan predikat terpisah `isPasswordRole`,
+   cermin `PASSWORD_ROLES` backend.
+2. **Test fixture sendiri salah setup, menyamarkan validasi yang justru
+   mau diuji.** Test "ubah role supervisor->staf tanpa locationIds harus
+   ditolak 400" awalnya MEMBUAT fixture supervisor itu DENGAN
+   `locationIds` ter-assign — jadi guard "staf wajib minimal 1 lokasi"
+   tidak pernah benar-benar diuji (fallback ke lokasi yang sudah ada
+   membuatnya lolos, assert gagal 200≠400). Diperbaiki: fixture dibuat
+   TANPA locationIds sama sekali. Ditemukan juga 3 test lain yang
+   membaca body response DUA KALI (`await res.text()` sebagai pesan
+   assert, lalu `await res.json()` terpisah) -> `TypeError: Body is
+   unusable: Body has already been read`, Node 24 (`undici`) tidak
+   mengizinkan baca body fetch Response dua kali. Diperbaiki: baca body
+   SEKALI, simpan di variabel, pakai isinya baik untuk assert pesan
+   maupun pengecekan field.
+
+## 28. Tahap 3 "Vendor & Katalog" (2026-10-26)
+
+### 28.1 Scope sengaja dipersempit — bukan modul Purchasing penuh
+
+Dibangun **di dalam modul Inventory** (migrasi `0030_create_vendor_katalog.sql`,
+bukan modul baru): tabel `inventory_vendor`, `inventory_vendor_katalog`
+(harga TERKINI per vendor+item), `inventory_vendor_riwayat_harga` (riwayat,
+baris baru tiap kali harga dicatat, **tidak pernah overwrite**), dan kolom
+`vendor_id` nullable di `inventory_transaksi_pembelian`. Secara eksplisit
+**TIDAK** dibangun (instruksi awal): Purchase Order, hutang/termin
+pembayaran ke vendor, retur ke vendor, QC penerimaan barang. Kalau nanti
+dibutuhkan, itu pekerjaan terpisah dengan keputusan skema sendiri (mis.
+status PO draft/dikirim/diterima, tabel `inventory_vendor_hutang`) — jangan
+diam-diam ditambal ke tabel katalog yang sudah ada di sini, supaya tabel
+katalog (murni referensi harga) tidak tercampur tanggung jawab dengan
+tabel transaksional (PO/hutang).
+
+Kolom `supplier TEXT` bebas yang sudah ada di header Pembelian **TIDAK
+diganti** — tetap ada berdampingan dengan `vendor_id`. Alasannya: outlet
+kadang beli dari warung/penjual dadakan yang tidak akan pernah masuk
+master vendor formal, jadi "vendor" (opsional, terstruktur) dan "supplier"
+(bebas, selalu ada) melayani dua kebutuhan beda, bukan satu field yang
+di-upgrade jadi field lain.
+
+### 28.2 Harga katalog difilter per-role di ROUTER, bukan di domain — dengan satu pengecualian sengaja
+
+Pola yang sudah mapan di modul ini (`hpp.lihat_harga`, dipakai juga untuk
+HPP item/menu) dipakai ulang: endpoint katalog (`GET
+/vendor/:id/katalog`), "pencarian barang ke vendor" (`GET
+/vendor/untuk-item/:itemKode`), dan riwayat harga (`GET
+/vendor/:id/item/:itemKode/riwayat-harga`, 403 penuh bukan cuma strip
+field) semuanya memeriksa `hasPermission(user, "hpp.lihat_harga")` di
+`modules/inventory/src/api/router.ts` (BUKAN di `domain/vendor.ts`) dan
+melepas field `hargaTerakhir` dari respons kalau role (supervisor/staf)
+tidak punya izin itu. Ini SENGAJA di layer router, konsisten dengan
+semua endpoint harga lain di modul ini — domain functions mengembalikan
+data lengkap apa adanya, pemfilteran berbasis identitas pemanggil adalah
+concern HTTP/permission, bukan concern domain.
+
+**Satu endpoint PENGECUALIAN sengaja**: `GET
+/vendor/:id/item/:itemKode/harga-terakhir` (satu angka, vendor+item
+spesifik, dipakai form Pembelian untuk isi-otomatis) TETAP menampilkan
+harga ke supervisor meskipun dia tidak punya `hpp.lihat_harga`. Alasannya:
+supervisor **boleh** bikin transaksi Pembelian (`pembelian.create`), dan
+tanpa melihat harga terakhir vendor itu dia tidak bisa menilai apakah
+harga yang ditawarkan sekarang wajar atau mencurigakan — functionally
+diperlukan untuk tugas yang memang sudah diizinkan untuknya, beda dari
+"lihat katalog harga vendor secara umum/riwayat harga" yang memang
+sensitif dan sengaja disembunyikan (itu lebih dekat ke informasi
+negosiasi/margin bisnis, bukan kebutuhan operasional harian). Dikonfirmasi
+lewat panggilan HTTP langsung (bukan cuma baca kode) saat verifikasi
+Tahap 3: akun supervisor sungguhan diberi token asli, dicoba ke kelima
+endpoint vendor — katalog & "pencarian barang ke vendor" harganya hilang,
+riwayat harga 403, **harga-terakhir tetap tampil**, laporan-supplier-lama
+403 (endpoint itu `vendor.edit` saja, bukan soal harga).
+
+### 28.3 Peringatan kenaikan harga: dua tempat, satu ambang
+
+Ambang kenaikan harga (default 10%) disimpan di `inventory_insight_rules`
+(tabel key-value yang sudah ada, dipakai juga untuk ambang insight
+analitik lain) — bukan hardcode, owner bisa ubah lewat baris itu kalau
+nanti dibuatkan UI-nya (belum ada UI pengaturan ambang khusus di Tahap 3
+ini, cuma endpoint baca `GET /vendor/ambang-kenaikan-harga`). Peringatan
+muncul di DUA tempat berbeda dengan sumber data berbeda:
+
+1. **Real-time di frontend** (`PembelianForm.tsx`), sebelum submit:
+   membandingkan `hargaSatuan` yang sedang diketik user terhadap
+   `hargaTerakhirVendor` yang sudah di-fetch saat item/vendor dipilih.
+   Non-blocking — cuma peringatan visual, tidak mencegah submit.
+2. **Di response backend** (`PembelianResult.peringatanHarga`), dihitung
+   ULANG di `createPembelian` (`modules/inventory/src/domain/stok.ts`)
+   terhadap harga katalog yang tersimpan SAAT ITU di database (bukan
+   percaya begitu saja angka yang dikirim frontend) — baru SETELAH
+   pembelian tersimpan dan katalog+riwayat ter-update. Ini sumber
+   kebenaran; peringatan frontend cuma UX, bisa saja beda tipis dari
+   peringatan final kalau ada race (vendor lain mengubah katalog di detik
+   yang sama) — kasus langka, diterima sebagai known limitation, tidak
+   dibuatkan locking khusus.
+
+### 28.4 Bug nyata ditemukan lewat test sendiri (bukan browser): `now()` beku per transaksi
+
+`listRiwayatHarga` awalnya `ORDER BY dicatat_pada DESC` saja. Test domain
+yang membuat 2 baris riwayat untuk item yang sama DI DALAM SATU
+TRANSAKSI (pola `withRollback` test di repo ini) gagal urutannya acak —
+Postgres `now()` **beku di awal transaksi**, jadi 2 `INSERT` di
+transaksi yang sama dapat timestamp IDENTIK, dan urutan "paling baru
+duluan" jadi tidak deterministik untuk baris dengan timestamp sama.
+Diperbaiki: tambah `, r.id DESC` sebagai tie-breaker kedua. Dicatat
+eksplisit di komentar kode bahwa ini **bukan cuma artefak test** — bisa
+juga kena di production kalau ada 2 baris pembelian item yang sama masuk
+dalam transaksi database yang sama (skenario nyata: satu pembelian dengan
+baris item berulang, atau proses batch lain yang membungkus beberapa
+insert riwayat dalam satu transaksi).
+
+### 28.5 Supplier teks lama: dilaporkan, tidak pernah digabung otomatis
+
+`GET /vendor/laporan-supplier-lama` (owner/manajer_ops, `vendor.edit`)
+mengelompokkan baris `inventory_transaksi_pembelian` yang `vendor_id`
+NULL berdasar teks `supplier` apa adanya (termasuk variasi
+kapitalisasi/spasi — **tidak dinormalisasi**) dan melaporkan daftarnya
+saja (teks supplier + jumlah transaksi + total). Keputusan eksplisit dari
+instruksi awal: **tidak** ada auto-matching/auto-merge teks supplier ke
+vendor master, karena data teks bebas historis terlalu riskan
+digabungkan otomatis (typo, nama disingkat beda-beda, bisa salah gabung
+dua supplier yang sebenarnya berbeda) — keputusan "vendor A dan teks
+'Toko Barokah' itu entitas yang sama" harus manual oleh owner, sistem
+cuma menyiapkan daftarnya.
+
+### 28.6 Verifikasi
+
+165 test domain modul Inventory lulus (14 baru untuk vendor/katalog/
+pembelian+vendorId, termasuk kasus peringatan muncul/tidak muncul dan
+backward-compat pembelian tanpa vendorId). Diverifikasi manual di browser
+(akun owner sementara, dibuat & dihapus lewat script sekali-pakai, lihat
+§ A) + panggilan HTTP langsung dengan token akun supervisor sementara:
+CRUD vendor, isi katalog manual, form Pembelian auto-fill harga +
+peringatan real-time + peringatan di response setelah submit, katalog
+ter-update otomatis setelah pembelian, dan kelima endpoint harga
+ber-permission berperilaku persis seperti § 28.2.

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { KelolaUserTab } from "./pengaturan/KelolaUserTab";
 import { ShiftTab } from "./pengaturan/ShiftTab";
-import { PlaceholderPage } from "../components/PlaceholderPage";
+import { OutletKitchenTab } from "./pengaturan/OutletKitchenTab";
+import { IdentitasBisnisTab } from "./pengaturan/IdentitasBisnisTab";
 import { Card } from "../components/ui/Card";
 import { Field, Input } from "../components/ui/Input";
 import { Button } from "../components/ui/Button";
@@ -10,15 +11,18 @@ import { usePermission } from "../auth/usePermission";
 import { getTargetFoodCostPersen, setTargetFoodCostPersen } from "../api/pengaturan";
 import { ApiError } from "../api/client";
 
-type Tab = "user" | "shift" | "lainnya";
+type Tab = "user" | "shift" | "outlet" | "identitas" | "lainnya";
 
 export function PengaturanPage() {
   const canKelolaUser = usePermission("user.manage");
   const canKelolaShift = usePermission("shift_template.manage");
-  // Semua kontrol di tab "Lainnya" (target food cost, metode HPP default, lokasi, channel) adalah
-  // `pengaturan.manage` = OWNER SAJA. Sebelumnya tab-nya tetap tampil untuk Manajer Ops padahal
-  // isinya kosong/ditolak backend -- sekarang tabnya tidak ditampilkan sama sekali untuk dia.
+  // Semua kontrol di tab "Lainnya"/"Outlet & Kitchen"/"Identitas Bisnis" (target food cost,
+  // metode HPP default, lokasi, channel, identitas bisnis) adalah owner saja (pengaturan.manage
+  // atau identitas_bisnis.manage, keduanya owner-only). Sebelumnya tab-nya tetap tampil untuk
+  // Manajer Ops padahal isinya kosong/ditolak backend -- sekarang tabnya tidak ditampilkan sama
+  // sekali untuk dia.
   const canPengaturanSistem = usePermission("pengaturan.manage");
+  const canIdentitasBisnis = usePermission("identitas_bisnis.manage");
 
   // Tab "Kelola User" cuma untuk Owner (backend user.manage owner-only) -- Manajer Ops yang masuk ke
   // halaman ini tidak boleh melihat tab-nya sama sekali (bukan cuma kontennya disembunyikan), jadi
@@ -27,9 +31,11 @@ export function PengaturanPage() {
     () => [
       ...(canKelolaUser ? [{ key: "user" as const, label: "Kelola User" }] : []),
       ...(canKelolaShift ? [{ key: "shift" as const, label: "Shift" }] : []),
+      ...(canPengaturanSistem ? [{ key: "outlet" as const, label: "Outlet & Kitchen" }] : []),
+      ...(canIdentitasBisnis ? [{ key: "identitas" as const, label: "Identitas Bisnis" }] : []),
       ...(canPengaturanSistem ? [{ key: "lainnya" as const, label: "Lainnya" }] : []),
     ],
-    [canKelolaUser, canKelolaShift, canPengaturanSistem],
+    [canKelolaUser, canKelolaShift, canPengaturanSistem, canIdentitasBisnis],
   );
   const [tab, setTab] = useState<Tab>(canKelolaUser ? "user" : "shift");
   const tabAktif = tabs.some((t) => t.key === tab) ? tab : tabs[0]?.key;
@@ -57,17 +63,11 @@ export function PengaturanPage() {
 
       {tabAktif === "user" && canKelolaUser ? <KelolaUserTab /> : null}
       {tabAktif === "shift" && canKelolaShift ? <ShiftTab /> : null}
+      {tabAktif === "outlet" && canPengaturanSistem ? <OutletKitchenTab /> : null}
+      {tabAktif === "identitas" && canIdentitasBisnis ? <IdentitasBisnisTab /> : null}
       {tabAktif === "lainnya" && canPengaturanSistem ? (
         <div className="space-y-4">
           <TargetFoodCostCard />
-          <PlaceholderPage
-            title="Pengaturan lainnya"
-            rencana={[
-              "Metode HPP default global (harga_master / harga_beli_terakhir)",
-              "Kelola lokasi: tambah, ubah nama/entitas, nonaktifkan (butuh GET /lokasi, lihat catatan struktur)",
-              "Kelola channel penjualan: tambah, ubah nama/status (butuh GET /channel, lihat catatan struktur)",
-            ]}
-          />
         </div>
       ) : null}
     </div>

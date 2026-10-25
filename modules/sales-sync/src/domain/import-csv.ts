@@ -244,13 +244,26 @@ function bilanganBulatWajib(cols: string[], idx: number, nama: string): number {
  * `COMMENT ON TABLE salessync_transaksi`): kolom tanpa nama tidak pernah
  * dicari, jadi isinya tidak pernah masuk tabel.
  */
-function buatIndeks(header: string[], namaKolom: readonly string[]): Record<string, number> {
+/**
+ * @param kolomOpsionalHeader Nama kolom yang boleh TIDAK ADA SAMA SEKALI di
+ * header CSV (beda dari kolom opsional biasa, yang headernya wajib ada tapi
+ * NILAINYA boleh kosong per baris) -- dipakai untuk kolom baru yang
+ * ditambahkan belakangan (mis. `outlet_ref`), supaya CSV/workflow n8n lama
+ * yang belum menyertakan kolom itu tetap valid. idx-nya jadi -1 kalau
+ * memang tidak ada di header; `ambil()`/`teksOpsional()` sudah otomatis
+ * memperlakukan idx -1 sama seperti kolom kosong (`cols[-1]` -> `undefined`).
+ */
+function buatIndeks(
+  header: string[],
+  namaKolom: readonly string[],
+  kolomOpsionalHeader: readonly string[] = [],
+): Record<string, number> {
   const bersih = header.map((h) => h.trim());
   const idx: Record<string, number> = {};
   const hilang: string[] = [];
   for (const nama of namaKolom) {
     const i = bersih.indexOf(nama);
-    if (i === -1) hilang.push(nama);
+    if (i === -1 && !kolomOpsionalHeader.includes(nama)) hilang.push(nama);
     idx[nama] = i;
   }
   if (hilang.length > 0) {
@@ -304,11 +317,15 @@ async function jalankanUpsert(
   }
 }
 
-function siapkan(text: string, namaKolom: readonly string[]): { rows: string[][]; idx: Record<string, number> } {
+function siapkan(
+  text: string,
+  namaKolom: readonly string[],
+  kolomOpsionalHeader: readonly string[] = [],
+): { rows: string[][]; idx: Record<string, number> } {
   const rows = parseCsv(text ?? "");
   const header = rows[0];
   if (!header) throw new Error("CSV kosong -- tidak ada baris header");
-  return { rows: rows.slice(1), idx: buatIndeks(header, namaKolom) };
+  return { rows: rows.slice(1), idx: buatIndeks(header, namaKolom, kolomOpsionalHeader) };
 }
 
 function hasilKosong(): HasilImport {
@@ -329,12 +346,16 @@ const KOLOM_LOG = [
   "parent_item",
   "unique_key",
   "inv_status",
+  "outlet_ref",
 ] as const;
+
+/** `outlet_ref` BOLEH TIDAK ADA SAMA SEKALI di header -- lihat `buatIndeks`. Kolom baru Tahap 1 "Outlet & Kitchen", CSV/workflow n8n lama belum menyertakannya. */
+const KOLOM_LOG_OPSIONAL_HEADER = ["outlet_ref"] as const;
 
 const SQL_LOG = `
   INSERT INTO salessync_log_penjualan
-    (transaction_date, transaction_time, platform, order_id, item_name, menu_id, quantity, item_type, parent_item, unique_key, inv_status)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    (transaction_date, transaction_time, platform, order_id, item_name, menu_id, quantity, item_type, parent_item, unique_key, inv_status, outlet_ref)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
   ON CONFLICT (unique_key) DO UPDATE SET
     transaction_date = EXCLUDED.transaction_date,
     transaction_time = EXCLUDED.transaction_time,
@@ -345,17 +366,18 @@ const SQL_LOG = `
     quantity = EXCLUDED.quantity,
     item_type = EXCLUDED.item_type,
     parent_item = EXCLUDED.parent_item,
-    inv_status = EXCLUDED.inv_status
+    inv_status = EXCLUDED.inv_status,
+    outlet_ref = EXCLUDED.outlet_ref
   WHERE (
     salessync_log_penjualan.transaction_date, salessync_log_penjualan.transaction_time,
     salessync_log_penjualan.platform, salessync_log_penjualan.order_id,
     salessync_log_penjualan.item_name, salessync_log_penjualan.menu_id,
     salessync_log_penjualan.quantity, salessync_log_penjualan.item_type,
-    salessync_log_penjualan.parent_item, salessync_log_penjualan.inv_status
+    salessync_log_penjualan.parent_item, salessync_log_penjualan.inv_status, salessync_log_penjualan.outlet_ref
   ) IS DISTINCT FROM (
     EXCLUDED.transaction_date, EXCLUDED.transaction_time, EXCLUDED.platform, EXCLUDED.order_id,
     EXCLUDED.item_name, EXCLUDED.menu_id, EXCLUDED.quantity, EXCLUDED.item_type,
-    EXCLUDED.parent_item, EXCLUDED.inv_status
+    EXCLUDED.parent_item, EXCLUDED.inv_status, EXCLUDED.outlet_ref
   )
   RETURNING id, (xmax = 0) AS was_insert
 `;
@@ -373,7 +395,7 @@ const SQL_LOG = `
  */
 export async function importLogPenjualan(client: PoolClient, text: string): Promise<HasilImport> {
   const hasil = hasilKosong();
-  const { rows, idx } = siapkan(text, KOLOM_LOG);
+  const { rows, idx } = siapkan(text, KOLOM_LOG, KOLOM_LOG_OPSIONAL_HEADER);
 
   for (let i = 0; i < rows.length; i++) {
     const cols = rows[i]!;
@@ -391,6 +413,7 @@ export async function importLogPenjualan(client: PoolClient, text: string): Prom
         teksOpsional(cols, idx.parent_item!),
         teksWajib(cols, idx.unique_key!, "unique_key"),
         teksWajib(cols, idx.inv_status!, "inv_status"),
+        teksOpsional(cols, idx.outlet_ref!),
       ],
     }));
   }
