@@ -77,13 +77,32 @@ sungguhan, bukan disalin dari versi dokumen sebelumnya):
   (99.96% konsisten). Diperbaiki di kode (bukan di data lama), container
   `api` production di-rebuild & restart, `web`/n8n/Postgres/VNC tidak
   disentuh.
+- **Deploy #2 (2026-10-26): Outlet & Kitchen, Identitas Bisnis, Kelola User
+  lanjutan, Vendor & Katalog, dan perbaikan bug lokasi-async di seluruh
+  frontend** — 5 migrasi baru (`core/0010`, `inventory/0029-0031`,
+  `sales-sync/0002`) lintas 3 modul. **Latihan penuh dulu di salinan lokal
+  production SEBELUM dicoba sungguhan**: `pg_dump` production → restore ke
+  database lokal terpisah → migrasi diperiksa satu per satu (tidak ada data
+  uji dev yang ikut-ikutan, cuma seed generik yang memang perlu ada di
+  production juga: vendor "Pembelian Umum (pasar/warung)" dan identitas
+  bisnis "Burnas") → migrasi dijalankan ke salinan itu → jumlah baris 21
+  tabel lama identik sebelum/sesudah, HPP 58 menu dihitung ulang 0 selisih
+  → baru dicoba ke production sungguhan. Smoke test production lulus semua:
+  HTTPS valid, `/health` OK (`inventory` versi 0.10.0), endpoint login
+  merespons benar, **owner sendiri mengonfirmasi login normal**, jumlah
+  baris tabel lama identik (cuma `core_login_attempts` +1 dari smoke test
+  endpoint login itu sendiri — diharapkan), n8n/Postgres/VNC tidak
+  terganggu (uptime tetap "Up 7 days" sebelum & sesudah). Detail lengkap
+  metodologi: `docs/architecture-decisions.md` § 31.
 
 Ringkasnya: app Samsara Backoffice sudah bisa diakses publik dengan HTTPS
 valid di `burnas-app.duckdns.org`, berjalan berdampingan dengan n8n/VNC yang
 sudah ada tanpa mengganggu satu pun, database production sudah termigrasi
-bersih dari nol DAN data masternya sudah disinkronkan penuh dengan dev —
-app sudah benar-benar dipakai owner, bukan cuma live secara teknis.
-Production sekarang jadi acuan utama data master ke depan, bukan dev.
+bersih dari nol DAN data masternya sudah disinkronkan penuh dengan dev, DAN
+sudah melewati satu siklus deploy lanjutan penuh (Deploy #2, dengan latihan
+di salinan lokal lebih dulu) tanpa insiden — app sudah benar-benar dipakai
+owner, bukan cuma live secara teknis. Production sekarang jadi acuan utama
+data master ke depan, bukan dev.
 
 ---
 
@@ -418,8 +437,9 @@ Daftar murni fakta ketiadaan di kode saat ini, bukan roadmap:
   semua tabel/semua write — tiap domain function yang mau dicatat harus
   memanggilnya secara eksplisit.
 - **Backup**: script `devops/backup-db.sh` (pg_dump harian, retensi 7 hari)
-  **sudah ditulis**, tapi per `devops/README.md` **belum terpasang** sebagai
-  cron job di mana pun (menunggu akses SSH ke VPS saat deploy).
+  **terpasang sebagai cron job di VPS** (jam 3 pagi) sejak deploy pertama —
+  sudah dites manual berkali-kali (termasuk sekali lagi sebelum Deploy #2,
+  lihat § 1), file valid & permission 600.
 - **Status deploy dev vs production** (per `devops/README.md`, status
   terkini — lihat dokumen itu untuk detail per-langkah): dev lokal berjalan
   penuh dan diuji (lihat § 1 & § 5). **Production SUDAH LIVE** di
@@ -428,19 +448,19 @@ Daftar murni fakta ketiadaan di kode saat ini, bukan roadmap:
   terganggu, diverifikasi berkali-kali). Database `samsara` (role + password
   acak) dibuat lewat `docker exec` ke instance Postgres existing (role
   superuser instance ternyata `n8n`, bukan `postgres` — detail
-  `devops/README.md`), **migrasi production berhasil penuh** (42 file lintas
-  4 modul) setelah satu bug migrasi nyata ditemukan & diperbaiki (lihat
-  `docs/architecture-decisions.md` § 23 — migrasi `core/0006` crash di
-  database fresh, gap yang tidak pernah kelihatan di dev). Cron backup
-  harian terpasang dan sudah dites manual (file valid, permission 600).
-  Container `api`/`web` jalan dengan resource limit ketat (RAM VPS tipis,
-  sempat available < 1GB, owner mengonfirmasi eksplisit untuk lanjut) —
-  pemakaian aktual jauh di bawah limit, tidak OOM. **Satu-satunya yang
-  tersisa**: akun owner & integrasi production sengaja belum dibuat,
-  menunggu owner menjalankan sendiri `seed:owner`/`seed:integrasi` secara
-  interaktif supaya password tidak lewat tangan siapa pun selain owner
-  (lihat `docs/integrasi-n8n.md` untuk akun integrasi, `devops/README.md`
-  Langkah 7 untuk perintah persisnya).
+  `devops/README.md`), **migrasi production berhasil penuh** (sekarang 47
+  file lintas 4 modul, setelah Deploy #2 § 1) setelah satu bug migrasi nyata
+  ditemukan & diperbaiki di Deploy #1 (lihat `docs/architecture-decisions.md`
+  § 23 — migrasi `core/0006` crash di database fresh, gap yang tidak pernah
+  kelihatan di dev). Container `api`/`web` jalan dengan resource limit ketat
+  (RAM VPS tipis saat Deploy #1, sempat available < 1GB, owner mengonfirmasi
+  eksplisit untuk lanjut) — pemakaian aktual jauh di bawah limit, tidak OOM;
+  RAM tersedia saat Deploy #2 sudah lebih longgar (>2GB). **Akun owner &
+  integrasi production sudah dibuat owner sendiri** lewat `seed:owner`/
+  `seed:integrasi` (lihat `docs/integrasi-n8n.md` untuk akun integrasi,
+  `devops/README.md` Langkah 7 untuk perintah persisnya) — owner juga sudah
+  menambah akun tim sendiri lewat UI (supervisor & staf), app benar-benar
+  dipakai operasional sehari-hari, bukan cuma live secara teknis.
 
 ---
 

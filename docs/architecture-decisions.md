@@ -3245,3 +3245,117 @@ Penjualan, Mutasi Lain, Opname, Permintaan Masuk (CK), Stok -- termasuk
 override Pengajuan Libur) -- dipastikan dropdown lokasi BENAR-BENAR
 ke-select (`option (selected) value="..."` di accessibility tree, bukan
 cuma tampilan) dan data terkait ikut termuat tanpa reload manual.
+
+## 31. Deploy production #2: latihan di salinan lokal dulu, lalu migrasi + restart sungguhan (2026-10-26)
+
+Lanjutan § 29/§ 30 (perbaikan vendor-pembelian + bug lokasi-async) -- 5
+migrasi baru menumpuk sejak Deploy #1 (§ 23): `core/0010`,
+`inventory/0029`, `inventory/0030`, `inventory/0031`, `sales-sync/0002`.
+Owner secara eksplisit meminta metodologi 3 tahap (dev -> latihan di
+salinan lokal production -> production sungguhan) dengan aturan keras:
+TIDAK membaca/menulis kredensial ke chat/log/git, dan TIDAK
+stop/restart/ubah container n8n/Postgres/VNC atau binding Postgres/nginx
+sepanjang proses.
+
+### 31.1 Latihan di salinan lokal (sebelum menyentuh production sungguhan)
+
+`pg_dump` production dijalankan lewat SSH (`ssh samsara-vps`), password
+database di-source LANGSUNG dari `.env.production` di shell remote (lewat
+`set -a; . .env.production; set +a`) dan dipakai langsung sebagai env var
+`PGPASSWORD` ke `docker exec ... pg_dump` -- password TIDAK PERNAH tampil
+di output manapun yang terlihat, dump langsung dialirkan ke file lokal
+(permission 600). Container Postgres production HANYA dibaca (`pg_dump`
+read-only), uptime `n8n-stack-postgres-1` tetap "Up 7 days" sebelum dan
+sesudah (dicek eksplisit).
+
+Dump (306KB, 51 tabel, 6093 baris) di-restore ke database lokal BARU dan
+TERPISAH (`samsara_prod_rehearsal`, dibuat dengan superuser OS lokal lalu
+di-`OWNER TO samsara` -- role `samsara` sendiri sengaja TIDAK punya hak
+`CREATEDB`). Kelima migrasi baru diperiksa satu per satu dulu (manual,
+baca kode) sebelum dicoba: TIDAK ada satu pun yang menyeed data uji dev
+atau merujuk lokasi/vendor berdasarkan nama/kode dev -- satu-satunya INSERT
+data di kelima migrasi itu adalah seed generik yang MEMANG seharusnya ada
+di production juga (vendor "Pembelian Umum (pasar/warung)", identitas
+bisnis "Burnas", ambang `kenaikan_harga_vendor_persen`=10), semuanya
+`ON CONFLICT DO NOTHING` (idempotent). `core/0010`'s backfill kolom `tipe`
+pakai pola `entitas LIKE '%_ck'` (bukan hardcode nama lokasi persis) --
+dikonfirmasi cocok dengan data production sungguhan (`samsara_ck`/
+`samsara_outlet`, TERNYATA beda dari dev yang sempat di-rename ke "Burnas -
+Merjosari" lewat fitur Outlet & Kitchen -- lihat § 29.4; production tidak
+pernah ikut di-rename, jadi aman).
+
+Migrasi dijalankan ke salinan itu (`DB_NAME=samsara_prod_rehearsal npm run
+migrate`, DB_USER default `samsara` -- bukan override superuser, supaya
+kepemilikan tabel baru benar persis seperti di production sungguhan nanti)
+-- 0 error. Dikonfirmasi: 21 tabel lama (user, lokasi, item, menu, resep,
+harga channel, SEMUA jenis transaksi, pemetaan sales-sync) **jumlah
+barisnya identik** sebelum/sesudah migrasi. HPP ke-58 menu dihitung ulang
+lewat `getMenuHppReport` (fungsi domain langsung, bukan lewat API/login,
+pola sama seperti § 24) untuk SEMUA menu sebelum dan sesudah migrasi --
+**0 selisih** (script sekali-pakai `_tmp-hpp-snapshot.ts`, dihapus setelah
+dipakai). Database lokal + semua file dump/snapshot dihapus tuntas setelah
+verifikasi selesai.
+
+### 31.2 Deploy sungguhan ke production
+
+Setelah § 31.1 bersih (tidak ada selisih apa pun), baru dicoba ke
+production sungguhan, urutan persis sesuai instruksi owner:
+
+1. **Backup pra-deploy**: dijalankan ULANG `devops/backup-db.sh` (skrip
+   yang sama dengan cron harian jam 3 pagi, bukan skrip baru) secara manual
+   lewat SSH, hasilnya diverifikasi: permission 600, `gzip -t` valid, ukuran
+   wajar (46KB terkompresi), bisa dibaca (`zcat | head`) -- BARU setelah ini
+   lolos, lanjut ke langkah berikutnya (owner eksplisit minta "jangan lanjut
+   sebelum ini ada").
+2. **Cek resource**: RAM tersedia 2.3GB (ambang >1GB), disk tersedia 50GB
+   (ambang >15GB) -- jauh di atas ambang, beda dari kondisi RAM ketat saat
+   Deploy #1 (§ 23).
+3. **Sync kode**: `rsync` dari laptop ke `/root/samsara-backoffice` (pola
+   sama seperti Deploy #1, BUKAN `git clone` di VPS) -- SENGAJA TANPA flag
+   `--delete`: risiko `--delete` menghapus `.env.production` (file itu
+   HANYA ada di VPS, tidak pernah disalin dari laptop, karena gitignored)
+   jauh lebih berbahaya daripada risiko meninggalkan file basi yang toh
+   tidak ikut ke-build (Dockerfile `COPY` eksplisit per-direktori, bukan
+   `COPY .`). Diverifikasi `.env.production` tetap utuh (mtime/checksum
+   sama) setelah sync.
+4. **Build + restart**: `docker compose -f docker-compose.prod.yml build
+   api web` lalu `up -d api web` -- HANYA dua service ini (satu-satunya
+   yang didefinisikan compose file ini; n8n/Postgres/VNC dikelola compose
+   file lain yang sama sekali tidak disentuh). Migrasi jalan OTOMATIS di
+   awal `CMD` container `api` (lihat Dockerfile, idempotent lewat
+   `schema_migrations`) -- bukan langkah manual terpisah. Kelima migrasi
+   baru sukses jalan di log container, `api` jadi `healthy`.
+
+### 31.3 Smoke test
+
+Semua lulus: HTTPS valid (cert `burnas-app.duckdns.org`, expire Jan 2027),
+`GET /health` 200 (`inventory` versi 0.10.0, konfirmasi kode baru benar2
+jalan), `POST /api/auth/login` dengan kredensial sengaja salah merespons
+401 + pesan Indonesia yang benar (konfirmasi jalur auth utuh tanpa pernah
+menyentuh kredensial sungguhan), jumlah baris 21 tabel lama identik
+sebelum/sesudah (`core_login_attempts` +1, SESUAI EKSPEKTASI -- itu baris
+dari smoke test login-salah itu sendiri), dan n8n/Postgres/VNC tetap
+"Up 7 days" (tidak direstart sama sekali, dicek sebelum DAN sesudah).
+
+**Login owner**: SENGAJA tidak dites dengan kredensial sungguhan oleh
+Claude (melanggar aturan "jangan baca/tulis kredensial") -- sebagai
+gantinya, owner diminta langsung mencoba login manajemen di situs
+sungguhan dan mengonfirmasi sendiri hasilnya (berhasil normal). Ini pola
+yang lebih kuat daripada Claude mencoba login pakai akun verifikasi
+sementara di production (dipertimbangkan, ditolak -- membuat baris user
+baru di tabel `core_users` production, sekecil apa pun, dianggap tidak
+perlu kalau cukup diverifikasi pemilik akun aslinya langsung).
+
+Tidak ada selisih/kegagalan di mana pun -- tidak perlu restore dari
+backup.
+
+### 31.4 Verifikasi
+
+Smoke test § 31.3 semua lulus. `docker ps` dicek 2x (sebelum rsync, dan
+setelah restart `api`/`web`) -- `n8n-stack-n8n-1`, `n8n-stack-postgres-1`,
+`burnas-desktop` konsisten "Up 7 days" di kedua pengecekan. Tidak ada
+kredensial (password database, JWT secret, password owner) yang pernah
+tercetak ke chat/log/git sepanjang Tahap B maupun C -- password database
+hanya pernah "disentuh" lewat shell remote (`source .env.production`
+langsung di proses SSH), tidak pernah lewat argumen command yang terlihat
+di `ps`/riwayat command, tidak pernah lewat variabel yang di-echo.

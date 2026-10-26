@@ -1,9 +1,41 @@
 # Runbook Deploy Production — Samsara Backoffice
 
-Status per 2026-10-17 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
+Status per 2026-10-26 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
 disalin dari versi dokumen sebelumnya). **App sudah LIVE, dipakai owner
-sungguhan, dan data masternya sudah disinkronkan penuh dengan dev** — lihat
-§ "Sinkronisasi data master" di bawah.
+sungguhan, dan sudah melewati Deploy #2** — lihat § "Deploy #2" di bawah.
+
+## Deploy #2: Outlet & Kitchen, Identitas Bisnis, Vendor & Katalog, perbaikan bug lokasi-async (2026-10-26)
+
+5 migrasi baru lintas 3 modul (`core/0010`, `inventory/0029-0031`,
+`sales-sync/0002`) berhasil dijalankan ke production, container `api`/`web`
+di-rebuild & restart (n8n/Postgres/VNC **tidak disentuh sama sekali** --
+uptime tetap "Up 7 days" sebelum & sesudah, dicek eksplisit).
+
+**Metodologi** (owner meminta latihan penuh dulu sebelum production
+sungguhan, bukan langsung coba): `pg_dump` production → restore ke database
+lokal terpisah (`samsara_prod_rehearsal`) → kelima migrasi diperiksa manual
+satu per satu (tidak ada data uji dev yang ikut) → migrasi dijalankan ke
+salinan itu → 21 tabel lama (user/transaksi/stok/harga/pemetaan) dibandingkan
+jumlah barisnya sebelum/sesudah (**identik**) → HPP 58 menu dihitung ulang
+lewat fungsi domain langsung (**0 selisih**) → database lokal dihapus → BARU
+dicoba ke production sungguhan. Detail lengkap tiap langkah + rasionalnya:
+`docs/architecture-decisions.md` § 31.
+
+**Smoke test production**: HTTPS valid, `/health` OK (`inventory` versi
+0.10.0), endpoint login merespons benar (dites dengan kredensial sengaja
+salah, BUKAN kredensial sungguhan), **owner sendiri mengonfirmasi login
+manajemen berhasil normal** di situs live, jumlah baris tabel lama identik
+(`core_login_attempts` +1 dari smoke test login-salah itu sendiri, sesuai
+ekspektasi), n8n/Postgres/VNC tidak terganggu. Tidak ada kredensial apa pun
+(password database, password owner) yang pernah terbaca/tertulis ke
+chat/log/git sepanjang proses -- password database hanya disentuh lewat
+`source .env.production` langsung di shell remote SSH.
+
+Backup pra-deploy (dijalankan manual lewat script cron yang sama,
+`devops/backup-db.sh`) diverifikasi dulu (permission 600, `gzip -t` valid,
+ukuran wajar) SEBELUM migrasi dijalankan -- tersimpan di
+`/root/samsara-backups/samsara_2026-10-26_202550.sql.gz` di VPS, ikut
+rotasi retensi 7 hari otomatis seperti backup harian lainnya.
 
 ## Sinkronisasi data master dev -> production (2026-10-17)
 
@@ -55,7 +87,7 @@ live secara teknis, sudah benar-benar dipakai.
 | 6 | Swap VPS 2GB | ✅ Sudah ada sejak awal, tidak perlu dipasang lagi |
 | 7 | JWT secret production | ✅ Selesai, di `.env.production` |
 | 8 | Backup otomatis (pg_dump harian) | ✅ Cron terpasang (jam 3 pagi), sudah dites manual sekali — file backup valid (32KB, 5239 baris, permission 600) |
-| 9 | Migrasi ke database production | ✅ **Selesai, semua 42 file migrasi lintas 4 modul berhasil** (lihat bug migrasi yang ditemukan & diperbaiki di bawah) |
+| 9 | Migrasi ke database production | ✅ **Selesai, sekarang 47 file migrasi lintas 4 modul berhasil** (42 saat Deploy #1, +5 saat Deploy #2 2026-10-26 — lihat § "Deploy #2" di atas; bug migrasi yang ditemukan & diperbaiki saat Deploy #1 di bawah) |
 | 10 | Monitoring dasar | ✅ Docker healthcheck aktif, keduanya `healthy` |
 | 11 | Smoke test | ✅ HTTPS valid, `/health` OK, restart `api` sekali → naik lagi sendiri otomatis, n8n/Postgres/VNC tidak terganggu (uptime tidak reset) |
 | 12 | Akun owner & integrasi production | ✅ **Selesai** — `owner` dan `n8n-integrasi` sudah dibuat owner sendiri (Langkah 7), owner juga sudah menambah akun tim sendiri (`hisyam`/supervisor, `naura`/staf) lewat UI |
