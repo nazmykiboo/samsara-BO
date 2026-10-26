@@ -2,7 +2,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { pool } from "@samsara/core";
 import { listMinStokByLocation, upsertMinStok } from "./min-stok.js";
-import { locationId, withRollback } from "./test-helpers.js";
+import { locationId, outletLocationId, withRollback } from "./test-helpers.js";
 
 after(() => pool.end());
 
@@ -37,7 +37,7 @@ test("upsertMinStok: item+lokasi baru -> insert, audit log old_value null", asyn
 
 test("upsertMinStok: item+lokasi yang sudah ada -> update (ON CONFLICT), bukan baris baru; audit log old_value terisi", async () => {
   await withRollback(async (client) => {
-    const outlet = await locationId(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
 
     const first = await upsertMinStok(client, { itemKode: "BB-002", locationId: outlet, minStok: 100, userId: 1 });
     const second = await upsertMinStok(client, { itemKode: "BB-002", locationId: outlet, minStok: 250, userId: 1 });
@@ -95,7 +95,7 @@ test("upsertMinStok: item tidak ditemukan -> error", async () => {
 test("listMinStokByLocation: cuma baris milik lokasi yang diminta, tidak bocor dari lokasi lain", async () => {
   await withRollback(async (client) => {
     const ck = await locationId(client, "samsara_ck");
-    const outlet = await locationId(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
 
     await upsertMinStok(client, { itemKode: "BB-001", locationId: ck, minStok: 500, userId: 1 });
     await upsertMinStok(client, { itemKode: "BB-002", locationId: ck, minStok: 300, userId: 1 });

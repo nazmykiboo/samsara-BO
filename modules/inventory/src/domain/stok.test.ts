@@ -13,7 +13,7 @@ import {
   getDalamPerjalanan,
   listOpname,
 } from "./stok.js";
-import { locationId, withRollback } from "./test-helpers.js";
+import { locationId, outletLocationId, vendorIdPembelianUmum, withRollback } from "./test-helpers.js";
 
 after(() => pool.end());
 
@@ -30,7 +30,7 @@ test("createPembelian: konversi satuan beli ke satuan resep otomatis", async () 
 
     const result = await createPembelian(client, {
       locationId: ck,
-      supplier: "Toko Test",
+      vendorId: await vendorIdPembelianUmum(client),
       tanggal: "2026-09-29",
       baris: [{ itemKode: "BB-001", qtyBeli: 2, satuanBeli: "kg", hargaSatuan: 12000 }],
     });
@@ -43,13 +43,40 @@ test("createPembelian: konversi satuan beli ke satuan resep otomatis", async () 
   });
 });
 
-test("createPembelian: item pending_data tanpa konversi satuan ditolak, bukan diproses dengan angka salah", async () => {
+test("createPembelian: TANPA vendorId ditolak 400 dengan pesan jelas, vendor seed \"Pembelian Umum\" bisa dipakai", async () => {
   await withRollback(async (client) => {
     const ck = await locationId(client, "samsara_ck");
     await assert.rejects(
       () =>
+        // @ts-expect-error -- sengaja menghilangkan vendorId untuk menguji validasi wajibnya
         createPembelian(client, {
           locationId: ck,
+          tanggal: "2026-09-29",
+          baris: [{ itemKode: "BB-001", qtyBeli: 1, satuanBeli: "kg", hargaSatuan: 10000 }],
+        }),
+      /vendor wajib dipilih/i,
+    );
+
+    // Vendor seed dari migrasi 0031 memang dibuat supaya bisa dipakai di sini.
+    const result = await createPembelian(client, {
+      locationId: ck,
+      vendorId: await vendorIdPembelianUmum(client),
+      tanggal: "2026-09-29",
+      baris: [{ itemKode: "BB-001", qtyBeli: 1, satuanBeli: "kg", hargaSatuan: 10000 }],
+    });
+    assert.ok(result.headerId > 0, "vendor seed \"Pembelian Umum (pasar/warung)\" valid dipakai pembelian");
+  });
+});
+
+test("createPembelian: item pending_data tanpa konversi satuan ditolak, bukan diproses dengan angka salah", async () => {
+  await withRollback(async (client) => {
+    const ck = await locationId(client, "samsara_ck");
+    const vendorId = await vendorIdPembelianUmum(client);
+    await assert.rejects(
+      () =>
+        createPembelian(client, {
+          locationId: ck,
+          vendorId,
           tanggal: "2026-09-29",
           baris: [{ itemKode: "OP-006", qtyBeli: 1, satuanBeli: "pcs", hargaSatuan: 10000 }], // Sapu, pending_data
         }),
@@ -61,7 +88,7 @@ test("createPembelian: item pending_data tanpa konversi satuan ditolak, bukan di
 test("createTransferKirim: stok lokasi asal langsung berkurang, TAPI belum masuk stok lokasi manapun (dalam perjalanan)", async () => {
   await withRollback(async (client) => {
     const ck = await locationId(client, "samsara_ck");
-    const outlet = await locationId(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     const bubur = await itemId(client, "BB-001");
 
     const stokCkBefore = await getCurrentStock(client, bubur, ck);
@@ -89,7 +116,7 @@ test("createTransferKirim: stok lokasi asal langsung berkurang, TAPI belum masuk
 test("createTransferTerima: susut = qty_kirim - qty_terima tercatat saat terima, stok tujuan bertambah qty_terima", async () => {
   await withRollback(async (client) => {
     const ck = await locationId(client, "samsara_ck");
-    const outlet = await locationId(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     const bubur = await itemId(client, "BB-001");
 
     const kirim = await createTransferKirim(client, {
@@ -123,7 +150,7 @@ test("createTransferTerima: susut = qty_kirim - qty_terima tercatat saat terima,
 test("createTransferTerima: transfer yang sudah diterima tidak bisa diterima ulang", async () => {
   await withRollback(async (client) => {
     const ck = await locationId(client, "samsara_ck");
-    const outlet = await locationId(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
 
     const kirim = await createTransferKirim(client, {
       locationAsalId: ck,
@@ -143,7 +170,7 @@ test("createTransferTerima: transfer yang sudah diterima tidak bisa diterima ula
 test("createTransferKirim: antar entitas terdeteksi otomatis, harga transfer default = HPP item di lokasi asal (Skema A), dihitung saat kirim", async () => {
   await withRollback(async (client) => {
     const ck = await locationId(client, "samsara_ck");
-    const outlet = await locationId(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
 
     const result = await createTransferKirim(client, {
       locationAsalId: ck,
@@ -152,19 +179,26 @@ test("createTransferKirim: antar entitas terdeteksi otomatis, harga transfer def
       baris: [{ itemKode: "BB-001", qtyKirim: 50, unit: "gr" }],
     });
 
-    assert.equal(result.antarEntitas, true, "Central Kitchen dan Outlet 1 Malang beda entitas");
+    assert.equal(result.antarEntitas, true, "Central Kitchen dan outlet manapun (outletLocationId mengecualikan samsara_ck) beda entitas");
     assert.equal(result.baris[0].hargaTransferPerSatuan, 3.35, "default Skema A = harga_master item (BB-001)");
   });
 });
 
 test("createTransferKirim: transfer dalam entitas yang sama TIDAK ditandai antar_entitas", async () => {
   await withRollback(async (client) => {
-    // Buat lokasi kedua dengan entitas SAMA supaya bisa uji kasus non-antar-entitas.
+    const outlet1 = await outletLocationId(client);
+    // Lokasi kedua dibuat dengan entitas SAMA PERSIS seperti outlet1 (dibaca
+    // dinamis, BUKAN hardcode "samsara_outlet") supaya kasus non-antar-entitas
+    // benar-benar teruji terlepas dari apa pun entitas outlet dev saat ini.
+    const { rows: entitasRows } = await client.query<{ entitas: string }>(
+      `SELECT entitas FROM core_locations WHERE id = $1`,
+      [outlet1],
+    );
     const { rows } = await client.query<{ id: number }>(
-      `INSERT INTO core_locations (name, entitas, is_active) VALUES ('Samsara Outlet 2 Malang (test)', 'samsara_outlet', true) RETURNING id`,
+      `INSERT INTO core_locations (name, entitas, is_active) VALUES ('Outlet Kedua (test)', $1, true) RETURNING id`,
+      [entitasRows[0].entitas],
     );
     const outlet2 = rows[0].id;
-    const outlet1 = await locationId(client, "samsara_outlet");
 
     const result = await createTransferKirim(client, {
       locationAsalId: outlet1,
@@ -388,7 +422,7 @@ test("createMutasiLain: baris bertanda CAMPURAN dengan jenis 'waste_rusak' DITOL
 
 test("createPenjualan: 'jam' yang diisi tersimpan di kolom jam", async () => {
   await withRollback(async (client) => {
-    const outlet = await locationId(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
 
     const { headerId } = await createPenjualan(client, {
       locationId: outlet,
@@ -408,7 +442,7 @@ test("createPenjualan: 'jam' yang diisi tersimpan di kolom jam", async () => {
 
 test("createPenjualan: tanpa 'jam' -> kolom jam NULL, bukan error", async () => {
   await withRollback(async (client) => {
-    const outlet = await locationId(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
 
     const { headerId } = await createPenjualan(client, {
       locationId: outlet,
@@ -469,7 +503,7 @@ async function bacaSnapshotHppBaris(
 
 test("createPenjualan: baris baru otomatis dapat snapshot HPP ('snapshot_asli') sesuai method HPP aktif", async () => {
   await withRollback(async (client) => {
-    const outlet = await locationId(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     await buatMenuDenganHarga(client, "TEST-STOK-HPP-01", 1234.5);
 
     const { headerId } = await createPenjualan(client, {
@@ -487,7 +521,7 @@ test("createPenjualan: baris baru otomatis dapat snapshot HPP ('snapshot_asli') 
 
 test("createPenjualan: hpp_saat_transaksi TETAP (tidak ikut berubah) walau harga_master item diubah SETELAH transaksi dibuat", async () => {
   await withRollback(async (client) => {
-    const outlet = await locationId(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     await buatMenuDenganHarga(client, "TEST-STOK-HPP-02", 1000);
 
     const { headerId } = await createPenjualan(client, {
@@ -514,7 +548,7 @@ test("createPenjualan: hpp_saat_transaksi TETAP (tidak ikut berubah) walau harga
 
 test("createPenjualan: menu yang bergantung ke item pending_data -> hpp_saat_transaksi NULL TAPI hpp_sumber tetap 'snapshot_asli' (bukan NULL/estimasi)", async () => {
   await withRollback(async (client) => {
-    const outlet = await locationId(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     await buatMenuDenganHarga(client, "TEST-STOK-HPP-03", null); // harga_master kosong -> pending_data
 
     const { headerId } = await createPenjualan(client, {

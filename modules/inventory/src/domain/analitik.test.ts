@@ -898,10 +898,13 @@ test("getAnalitikOperasional: transfer status 'dikirim' TIDAK dihitung susut (qt
     const { rows: ckRows } = await client.query<{ id: string }>(
       `SELECT id FROM core_locations WHERE entitas = 'samsara_ck' LIMIT 1`,
     );
+    // entitas != 'samsara_ck' (BUKAN hardcode 'samsara_outlet') -- query yang
+    // diuji di sini (getAnalitikOperasional) sudah diperbaiki memakai pola
+    // yang sama, lihat COMMENT di domain/laporan.ts.
     const { rows: outletRows } = await client.query<{ id: string }>(
-      `SELECT id FROM core_locations WHERE entitas = 'samsara_outlet' LIMIT 1`,
+      `SELECT id FROM core_locations WHERE entitas != 'samsara_ck' AND is_active = true LIMIT 1`,
     );
-    assert.ok(ckRows[0] && outletRows[0], "butuh lokasi CK & outlet (migrasi 0011)");
+    assert.ok(ckRows[0] && outletRows[0], "butuh lokasi CK & minimal 1 outlet aktif (migrasi 0011)");
 
     const { rows: headerRows } = await client.query<{ id: string }>(
       `INSERT INTO inventory_transaksi_transfer (location_asal_id, location_tujuan_id, tanggal, status)

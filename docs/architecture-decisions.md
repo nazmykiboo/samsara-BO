@@ -2994,3 +2994,161 @@ CRUD vendor, isi katalog manual, form Pembelian auto-fill harga +
 peringatan real-time + peringatan di response setelah submit, katalog
 ter-update otomatis setelah pembelian, dan kelima endpoint harga
 ber-permission berperilaku persis seperti § 28.2.
+
+## 29. Vendor wajib di Pembelian, hapus kolom supplier, dan insiden rename lokasi dev (2026-10-26)
+
+### 29.1 Diagnosis: dropdown Vendor "sudah terisi" padahal belum dipilih
+
+Akar masalahnya BUKAN auto-select tersembunyi: `PembelianForm.tsx` versi
+Tahap 3 lupa me-reset `vendorId` di `handleSubmit` setelah berhasil simpan
+(baris `baris`/`supplier`/`noReferensi` di-reset, `vendorId` TIDAK). Jadi
+vendor dari pembelian sebelumnya "nempel" ke pembelian berikutnya di sesi
+yang sama — kebetulan waktu itu cuma ada satu vendor di database dev,
+jadi kelihatan seperti "vendor pertama otomatis terisi". Diperbaiki
+sekalian dengan alur baru (§ 29.2): `vendorId` sekarang WAJIB direset ke
+kosong setelah tiap submit berhasil, memaksa pilih ulang tiap pembelian.
+
+### 29.2 Vendor wajib, kolom `supplier` dihapus dari form + deprecated di backend
+
+Migrasi `0031_tambah_termin_vendor_dan_seed_pembelian_umum.sql`: kolom
+`termin` (teks bebas) di `inventory_vendor`, dan seed vendor **"Pembelian
+Umum (pasar/warung)"** (aktif, sengaja TANPA baris katalog apa pun) untuk
+pembelian dadakan tanpa vendor terstruktur.
+
+`createPembelian` (`domain/stok.ts`) sekarang melempar error jelas kalau
+`vendorId` kosong/falsy ("Vendor wajib dipilih..."), diterjemahkan router
+jadi 400 lewat pola error-handler yang sudah ada. Kolom `supplier` di
+header pembelian **selalu di-NULL-kan** untuk INSERT baru (bukan sekadar
+"tidak divalidasi" -- aktif dipaksa NULL), COMMENT ON COLUMN diperbarui
+jadi DEPRECATED. Baris LAMA (sebelum migrasi ini) yang masih punya teks
+supplier TETAP ADA apa adanya -- `domain/laporan.ts`'s query "masuk
+(pembelian)" di-LEFT JOIN ke `inventory_vendor` (`vendorNama`), dan
+frontend (`LaporanHarianPage.tsx`) menampilkan `vendorNama` kalau ada,
+kalau tidak ada fallback ke `"Supplier (lama): <teks>"`, kalau dua-duanya
+kosong baru `"Vendor tidak diisi"`.
+
+Form Pembelian (`PembelianForm.tsx`) kehilangan field "Supplier" sama
+sekali, dan dapat dropdown vendor BARU yang wajib (placeholder "Pilih
+vendor..." disabled, tanpa opsi "Tidak pakai vendor"), plus opsi
+**"+ Vendor baru..."** di dalam dropdown yang sama -- memilihnya membuka
+form singkat (nama, telepon, termin) langsung di halaman Pembelian,
+submit-nya memanggil `createVendor` lalu otomatis memilih vendor baru itu.
+Opsi ini cuma dirender kalau `usePermission("vendor.edit")` true
+(owner/manajer_ops) -- supervisor (yang juga boleh `pembelian.create`)
+tetap bisa MEMILIH vendor dari dropdown, cuma tidak bisa membuat baru.
+
+**Bug ditemukan saat implementasi**: `<Select required>` HTML5 pada
+dropdown vendor membuat BROWSER memblokir submit form SEBELUM
+`handleSubmit` sempat jalan (native validation, bukan JS) -- pesan error
+kustom Bahasa Indonesia ("Pilih vendor dulu...") jadi tidak pernah
+tampil, browser menampilkan tooltip native-nya sendiri. Diperbaiki:
+hapus atribut `required`, validasi wajib tetap jalan tapi murni di JS
+(konsisten dengan pola pesan error lain di form ini, mis. "Pilih lokasi
+dulu.").
+
+**Bug ditemukan saat verifikasi browser**: `WarningBox` (komponen
+`ResultBox.tsx`) merender root `<p>`, dan blok peringatan kenaikan harga
+di `PembelianForm.tsx` menaruh `<div>`/`<p>` BERSARANG di dalamnya --
+HTML tidak valid (`<p>` tidak boleh berisi elemen block), memicu error
+hydration React di console. Diperbaiki DI FILE INI SAJA (bukan ubah
+`WarningBox` -- semua pemakaian lain di codebase cuma mengisi teks
+inline): ganti jadi `<span className="block">` bersusun, bukan
+`<div>`/`<p>`.
+
+### 29.3 Dropdown lokasi: hapus suffix entitas teknis
+
+`LokasiPicker.tsx` dan satu salinan inline di `TransferKirimForm.tsx`
+("Lokasi tujuan") menampilkan `{l.name} ({l.entitas})` -- mis. "Samsara
+Central Kitchen (samsara_ck)". Kode entitas itu istilah teknis internal,
+tidak berguna untuk user non-teknis. Diperbaiki jadi `{l.name}` saja di
+kedua tempat. (`StokPage.tsx` punya filter "Entitas" TERPISAH yang memang
+sengaja menampilkan nilai entitas mentah sebagai pilihan filter -- itu
+bukan bug, konteksnya beda, tidak disentuh.)
+
+### 29.4 Insiden: lokasi outlet dev di-rename, membongkar bug tersembunyi
+
+Saat verifikasi, ditemukan lokasi non-CK di database dev sudah berubah
+dari seed awal "Samsara Outlet 1 Malang" (`entitas: samsara_outlet`)
+menjadi "Burnas - Merjosari" (`entitas: burnas_merjosari`) -- kemungkinan
+diedit manual lewat fitur Outlet & Kitchen (Tahap 1) untuk mengisi nama
+outlet sungguhan. Perubahan data yang SAH ini membongkar dua kategori
+masalah tersembunyi:
+
+1. **Bug produksi nyata**: `getAnalitikOperasional`'s query
+   `transferSusutTren` (`domain/laporan.ts`) hardcode
+   `tujuan.entitas = 'samsara_outlet'` -- begitu outlet di-rename, JOIN
+   ini berhenti mencocokkan baris APA PUN, secara DIAM-DIAM (bukan error)
+   membuat insight "tren susut transfer" di halaman Analitik Operasional
+   selalu nol. Diperbaiki: `tujuan.entitas != 'samsara_ck'` (generalisasi
+   "outlet mana saja selain CK", bukan hardcode satu nilai).
+2. **~30 test lama di seluruh test suite** (`stok.test.ts`,
+   `min-stok.test.ts`, `master.test.ts`, `laporan.test.ts`,
+   `analitik.test.ts` di modul Inventory, dan `auth.test.ts` di
+   `apps/api`) hardcode `locationId(client, "samsara_outlet")` atau query
+   serupa -- semuanya gagal begitu baris itu tidak ada lagi. Diperbaiki
+   dengan helper baru `outletLocationId(client)`
+   (`modules/inventory/src/domain/test-helpers.ts`): query generik
+   "lokasi aktif mana pun selain samsara_ck", dipakai ulang di semua
+   test yang cuma butuh "outlet APAPUN" (bukan test yang sengaja menguji
+   entitas tertentu, itu tidak disentuh). Satu test
+   (`createTransferKirim: transfer dalam entitas yang sama...`,
+   `stok.test.ts`) harus diperbaiki lebih dalam: ia membuat lokasi kedua
+   dengan entitas HARDCODE `'samsara_outlet'` untuk menguji kasus
+   "non-antar-entitas" -- sekarang entitas lokasi keduanya dibaca dinamis
+   dari `outlet1` yang sungguhan, bukan hardcode, supaya tidak rusak lagi
+   kalau outlet di-rename lagi di masa depan.
+
+   Bug KEDUA yang ditemukan dari perbaikan ini sendiri: `outletLocationId`
+   awalnya mengembalikan `rows[0].id` APA ADANYA (ikut jebakan umum di
+   repo ini -- driver `pg` mengembalikan kolom BIGINT sebagai STRING JS
+   walau tipe TS bilang `number`). Satu test (`laporan.test.ts`) yang
+   membandingkan hasilnya dengan `assert.equal` ke angka yang SUDAH
+   di-`Number()`-kan di tempat lain gagal (`2 !== '2'`). Diperbaiki: tambah
+   `Number(...)` eksplisit di `outletLocationId`.
+
+**Keputusan**: TIDAK mengubah lokasi "Burnas - Merjosari" kembali ke nama
+lama -- itu data dev yang sah milik tim. Dua follow-up dilempar sebagai
+task terpisah (bukan dikerjakan di sesi ini, di luar scope vendor):
+(a) pola bug frontend yang SAMA seperti § 29.5 di bawah ternyata juga ada
+di beberapa form lain, (b) `docs/panduan-ops.md` masih menyebut "Samsara
+Outlet 1 Malang" sebagai contoh di ~18 tempat.
+
+### 29.5 Bug tambahan ditemukan saat verifikasi (tidak terkait vendor langsung)
+
+`LaporanHarianPage.tsx` tidak pernah memuat data sama sekali selama
+verifikasi -- network tab menunjukkan GET `/laporan/harian` TIDAK PERNAH
+dipanggil. Akar masalah: `useState<number | null>(options[0]?.id ?? null)`
+untuk `locationId`, pola LAMA dari sebelum Tahap 1 yang mengasumsikan
+`useLokasiOptions()` sudah terisi di render pertama -- padahal sekarang
+async (live API). `options` kosong -> `locationId` permanen `null` ->
+`useEffect` fetch laporan selalu `return` lebih awal. Dropdown lokasi
+TETAP TAMPAK terisi lokasi pertama secara visual (quirk `<select>` native:
+controlled `value` yang tidak cocok opsi manapun bikin browser menampilkan
+opsi pertama apa adanya), menyamarkan bug ini sampai dicek network tab.
+Diperbaiki dengan pola async-default yang sama seperti `LokasiPicker`/
+`TransferKirimForm` dkk (Tahap 1): initializer `null`, lalu `useEffect`
+yang mengisi SEKALI begitu `options` terisi.
+
+Pola bug yang SAMA PERSIS ditemukan (lewat `grep`, belum diperbaiki)
+di `PenjualanForm.tsx`, `ProduksiForm.tsx`, `OpnameInputForm.tsx`,
+`MutasiLainForm.tsx`, `PermintaanMasukPanel.tsx`, `JadwalTab.tsx`
+(modul HR), `PengajuanLiburTab.tsx` (modul HR), dan `StokPage.tsx` --
+dilempar sebagai task terpisah, bukan diperbaiki di sini (di luar scope
+vendor, dan mengubah 8 file sekaligus tanpa verifikasi satu-satu per
+file berisiko kurang teliti kalau dikerjakan tergesa di tengah tugas
+lain).
+
+### 29.6 Verifikasi
+
+166 test domain modul Inventory lulus (1 test baru: vendorId wajib
+ditolak + vendor seed valid dipakai; 3 test lain disesuaikan fixture-nya
+tanpa mengubah apa yang diuji), 313 test lulus total di seluruh
+workspace, typecheck bersih. Diverifikasi manual di browser utuh 4 role
+(akun sementara, dibuat & dibersihkan lewat script sekali-pakai seperti
+pola § A): Owner dan Manajer Ops sama-sama melihat opsi "+ Vendor baru..."
+(keduanya `vendor.edit`), Supervisor melihat dropdown vendor tapi TANPA
+opsi itu dan tidak bisa membuka halaman Master sama sekali, Staf tidak
+melihat tab Pembelian di Transaksi sama sekali. Laporan Harian
+dikonfirmasi menampilkan nama vendor untuk pembelian baru dan
+"Supplier (lama): ..." untuk satu baris data lama yang sengaja dibuat
+manual lewat SQL lalu dihapus lagi setelah diverifikasi.

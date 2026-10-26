@@ -21,6 +21,9 @@ export interface LaporanHarianMasukBaris {
   qtyBeli: number;
   satuanBeli: string;
   hargaSatuan: number;
+  /** Nama vendor (Tahap 3) kalau header pembelian ini punya vendor_id. Null untuk pembelian lama sebelum vendor diwajibkan. */
+  vendorNama: string | null;
+  /** DEPRECATED -- teks bebas dari SEBELUM vendor diwajibkan. Null untuk semua pembelian baru (lihat COMMENT di migrasi 0031). Tetap dibaca untuk baris lama, ditampilkan sebagai "Supplier (lama)" di frontend. */
   supplier: string | null;
   noReferensi: string | null;
 }
@@ -72,20 +75,26 @@ export async function getLaporanHarian(client: PoolClient, input: GetLaporanHari
   }));
 
   // --- masuk: daftar pembelian hari itu, per baris (detail, + info header) ---
+  // LEFT JOIN ke inventory_vendor (BUKAN JOIN biasa): pembelian lama sebelum
+  // vendor diwajibkan punya vendor_id NULL, baris itu tetap harus muncul di
+  // laporan (vendorNama null, supplier teks lama kalau ada -- lihat
+  // LaporanHarianMasukBaris).
   const { rows: masukRows } = await client.query<{
     item_kode: string;
     item_nama: string;
     qty_beli: string;
     satuan_beli: string;
     harga_satuan: string;
+    vendor_nama: string | null;
     supplier: string | null;
     no_referensi: string | null;
   }>(
     `SELECT i.kode AS item_kode, i.name AS item_nama, b.qty_beli, b.satuan_beli, b.harga_satuan,
-            h.supplier, h.no_referensi
+            v.name AS vendor_nama, h.supplier, h.no_referensi
      FROM inventory_transaksi_pembelian h
      JOIN inventory_transaksi_pembelian_baris b ON b.header_id = h.id
      JOIN inventory_items i ON i.id = b.item_id
+     LEFT JOIN inventory_vendor v ON v.id = h.vendor_id
      WHERE h.location_id = $1 AND h.tanggal = $2
      ORDER BY h.id, i.kode`,
     [input.locationId, input.tanggal],
@@ -96,6 +105,7 @@ export async function getLaporanHarian(client: PoolClient, input: GetLaporanHari
     qtyBeli: Number(r.qty_beli),
     satuanBeli: r.satuan_beli,
     hargaSatuan: Number(r.harga_satuan),
+    vendorNama: r.vendor_nama,
     supplier: r.supplier,
     noReferensi: r.no_referensi,
   }));
@@ -972,13 +982,20 @@ export async function getAnalitikOperasional(
   }
 
   // --- transferSusutTren --------------------------------------------------
+  // Tujuan transfer SENGAJA `entitas != 'samsara_ck'` (bukan hardcode nilai
+  // entitas outlet tertentu, mis. 'samsara_outlet') -- bug nyata ditemukan
+  // saat perbaikan vendor-pembelian (lihat docs/architecture-decisions.md
+  // §29): entitas outlet dev bisa berubah lewat fitur Outlet & Kitchen,
+  // dan versi lama query ini diam-diam berhenti mencocokkan baris apa pun
+  // (bukan error, cuma angka transferSusutTren jadi nol terus) begitu outlet
+  // di-rename entitasnya.
   const { rows: transferRows } = await client.query<{ pekan_ke: number; susut_total: string | null }>(
     `SELECT (h.tanggal - $1::date) / 7 AS pekan_ke,
             SUM(b.qty_kirim - b.qty_terima) AS susut_total
      FROM inventory_transaksi_transfer h
      JOIN inventory_transaksi_transfer_baris b ON b.header_id = h.id
      JOIN core_locations asal ON asal.id = h.location_asal_id AND asal.entitas = 'samsara_ck'
-     JOIN core_locations tujuan ON tujuan.id = h.location_tujuan_id AND tujuan.entitas = 'samsara_outlet'
+     JOIN core_locations tujuan ON tujuan.id = h.location_tujuan_id AND tujuan.entitas != 'samsara_ck'
      WHERE h.status = 'diterima' AND h.tanggal BETWEEN $1 AND $2
      GROUP BY (h.tanggal - $1::date) / 7`,
     [rentangMulai, rentangSelesai],

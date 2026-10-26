@@ -4,7 +4,7 @@ import type { PoolClient } from "pg";
 import { pool, writeAuditLog, type AuthUser } from "@samsara/core";
 import { createPenjualan } from "./stok.js";
 import { DEFAULT_LIMIT_DETAIL_PENJUALAN, getDetailTransaksiPenjualan } from "./laporan.js";
-import { locationId, withRollback } from "./test-helpers.js";
+import { locationId, outletLocationId, withRollback } from "./test-helpers.js";
 
 after(() => pool.end());
 
@@ -76,7 +76,7 @@ function channelTest(nama: string): string {
 
 test("getDetailTransaksiPenjualan: satu objek per BARIS menu, bukan per header", async () => {
   await withRollback(async (client) => {
-    const outlet = await lokasi(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     const tanggal = await tanggalRelatif(client, 0);
     const sumber = channelTest("PER-BARIS");
 
@@ -119,7 +119,7 @@ test("getDetailTransaksiPenjualan: satu objek per BARIS menu, bukan per header",
 
 test("getDetailTransaksiPenjualan: ikut membawa snapshot HPP (hppSaatTransaksi/hppSumber, migrasi 0028) per baris", async () => {
   await withRollback(async (client) => {
-    const outlet = await lokasi(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     const tanggal = await tanggalRelatif(client, 0);
     const sumber = channelTest("SNAPSHOT-HPP");
 
@@ -153,7 +153,7 @@ test("getDetailTransaksiPenjualan: ikut membawa snapshot HPP (hppSaatTransaksi/h
 
 test("getDetailTransaksiPenjualan: filter rentang tanggal (BETWEEN, batas ikut terhitung)", async () => {
   await withRollback(async (client) => {
-    const outlet = await lokasi(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     const sumber = channelTest("RENTANG");
 
     const sebelum = await tanggalRelatif(client, -11);
@@ -195,7 +195,7 @@ test("getDetailTransaksiPenjualan: filter rentang tanggal (BETWEEN, batas ikut t
 
 test("getDetailTransaksiPenjualan: tanpa param tanggal -> default 30 hari terakhir", async () => {
   await withRollback(async (client) => {
-    const outlet = await lokasi(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     const sumber = channelTest("DEFAULT-30-HARI");
 
     const hariIni = await tanggalRelatif(client, 0);
@@ -225,7 +225,7 @@ test("getDetailTransaksiPenjualan: tanpa param tanggal -> default 30 hari terakh
 
 test("getDetailTransaksiPenjualan: cuma tanggal_mulai diisi -> sisi selesai = hari ini", async () => {
   await withRollback(async (client) => {
-    const outlet = await lokasi(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     const sumber = channelTest("MULAI-SAJA");
 
     const mulai = await tanggalRelatif(client, -60);
@@ -253,7 +253,7 @@ test("getDetailTransaksiPenjualan: cuma tanggal_mulai diisi -> sisi selesai = ha
 
 test("getDetailTransaksiPenjualan: cuma tanggal_selesai diisi -> sisi mulai = 30 hari sebelumnya", async () => {
   await withRollback(async (client) => {
-    const outlet = await lokasi(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     const sumber = channelTest("SELESAI-SAJA");
 
     const selesai = await tanggalRelatif(client, -10);
@@ -286,7 +286,7 @@ test("getDetailTransaksiPenjualan: cuma tanggal_selesai diisi -> sisi mulai = 30
 
 test("getDetailTransaksiPenjualan: filter channel cocok PERSIS ke kolom sumber (case-sensitive)", async () => {
   await withRollback(async (client) => {
-    const outlet = await lokasi(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     const tanggal = await tanggalRelatif(client, 0);
 
     // Nilai channel sungguhan dari inventory_sales_channel (migrasi 0011).
@@ -341,7 +341,7 @@ test("getDetailTransaksiPenjualan: filter channel cocok PERSIS ke kolom sumber (
 
 test("getDetailTransaksiPenjualan: filter kode_menu cuma mengambil baris menu itu, header lain tidak bocor", async () => {
   await withRollback(async (client) => {
-    const outlet = await lokasi(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     const tanggal = await tanggalRelatif(client, 0);
     const sumber = channelTest("KODE-MENU");
 
@@ -373,7 +373,7 @@ test("getDetailTransaksiPenjualan: filter kode_menu cuma mengambil baris menu it
 
 test("getDetailTransaksiPenjualan: sumberPencatatan 'sinkronisasi' kalau ada jejak audit log created_via=sales-sync, 'manual' kalau tidak", async () => {
   await withRollback(async (client) => {
-    const outlet = await lokasi(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     const tanggal = await tanggalRelatif(client, 0);
     const sumber = channelTest("SUMBER-PENCATATAN");
 
@@ -432,7 +432,7 @@ test("getDetailTransaksiPenjualan: sumberPencatatan 'sinkronisasi' kalau ada jej
 
 test("getDetailTransaksiPenjualan: role non-allLocations dipaksa ke lokasi sendiri walau lokasiId tidak dikirim", async () => {
   await withRollback(async (client) => {
-    const outlet = await lokasi(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     const ck = await lokasi(client, "samsara_ck");
     const tanggal = await tanggalRelatif(client, 0);
     const sumber = channelTest("LOKASI-SCOPE");
@@ -480,7 +480,7 @@ test("getDetailTransaksiPenjualan: role non-allLocations dipaksa ke lokasi sendi
 
 test("getDetailTransaksiPenjualan: owner boleh mempersempit ke satu lokasi lewat lokasiId", async () => {
   await withRollback(async (client) => {
-    const outlet = await lokasi(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     const ck = await lokasi(client, "samsara_ck");
     const tanggal = await tanggalRelatif(client, 0);
     const sumber = channelTest("LOKASI-OWNER");
@@ -508,7 +508,7 @@ test("getDetailTransaksiPenjualan: owner boleh mempersempit ke satu lokasi lewat
 
 test("getDetailTransaksiPenjualan: hasil selalu dibatasi LIMIT, tidak pernah mengembalikan tabel penuh", async () => {
   await withRollback(async (client) => {
-    const outlet = await lokasi(client, "samsara_outlet");
+    const outlet = await outletLocationId(client);
     const tanggal = await tanggalRelatif(client, 0);
     const sumber = channelTest("LIMIT");
 

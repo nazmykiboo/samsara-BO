@@ -103,7 +103,7 @@ export function TransferKirimForm() {
           </option>
           {tujuanOptions.map((l) => (
             <option key={l.id} value={l.id}>
-              {l.name} ({l.entitas})
+              {l.name}
             </option>
           ))}
         </Select>

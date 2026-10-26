@@ -26,9 +26,10 @@ import type {
 
 export function createPembelian(input: {
   locationId: number;
-  supplier?: string;
-  /** Tahap 3, opsional -- BEDA dari `supplier` (teks bebas), lihat docs/architecture-decisions.md §28. */
-  vendorId?: number;
+  /** WAJIB -- backend menolak 400 kalau kosong. Pakai vendor seed "Pembelian
+   * Umum (pasar/warung)" untuk pembelian dadakan tanpa vendor terstruktur.
+   * Field `supplier` (teks bebas) sudah DIHAPUS, lihat docs/architecture-decisions.md §28/§29. */
+  vendorId: number;
   noReferensi?: string;
   tanggal: string;
   baris: PembelianBarisInput[];

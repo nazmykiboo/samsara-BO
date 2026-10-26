@@ -187,7 +187,7 @@ Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
   untuk heatmap) ✅, Transfer 2 tahap kirim→terima dengan susut tercatat ✅,
   Mutasi Lain dengan 6 jenis terstruktur (waste_rusak, hilang_tidak_diketahui,
   staff_meal, sampel, retur_supplier, koreksi_tambah) ✅, Opname 2 tahap
-  draft→keputusan ✅ — **semuanya teruji** (165 test domain + test regresi
+  draft→keputusan ✅ — **semuanya teruji** (166 test domain + test regresi
   permission di `apps/api`).
 - Channel penjualan & harga per channel (termasuk komisi channel, saran
   harga otomatis berdasar target food cost, export/import CSV harga massal)
@@ -231,22 +231,32 @@ Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
   referensi di frontend (`apps/web`). Tabelnya ada di database, kosong
   fungsinya.
 - **Vendor & Katalog** (Tahap 3, dalam modul Inventory — **bukan modul PO/
-  hutang/retur/QC terpisah, sengaja tidak dibangun**) — ✅ teruji (14 test
-  domain + verifikasi langsung lewat browser/API):
-  - CRUD vendor (nama, kontak, telepon, alamat, aktif/nonaktif) + pencarian
-    nama ILIKE — tab **Master > Vendor**, `vendor.edit` (owner/manajer_ops).
+  hutang/retur/QC terpisah, sengaja tidak dibangun**) — ✅ teruji (15 test
+  domain + verifikasi langsung lewat browser/API, 4 role):
+  - CRUD vendor (nama, kontak, telepon, alamat, **termin pembayaran**,
+    aktif/nonaktif) + pencarian nama ILIKE — tab **Master > Vendor**,
+    `vendor.edit` (owner/manajer_ops). Vendor juga bisa dibuat **langsung
+    dari dalam form Pembelian** lewat opsi "+ Vendor baru..." di dropdown
+    vendor (form singkat: nama, telepon, termin — cuma tampil untuk role
+    yang punya `vendor.edit`).
   - Katalog vendor-item: harga per vendor+item, **riwayat harga selalu
     bertambah** (tidak pernah overwrite, jadi tren harga vendor tetap
     terlacak). "Pencarian barang ke vendor" (`GET
     /vendor/untuk-item/:itemKode`) — lintas vendor, urut harga termurah
     dulu, untuk bandingkan sebelum beli.
-  - Form Pembelian: dropdown vendor opsional (terpisah dari field
-    "Supplier" teks bebas lama, keduanya tetap ada berdampingan), item
-    dari katalog mengisi **harga terakhir otomatis**, dan peringatan
+  - **Vendor WAJIB dipilih di form Pembelian** (bukan opsional lagi sejak
+    perbaikan lanjutan setelah Tahap 3) — backend menolak 400 kalau
+    `vendorId` kosong, dengan pesan yang mengarahkan ke vendor seed
+    **"Pembelian Umum (pasar/warung)"** (dibuat migrasi 0031) untuk
+    pembelian dadakan tanpa vendor tetap. Kolom `supplier` TEKS BEBAS lama
+    **sudah dihapus dari form** dan DEPRECATED di backend (selalu NULL
+    untuk pembelian baru) — baris lama yang masih punya teks supplier
+    tetap kebaca, ditampilkan sebagai "Supplier (lama)" di Laporan Harian.
+    Item dari katalog mengisi **harga terakhir otomatis**, dan peringatan
     **real-time** (sebelum submit) + di **response setelah submit** kalau
     kenaikan harga di atas ambang (`inventory_insight_rules`, default 10%,
-    owner bisa ubah). `vendorId` di tabel pembelian **nullable** — pembelian
-    tanpa vendor (cuma teks supplier) tetap jalan seperti sebelumnya.
+    owner bisa ubah). Alasan & detail insiden: `docs/architecture-decisions.md`
+    § 29.
   - **Harga difilter berdasar permission `hpp.lihat_harga`** (role
     supervisor/staf): katalog per vendor, "pencarian barang ke vendor", dan
     riwayat harga semuanya **menyembunyikan/403 harga** untuk role tanpa
@@ -320,12 +330,16 @@ Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
 
 Daftar murni fakta ketiadaan di kode saat ini, bukan roadmap:
 
-- **Modul Purchasing penuh (PO, hutang/termin pembayaran, retur ke vendor,
-  QC penerimaan)** — tidak ada, **sengaja tidak dibangun** di Tahap 3.
-  Master vendor + katalog harga + riwayat harga per vendor **sudah ada**
-  (lihat § 4 Inventory, "Vendor & Katalog"); kolom `supplier TEXT` bebas di
-  header Pembelian juga **masih ada berdampingan** dengan `vendor_id`
-  (nullable) — bukan diganti.
+- **Modul Purchasing penuh (PO, hutang/jatuh tempo pembayaran, retur ke
+  vendor, QC penerimaan)** — tidak ada, **sengaja tidak dibangun** di
+  Tahap 3. Master vendor + katalog harga + riwayat harga per vendor
+  **sudah ada** (lihat § 4 Inventory, "Vendor & Katalog"), termasuk kolom
+  `termin` di vendor (teks bebas, mis. "Net 30") — tapi **murni
+  informasional**, tidak ada logika hutang/jatuh tempo apa pun yang
+  membacanya. Kolom `supplier TEXT` bebas lama di header Pembelian
+  **DEPRECATED** sejak `vendor_id` diwajibkan (bukan lagi berdampingan
+  aktif) — kolomnya masih ada di database untuk baca data lama, tapi
+  tidak ditulis lagi untuk pembelian baru.
 - **Isolasi multi-tenant/multi-brand sungguhan di level kode** — tidak ada.
   Satu database `samsara` untuk satu brand (Burnas/Samsara). "Satu Jarvis,
   banyak bisnis" di `CLAUDE.md` § 1 adalah konteks operasional Claude Code

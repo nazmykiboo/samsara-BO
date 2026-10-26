@@ -17,6 +17,8 @@ export interface VendorRow {
   kontakNama: string | null;
   telepon: string | null;
   alamat: string | null;
+  /** Syarat pembayaran, teks bebas -- opsional, informasional saja (migrasi 0031). */
+  termin: string | null;
   isActive: boolean;
 }
 
@@ -26,6 +28,7 @@ function toVendorRow(row: {
   kontak_nama: string | null;
   telepon: string | null;
   alamat: string | null;
+  termin: string | null;
   is_active: boolean;
 }): VendorRow {
   return {
@@ -34,6 +37,7 @@ function toVendorRow(row: {
     kontakNama: row.kontak_nama,
     telepon: row.telepon,
     alamat: row.alamat,
+    termin: row.termin,
     isActive: row.is_active,
   };
 }
@@ -47,7 +51,7 @@ export async function listVendor(client: PoolClient, search?: string): Promise<V
     where = `WHERE name ILIKE $1`;
   }
   const { rows } = await client.query(
-    `SELECT id, name, kontak_nama, telepon, alamat, is_active FROM inventory_vendor ${where} ORDER BY name`,
+    `SELECT id, name, kontak_nama, telepon, alamat, termin, is_active FROM inventory_vendor ${where} ORDER BY name`,
     params,
   );
   return rows.map(toVendorRow);
@@ -58,13 +62,14 @@ export interface VendorInput {
   kontakNama?: string | null;
   telepon?: string | null;
   alamat?: string | null;
+  termin?: string | null;
 }
 
 export async function createVendor(client: PoolClient, input: VendorInput): Promise<{ id: number }> {
   if (!input.name.trim()) throw new Error("Nama vendor wajib diisi");
   const { rows } = await client.query<{ id: number }>(
-    `INSERT INTO inventory_vendor (name, kontak_nama, telepon, alamat) VALUES ($1, $2, $3, $4) RETURNING id`,
-    [input.name.trim(), input.kontakNama ?? null, input.telepon ?? null, input.alamat ?? null],
+    `INSERT INTO inventory_vendor (name, kontak_nama, telepon, alamat, termin) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    [input.name.trim(), input.kontakNama ?? null, input.telepon ?? null, input.alamat ?? null, input.termin ?? null],
   );
   return { id: rows[0].id };
 }
@@ -74,6 +79,7 @@ export interface UpdateVendorInput {
   kontakNama?: string | null;
   telepon?: string | null;
   alamat?: string | null;
+  termin?: string | null;
   isActive?: boolean;
 }
 
@@ -83,19 +89,21 @@ export async function updateVendor(client: PoolClient, id: number, input: Update
     kontak_nama: string | null;
     telepon: string | null;
     alamat: string | null;
+    termin: string | null;
     is_active: boolean;
-  }>(`SELECT name, kontak_nama, telepon, alamat, is_active FROM inventory_vendor WHERE id = $1`, [id]);
+  }>(`SELECT name, kontak_nama, telepon, alamat, termin, is_active FROM inventory_vendor WHERE id = $1`, [id]);
   const old = rows[0];
   if (!old) throw new Error(`Vendor id ${id} tidak ditemukan`);
   if (input.name !== undefined && !input.name.trim()) throw new Error("Nama vendor tidak boleh kosong");
 
   await client.query(
-    `UPDATE inventory_vendor SET name = $1, kontak_nama = $2, telepon = $3, alamat = $4, is_active = $5 WHERE id = $6`,
+    `UPDATE inventory_vendor SET name = $1, kontak_nama = $2, telepon = $3, alamat = $4, termin = $5, is_active = $6 WHERE id = $7`,
     [
       input.name?.trim() ?? old.name,
       input.kontakNama === undefined ? old.kontak_nama : input.kontakNama,
       input.telepon === undefined ? old.telepon : input.telepon,
       input.alamat === undefined ? old.alamat : input.alamat,
+      input.termin === undefined ? old.termin : input.termin,
       input.isActive ?? old.is_active,
       id,
     ],

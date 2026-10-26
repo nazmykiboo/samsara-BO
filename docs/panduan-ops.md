@@ -241,31 +241,58 @@ ditampilkan sebagai tab: **Pembelian**, **Produksi**, **Penjualan**,
 ### 5.1 Cara input pembelian
 
 **Skenario**: Samsara Central Kitchen baru saja menerima kiriman **Gula
-pasir** 20 kg dari supplier, harga Rp17.500/kg. Perlu dicatat supaya stok
-Gula pasir di Central Kitchen bertambah.
+pasir** 20 kg dari vendor "CV Sumber Pangan", harga Rp17.500/kg. Perlu
+dicatat supaya stok Gula pasir di Central Kitchen bertambah.
 
 1. Buka menu **Transaksi**, lalu pilih tab **Pembelian**.
 2. Di kotak **Lokasi**, pilih **Samsara Central Kitchen**.
-3. (Opsional) Isi **Supplier** dan **No. referensi** kalau ada nota/nomor
-   pembelian dari supplier.
-4. Isi **Tanggal** pembelian (defaultnya sudah terisi tanggal hari ini).
-5. Di kotak **"Tambah item"**, ketik "Gula" lalu klik **Gula pasir** dari
+3. Di kotak **Vendor**, pilih vendor yang mengirim barangnya (mis. "CV
+   Sumber Pangan"). **Vendor wajib dipilih** — pembelian tidak bisa
+   disimpan tanpa vendor. Kalau belinya dadakan di warung/pasar (bukan
+   vendor langganan), pilih **"Pembelian Umum (pasar/warung)"**, bukan
+   dikosongkan.
+   - Belum ada di daftar vendor? Pilih **"+ Vendor baru..."** di paling
+     bawah dropdown (cuma muncul untuk Owner/Manajer Ops) — isi nama,
+     telepon, dan termin pembayaran (semuanya opsional kecuali nama),
+     lalu tekan **Simpan vendor**. Vendor baru langsung terpilih,
+     lanjutkan ke langkah berikutnya.
+4. (Opsional) Isi **No. referensi** kalau ada nomor nota dari vendor.
+5. Isi **Tanggal** pembelian (defaultnya sudah terisi tanggal hari ini).
+6. Di kotak **"Tambah item"**, ketik "Gula" lalu klik **Gula pasir** dari
    daftar yang muncul. Baris baru akan muncul di bawah untuk item ini.
-6. Isi tiga kolom di baris Gula pasir:
+   Kalau vendor ini pernah tercatat menjual Gula pasir sebelumnya, kolom
+   **Harga/satuan** otomatis terisi harga terakhirnya — tinggal dicek,
+   boleh diubah kalau harga sekarang beda.
+7. Isi tiga kolom di baris Gula pasir:
    - **Qty beli**: `20`
    - **Satuan beli**: sudah otomatis terisi `kg` (satuan beli item ini),
      bisa diubah kalau perlu.
    - **Harga/satuan**: `17500`
-7. Tekan tombol **Simpan pembelian** di paling bawah.
-8. Kalau berhasil, akan muncul kotak hijau "Pembelian #... tersimpan --
+   - Kalau harga yang diisi naik lebih dari ambang tertentu (default 10%)
+     dibanding harga terakhir vendor ini, muncul peringatan kuning di
+     bawah baris itu — **bukan larangan**, cuma pengingat supaya dicek
+     ulang sebelum disimpan (mungkin salah ketik, atau memang harga
+     vendor sedang naik).
+8. Tekan tombol **Simpan pembelian** di paling bawah.
+9. Kalau berhasil, akan muncul kotak hijau "Pembelian #... tersimpan --
    1 baris item, stok bertambah sesuai konversi ke satuan resep." Stok
    Gula pasir di Samsara Central Kitchen otomatis bertambah — sistem yang
    menghitung sendiri konversi dari kg (satuan beli) ke gram (satuan
-   resep Gula pasir), kamu tidak perlu menghitung manual.
+   resep Gula pasir), kamu tidak perlu menghitung manual. Kalau ada baris
+   yang harganya naik di atas ambang, ringkasannya muncul lagi di sini
+   (kotak kuning) setelah tersimpan.
 
 Kamu bisa menambahkan lebih dari satu item dalam satu pembelian yang sama
 (misalnya sekalian catat Kecap dan Minyak dari kiriman yang sama) — cukup
-ulangi langkah 5–6 untuk tiap item sebelum menekan Simpan.
+ulangi langkah 6–7 untuk tiap item sebelum menekan Simpan.
+
+**Kenapa vendor sekarang wajib?** Supaya harga beli tiap item bisa
+dilacak per vendor dari waktu ke waktu (harga terakhir, riwayat harga,
+pembanding antar vendor) — lihat § 6 "Tab Vendor" di bawah. Sebelum
+perubahan ini pembelian cuma punya kolom "Supplier" teks bebas yang tidak
+tersambung ke mana-mana; kolom itu sekarang **sudah dihapus** dari form
+(pembelian lama yang masih punya catatan supplier teks tetap bisa dilihat
+di Laporan Harian, ditandai "Supplier (lama)").
 
 ### 5.2 Cara input produksi
 
@@ -550,13 +577,20 @@ Halaman **Master** hanya muncul di menu untuk **Owner dan Manajer Ops**.
 **Supervisor dan Staf tidak bisa membuka halaman ini sama sekali** — baik
 untuk menambah item baru, mengubah resep, maupun menonaktifkan sesuatu.
 Antara Owner dan Manajer Ops sendiri tidak ada perbedaan akses di halaman
-ini — keduanya punya hak yang sama untuk mengelola item dan resep
-(bedanya baru muncul di halaman Menu & HPP soal siapa boleh ubah harga
-jual, dan di halaman Pengaturan yang khusus Owner).
+ini — keduanya punya hak yang sama untuk mengelola item, resep, dan
+vendor (bedanya baru muncul di halaman Menu & HPP soal siapa boleh ubah
+harga jual, dan di halaman Pengaturan yang khusus Owner).
+
+Pengecualian untuk **data Vendor**: Supervisor memang tidak bisa membuka
+halaman Master sama sekali, tapi tetap bisa **memilih** vendor dari
+dropdown saat input Pembelian (§ 5.1) — dia cuma tidak bisa menambah atau
+mengubah data vendor itu sendiri (tidak muncul opsi "+ Vendor baru..." di
+dropdown-nya, beda dari Owner/Manajer Ops yang melihat opsi itu).
 
 ### Cara pakai (ringkas)
 
-Halaman ini punya 3 tab: **Item**, **Resep Produksi**, **Resep Menu**.
+Halaman ini punya 4 tab: **Item**, **Resep Produksi**, **Resep Menu**,
+**Vendor**.
 
 - **Tab Item**: menampilkan daftar semua item. Tekan **+ Item** untuk
   menambah item baru (wajib isi Kode unik seperti `BB-058`, Nama yang
@@ -578,6 +612,19 @@ Halaman ini punya 3 tab: **Item**, **Resep Produksi**, **Resep Menu**.
   Kuah bubur, Chili oil) selain bahan baku/kemasan/operasional. Mengubah
   resep menu di sini langsung memengaruhi perhitungan HPP menu itu di
   halaman Menu & HPP.
+- **Tab Vendor**: daftar vendor/supplier langganan. Tekan **+ Tambah
+  vendor** untuk menambah vendor baru (nama wajib unik, kontak/telepon/
+  alamat/termin pembayaran opsional). Tekan **Lihat katalog** di satu
+  vendor untuk melihat/mencatat harga item yang pernah dibeli darinya —
+  tiap kali harga dicatat (manual di sini, atau otomatis lewat Pembelian),
+  riwayatnya tersimpan dan bisa dilihat, tidak pernah ditimpa. Harga di
+  tab ini **disembunyikan** untuk role yang tidak boleh melihat harga/HPP
+  (Supervisor dan Staf tidak punya akses ke halaman ini sama sekali,
+  jadi ini relevan kalau suatu saat aksesnya diperluas). Di bagian bawah
+  ada kartu **"Teks supplier lama (belum jadi vendor)"** — daftar nama
+  supplier teks bebas dari pembelian SEBELUM vendor diwajibkan, murni
+  untuk ditinjau manual; sistem **tidak pernah** menggabungkannya otomatis
+  ke vendor manapun karena nama yang mirip belum tentu vendor yang sama.
 
 Kategori dan satuan yang muncul di dropdown form Item sudah diambil dari
 daftar master sungguhan (bukan data contoh) — kalau nilai yang kamu
@@ -597,7 +644,11 @@ tahu apa saja yang terjadi hari itu. Ada 4 bagian:
 - **Keluar (menu terjual)** — ringkasan menu yang terjual pada tanggal
   itu, dijumlah per menu.
 - **Masuk (pembelian)** — barang yang dibeli pada tanggal itu, lengkap
-  dengan supplier dan harga per satuan.
+  dengan nama **vendor** dan harga per satuan. Untuk pembelian lama dari
+  sebelum vendor diwajibkan (lihat § 5.1), di sini tampil
+  **"Supplier (lama): ..."** memakai catatan teks lama itu, bukan nama
+  vendor — murni supaya data lama tetap kebaca, bukan berarti vendornya
+  bisa dipilih ulang untuk pembelian baru.
 - **Permintaan ke CK** — permintaan transfer yang diajukan lokasi itu ke
   Central Kitchen pada tanggal itu (lihat bagian 5.6), dengan status
   Menunggu dipenuhi/Dipenuhi/Dibatalkan.
@@ -605,8 +656,8 @@ tahu apa saja yang terjadi hari itu. Ada 4 bagian:
   stoknya **sekarang** sudah di bawah stok minimum. **Bagian ini beda
   dari tiga yang lain**: isinya selalu kondisi Central Kitchen *saat
   halaman dibuka*, tidak terikat ke lokasi/tanggal yang kamu pilih di
-  atas (meskipun kamu sedang melihat laporan Samsara Outlet 1 Malang
-  tanggal kemarin, bagian ini tetap menunjukkan kondisi CK hari ini).
+  atas (meskipun kamu sedang melihat laporan outlet lain tanggal
+  kemarin, bagian ini tetap menunjukkan kondisi CK hari ini).
 
 ### Siapa boleh apa
 

@@ -20,7 +20,7 @@ import {
 } from "./master.js";
 import { createKategori, createKategoriMenu, createSatuan, updateKategoriMenu } from "./referensi.js";
 import { getMenuHppReport } from "./hpp.js";
-import { locationId, withRollback } from "./test-helpers.js";
+import { locationId, outletLocationId, withRollback } from "./test-helpers.js";
 
 after(() => pool.end());
 
@@ -465,7 +465,7 @@ test("createMenu: kategoriId yang tidak ada ATAU nonaktif ditolak sebelum menyen
 test("createMenu: lokasiIds SEBAGIAN -> baris pengecualian (aktif=false) cuma untuk lokasi yang TIDAK disebut", async () => {
   await withRollback(async (client) => {
     const ckId = Number(await locationId(client, "samsara_ck"));
-    const outletId = Number(await locationId(client, "samsara_outlet"));
+    const outletId = Number(await outletLocationId(client));
 
     // Menu cuma tayang di outlet -> CK harus dapat baris pengecualian.
     const { id: menuId } = await createMenu(client, {
@@ -497,7 +497,7 @@ test("createMenu: lokasiIds SEBAGIAN -> baris pengecualian (aktif=false) cuma un
 test("createMenu: lokasiIds kosong/tidak dikirim DAN lokasiIds berisi semua lokasi -> sama-sama tanpa baris inventory_menu_lokasi", async () => {
   await withRollback(async (client) => {
     const ckId = Number(await locationId(client, "samsara_ck"));
-    const outletId = Number(await locationId(client, "samsara_outlet"));
+    const outletId = Number(await outletLocationId(client));
 
     const tanpaParam = await createMenu(client, { kode: "TEST-MENU-121", name: "Test Menu Semua Lokasi Default" });
     const semuaLokasi = await createMenu(client, {
@@ -602,7 +602,7 @@ test("duplicateMenu: menu sumber tidak ada -> error 'Menu sumber ... tidak ditem
 test("duplicateMenu: lokasiIds sebagian diteruskan ke createMenu (semantik pengecualian tetap berlaku untuk hasil duplikat)", async () => {
   await withRollback(async (client) => {
     const ckId = Number(await locationId(client, "samsara_ck"));
-    const outletId = Number(await locationId(client, "samsara_outlet"));
+    const outletId = Number(await outletLocationId(client));
 
     await createMenu(client, { kode: "TEST-MENU-135", name: "Test Menu Sumber Lokasi" });
     await updateMenuResep(client, "TEST-MENU-135", [{ itemKode: "BB-001", qty: 7, unit: "gr" }]);

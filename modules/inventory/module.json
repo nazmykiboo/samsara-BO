@@ -116,7 +116,7 @@
       {
         "method": "POST",
         "path": "/transaksi/pembelian",
-        "description": "Catat pembelian; qty diinput satuan beli, dikonversi otomatis ke satuan resep, stok bertambah. Body boleh menyertakan 'vendorId' opsional (Tahap 3, BEDA dari 'supplier' teks bebas yang sudah ada) -- kalau diisi, katalog vendor (harga terakhir + riwayat) diperbarui otomatis untuk tiap baris. Response menyertakan 'peringatanHarga' (array, informasional, tidak pernah menggagalkan pembelian) untuk baris yang harganya naik melewati ambang persen di inventory_insight_rules (kode 'kenaikan_harga_vendor_persen').",
+        "description": "Catat pembelian; qty diinput satuan beli, dikonversi otomatis ke satuan resep, stok bertambah. Body WAJIB menyertakan 'vendorId' (ditolak 400 kalau kosong) -- pakai vendor seed 'Pembelian Umum (pasar/warung)' untuk pembelian dadakan tanpa vendor terstruktur. Katalog vendor (harga terakhir + riwayat) diperbarui otomatis untuk tiap baris. Field 'supplier' (teks bebas) DEPRECATED, diabaikan/selalu NULL untuk pembelian baru -- dipertahankan hanya di baris lama. Response menyertakan 'peringatanHarga' (array, informasional, tidak pernah menggagalkan pembelian) untuk baris yang harganya naik melewati ambang persen di inventory_insight_rules (kode 'kenaikan_harga_vendor_persen').",
         "permission": {
           "action": "pembelian.create",
           "roles": ["owner", "manajer_ops", "supervisor"],
@@ -314,7 +314,7 @@
       {
         "method": "POST",
         "path": "/vendor",
-        "description": "Tambah vendor baru (name wajib unik, kontakNama/telepon/alamat opsional).",
+        "description": "Tambah vendor baru (name wajib unik, kontakNama/telepon/alamat/termin opsional). Juga dipakai form '+ Vendor baru' singkat (nama/telepon/termin) di dalam dropdown vendor form Pembelian.",
         "permission": { "action": "vendor.edit", "roles": ["owner", "manajer_ops"] }
       },
       {

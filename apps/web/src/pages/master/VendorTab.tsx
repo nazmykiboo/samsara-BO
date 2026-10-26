@@ -85,7 +85,9 @@ export function VendorTab() {
                       {v.name} {!v.isActive ? <Badge tone="neutral">Nonaktif</Badge> : null}
                     </p>
                     <p className="text-xs text-slate-500">
-                      {[v.kontakNama, v.telepon, v.alamat].filter(Boolean).join(" · ") || "Belum ada detail kontak"}
+                      {[v.kontakNama, v.telepon, v.alamat, v.termin ? `Termin: ${v.termin}` : null]
+                        .filter(Boolean)
+                        .join(" · ") || "Belum ada detail kontak"}
                     </p>
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-1.5">
@@ -148,6 +150,7 @@ function VendorForm({
   const [kontakNama, setKontakNama] = useState(initial?.kontakNama ?? "");
   const [telepon, setTelepon] = useState(initial?.telepon ?? "");
   const [alamat, setAlamat] = useState(initial?.alamat ?? "");
+  const [termin, setTermin] = useState(initial?.termin ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -165,6 +168,7 @@ function VendorForm({
         kontakNama: kontakNama.trim() || null,
         telepon: telepon.trim() || null,
         alamat: alamat.trim() || null,
+        termin: termin.trim() || null,
       };
       if (initial) await updateVendor(initial.id, payload);
       else await createVendor(payload);
@@ -205,6 +209,9 @@ function VendorForm({
         </Field>
         <Field label="Alamat (opsional)">
           <Input value={alamat} onChange={(e) => setAlamat(e.target.value)} />
+        </Field>
+        <Field label="Termin pembayaran (opsional)">
+          <Input value={termin} onChange={(e) => setTermin(e.target.value)} placeholder="mis. Tunai, Net 30" />
         </Field>
 
         {error ? <ErrorBox>{error}</ErrorBox> : null}

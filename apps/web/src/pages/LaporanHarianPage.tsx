@@ -13,11 +13,22 @@ import { formatRupiah, todayIso } from "../utils/format";
 
 export function LaporanHarianPage() {
   const options = useLokasiOptions();
-  const [locationId, setLocationId] = useState<number | null>(options[0]?.id ?? null);
+  const [locationId, setLocationId] = useState<number | null>(null);
   const [tanggal, setTanggal] = useState(todayIso());
   const [data, setData] = useState<LaporanHarian | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Daftar lokasi dimuat async (lihat LokasiContext) -- `options` masih
+  // kosong di render pertama, jadi default "lokasi = yang pertama" tidak
+  // bisa lagi diisi langsung di useState initializer (bug nyata: dropdown
+  // TAMPAK terisi lokasi pertama secara visual -- quirk <select> native
+  // kalau controlled value tidak cocok opsi manapun -- padahal locationId
+  // sungguhan tetap null, jadi laporan tidak pernah di-fetch). Cuma mengisi
+  // SEKALI kalau belum pernah dipilih, pola sama seperti LokasiPicker.
+  useEffect(() => {
+    if (locationId === null && options.length > 0) setLocationId(options[0].id);
+  }, [options, locationId]);
 
   useEffect(() => {
     if (locationId === null) {
@@ -140,7 +151,9 @@ function MasukSection({ data }: { data: LaporanHarian }) {
                 </span>
               </div>
               <div className="mt-0.5 flex items-center justify-between text-xs text-slate-500">
-                <span>{row.supplier ?? "Supplier tidak diisi"}</span>
+                <span>
+                  {row.vendorNama ?? (row.supplier ? `Supplier (lama): ${row.supplier}` : "Vendor tidak diisi")}
+                </span>
                 <span>{formatRupiah(row.hargaSatuan)} / {row.satuanBeli}</span>
               </div>
               {row.noReferensi ? <p className="mt-0.5 text-xs text-slate-400">Ref: {row.noReferensi}</p> : null}

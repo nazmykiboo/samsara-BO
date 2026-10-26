@@ -135,18 +135,17 @@ test("laporkanSupplierLama: HANYA baris dengan vendor_id NULL, dikelompokkan per
     const ck = await locationId(client, "samsara_ck");
     const supplierUnik = `${PREFIX}Toko Lama ${Date.now()}`;
 
-    await createPembelian(client, {
-      locationId: ck,
-      supplier: supplierUnik,
-      tanggal: "2026-09-29",
-      baris: [{ itemKode: "BB-001", qtyBeli: 1, satuanBeli: "kg", hargaSatuan: 10000 }],
-    });
-    await createPembelian(client, {
-      locationId: ck,
-      supplier: supplierUnik,
-      tanggal: "2026-09-30",
-      baris: [{ itemKode: "BB-001", qtyBeli: 1, satuanBeli: "kg", hargaSatuan: 10000 }],
-    });
+    // createPembelian() SEKARANG mewajibkan vendorId (lihat stok.ts) dan
+    // selalu menulis supplier=NULL untuk baris baru -- jadi baris "legacy"
+    // (supplier teks, vendor_id NULL) yang jadi target laporan ini TIDAK
+    // BISA lagi dibuat lewat domain function itu. Disimulasikan dengan
+    // INSERT langsung, mewakili data yang sudah ada di database SEBELUM
+    // perubahan ini (lihat migrasi 0031 COMMENT ON COLUMN .supplier).
+    await client.query(
+      `INSERT INTO inventory_transaksi_pembelian (location_id, supplier, vendor_id, tanggal)
+       VALUES ($1, $2, NULL, $3), ($1, $2, NULL, $4)`,
+      [ck, supplierUnik, "2026-09-29", "2026-09-30"],
+    );
 
     const laporan = await laporkanSupplierLama(client);
     const baris = laporan.find((l) => l.supplier === supplierUnik);
@@ -218,19 +217,22 @@ test("createPembelian dengan vendorId TAPI item BELUM PERNAH ada di katalog -- t
   });
 });
 
-test("createPembelian TANPA vendorId: katalog vendor TIDAK tersentuh sama sekali (backward compatible)", async () => {
+test("createPembelian: vendorId wajib -- ditolak 400 kalau kosong (tes di stok.test.ts); vendor LAIN yang tidak dipakai tetap kosong katalognya", async () => {
   await withRollback(async (client) => {
     const ck = await locationId(client, "samsara_ck");
-    const { id: vendorId } = await createVendor(client, { name: `${PREFIX}Vendor Tidak Dipakai` });
+    const { id: vendorDipakai } = await createVendor(client, { name: `${PREFIX}Vendor Dipakai` });
+    const { id: vendorTidakDipakai } = await createVendor(client, { name: `${PREFIX}Vendor Tidak Dipakai` });
 
     await createPembelian(client, {
       locationId: ck,
-      supplier: "Toko Lain (teks bebas, bukan vendor ini)",
+      vendorId: vendorDipakai,
       tanggal: "2026-09-29",
       baris: [{ itemKode: "BB-001", qtyBeli: 1, satuanBeli: "kg", hargaSatuan: 11000 }],
     });
 
-    const katalog = await listKatalogByVendor(client, vendorId);
-    assert.equal(katalog.length, 0, "vendor yang tidak direferensikan di pembelian ini tetap kosong katalognya");
+    const katalogDipakai = await listKatalogByVendor(client, vendorDipakai);
+    assert.equal(katalogDipakai.length, 1, "vendor yang direferensikan di pembelian ini dapat entri katalog");
+    const katalogTidakDipakai = await listKatalogByVendor(client, vendorTidakDipakai);
+    assert.equal(katalogTidakDipakai.length, 0, "vendor LAIN yang tidak direferensikan tetap kosong katalognya");
   });
 });

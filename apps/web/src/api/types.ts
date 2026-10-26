@@ -170,6 +170,8 @@ export interface Vendor {
   kontakNama: string | null;
   telepon: string | null;
   alamat: string | null;
+  /** Syarat pembayaran, teks bebas (mis. "Tunai", "Net 30") -- opsional, informasional saja. */
+  termin: string | null;
   isActive: boolean;
 }
 
@@ -178,6 +180,7 @@ export interface VendorInput {
   kontakNama?: string | null;
   telepon?: string | null;
   alamat?: string | null;
+  termin?: string | null;
 }
 
 /** GET /vendor/:id/katalog -- hargaTerakhir tidak ada di respons untuk role supervisor/staf (hpp.lihat_harga). */
@@ -525,6 +528,9 @@ export interface LaporanHarianMasukBaris {
   qtyBeli: number;
   satuanBeli: string;
   hargaSatuan: number;
+  /** Nama vendor (Tahap 3+) kalau pembelian ini punya vendor. Null untuk pembelian lama sebelum vendor diwajibkan. */
+  vendorNama: string | null;
+  /** DEPRECATED -- teks bebas dari SEBELUM vendor diwajibkan, null untuk pembelian baru. Tampilkan sebagai "Supplier (lama)" kalau terisi. */
   supplier: string | null;
   noReferensi: string | null;
 }

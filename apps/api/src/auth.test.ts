@@ -118,11 +118,23 @@ async function createUserViaApi(
 before(async () => {
   const client = await pool.connect();
   try {
-    const { rows: locs } = await client.query<{ id: number; entitas: string }>(
-      `SELECT id, entitas FROM core_locations WHERE entitas IN ('samsara_ck', 'samsara_outlet')`,
+    // SENGAJA TIDAK hardcode entitas "samsara_outlet" -- nama/entitas outlet
+    // dev bisa berubah kapan saja lewat fitur Outlet & Kitchen (sudah pernah
+    // terjadi, lihat docs/architecture-decisions.md §29). ckLocationId tetap
+    // dicari spesifik entitas 'samsara_ck' (stabil, lokasi Central Kitchen
+    // tidak pernah di-rename entitasnya); outletLocationId diambil sebagai
+    // "lokasi aktif mana pun selain itu".
+    const { rows: ckRows } = await client.query<{ id: number }>(
+      `SELECT id FROM core_locations WHERE entitas = 'samsara_ck'`,
     );
-    ckLocationId = locs.find((r) => r.entitas === "samsara_ck")!.id;
-    outletLocationId = locs.find((r) => r.entitas === "samsara_outlet")!.id;
+    const { rows: outletRows } = await client.query<{ id: number }>(
+      `SELECT id FROM core_locations WHERE entitas != 'samsara_ck' AND is_active = true ORDER BY id LIMIT 1`,
+    );
+    if (!ckRows[0] || !outletRows[0]) {
+      throw new Error("Fixture lokasi (samsara_ck + minimal 1 outlet aktif) tidak lengkap di database dev");
+    }
+    ckLocationId = ckRows[0].id;
+    outletLocationId = outletRows[0].id;
   } finally {
     client.release();
   }

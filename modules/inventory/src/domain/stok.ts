@@ -70,9 +70,11 @@ export interface PembelianBarisInput {
 
 export interface PembelianInput {
   locationId: number;
-  supplier?: string;
-  /** Opsional (Tahap 3) -- kalau diisi, katalog vendor (harga terakhir + riwayat) diperbarui otomatis untuk tiap baris. TIDAK menggantikan `supplier` (lihat COMMENT di migrasi 0030). */
-  vendorId?: number;
+  /** WAJIB sejak perbaikan vendor-pembelian (sebelumnya opsional di Tahap 3) --
+   * lihat validasi di awal createPembelian. Kalau pembelian dadakan tanpa vendor
+   * terstruktur (mis. beli di warung), pakai vendor seed "Pembelian Umum
+   * (pasar/warung)" dari migrasi 0031, BUKAN dikosongkan. */
+  vendorId: number;
   noReferensi?: string;
   tanggal: string;
   /** Diisi otomatis dari user yang login (lihat api/router.ts), bukan input client. */
@@ -90,25 +92,27 @@ export interface PeringatanKenaikanHarga {
 export interface PembelianResult {
   headerId: number;
   baris: Array<{ itemKode: string; qtyRecipeUnit: number }>;
-  /** Terisi kalau `vendorId` dikirim DAN ada baris yang harganya naik melewati ambang `kenaikan_harga_vendor_persen` (inventory_insight_rules) dibanding harga terakhir di katalog. Informasional -- TIDAK pernah menggagalkan pembelian. */
+  /** Terisi kalau ADA baris yang harganya naik melewati ambang `kenaikan_harga_vendor_persen` (inventory_insight_rules) dibanding harga terakhir di katalog vendor itu. Informasional -- TIDAK pernah menggagalkan pembelian. */
   peringatanHarga: PeringatanKenaikanHarga[];
 }
 
 /** Pembelian: qty diinput dalam satuan beli, dikonversi otomatis ke satuan resep. */
 export async function createPembelian(client: PoolClient, input: PembelianInput): Promise<PembelianResult> {
   if (input.baris.length === 0) throw new Error("Pembelian harus punya minimal 1 baris");
+  if (!input.vendorId) {
+    throw new Error(
+      "Vendor wajib dipilih untuk pembelian. Kalau pembelian dadakan tanpa vendor terstruktur (mis. di warung/pasar), pilih vendor \"Pembelian Umum (pasar/warung)\".",
+    );
+  }
 
+  // `supplier` SENGAJA selalu NULL untuk baris baru -- kolom itu deprecated
+  // sejak vendor_id diwajibkan (lihat COMMENT ON COLUMN di migrasi 0031).
+  // Baris LAMA yang masih punya teks supplier dibiarkan apa adanya, dibaca
+  // sebagai "Supplier (lama)" di Laporan Harian (domain/laporan.ts).
   const { rows: headerRows } = await client.query<{ id: number }>(
     `INSERT INTO inventory_transaksi_pembelian (location_id, supplier, vendor_id, no_referensi, tanggal, dibuat_oleh)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-    [
-      input.locationId,
-      input.supplier ?? null,
-      input.vendorId ?? null,
-      input.noReferensi ?? null,
-      input.tanggal,
-      input.createdByUserId ?? null,
-    ],
+     VALUES ($1, NULL, $2, $3, $4, $5) RETURNING id`,
+    [input.locationId, input.vendorId, input.noReferensi ?? null, input.tanggal, input.createdByUserId ?? null],
   );
   const headerId = headerRows[0].id;
 
@@ -147,16 +151,14 @@ export async function createPembelian(client: PoolClient, input: PembelianInput)
       qtyChange: qtyRecipeUnit,
     });
 
-    if (input.vendorId !== undefined) {
-      const hasil = await catatHargaDariPembelian(client, {
-        vendorId: input.vendorId,
-        itemId: item.id,
-        hargaBaru: baris.hargaSatuan,
-        pembelianHeaderId: headerId,
-      });
-      if (hasil.peringatanKenaikan) {
-        peringatanHarga.push({ itemKode: baris.itemKode, ...hasil.peringatanKenaikan });
-      }
+    const hasil = await catatHargaDariPembelian(client, {
+      vendorId: input.vendorId,
+      itemId: item.id,
+      hargaBaru: baris.hargaSatuan,
+      pembelianHeaderId: headerId,
+    });
+    if (hasil.peringatanKenaikan) {
+      peringatanHarga.push({ itemKode: baris.itemKode, ...hasil.peringatanKenaikan });
     }
 
     resultBaris.push({ itemKode: baris.itemKode, qtyRecipeUnit });
