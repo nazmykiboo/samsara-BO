@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { LokasiPicker, useLokasiOptions } from "../../components/pickers/LokasiPicker";
 import { ItemPicker } from "../../components/pickers/ItemPicker";
 import { Card } from "../../components/ui/Card";
@@ -18,12 +18,20 @@ interface Baris {
 
 export function OpnameInputForm() {
   const options = useLokasiOptions();
-  const [locationId, setLocationId] = useState<number | null>(options[0]?.id ?? null);
+  const [locationId, setLocationId] = useState<number | null>(null);
   const [tanggal, setTanggal] = useState(todayIso());
   const [baris, setBaris] = useState<Baris[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<OpnameResult | null>(null);
+
+  // Daftar lokasi dimuat async (lihat LokasiContext) -- `options` masih
+  // kosong di render pertama, jadi default "lokasi = yang pertama" tidak
+  // bisa lagi diisi langsung di useState initializer. Cuma mengisi SEKALI
+  // kalau belum pernah dipilih.
+  useEffect(() => {
+    if (locationId === null && options.length > 0) setLocationId(options[0].id);
+  }, [options, locationId]);
 
   function handleAddItem(item: MockItemRef) {
     if (baris.some((b) => b.item.kode === item.kode)) return;

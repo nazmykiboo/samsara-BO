@@ -37,7 +37,7 @@ const JENIS_MUTASI_LAIN: Array<{ value: JenisMutasiLain; label: string; arah: "t
 
 export function MutasiLainForm() {
   const options = useLokasiOptions();
-  const [locationId, setLocationId] = useState<number | null>(options[0]?.id ?? null);
+  const [locationId, setLocationId] = useState<number | null>(null);
   // "" = belum dipilih. SENGAJA tidak ada kategori yang terpilih otomatis supaya staf
   // tidak asal mengirim kategori pertama yang kebetulan tampil.
   const [jenis, setJenis] = useState<JenisMutasiLain | "">("");
@@ -47,6 +47,14 @@ export function MutasiLainForm() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ headerId: string } | null>(null);
+
+  // Daftar lokasi dimuat async (lihat LokasiContext) -- `options` masih
+  // kosong di render pertama, jadi default "lokasi = yang pertama" tidak
+  // bisa lagi diisi langsung di useState initializer. Cuma mengisi SEKALI
+  // kalau belum pernah dipilih.
+  useEffect(() => {
+    if (locationId === null && options.length > 0) setLocationId(options[0].id);
+  }, [options, locationId]);
 
   function handleAddItem(item: MockItemRef) {
     if (baris.some((b) => b.item.kode === item.kode)) return;

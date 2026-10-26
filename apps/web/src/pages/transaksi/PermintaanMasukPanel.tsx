@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../../auth/AuthContext";
 import { bisaMemenuhiPermintaan } from "../../auth/permissions";
 import { useLokasiOptions } from "../../components/pickers/LokasiPicker";
@@ -20,16 +20,28 @@ type StatusFilter = PermintaanTransferStatus | "semua";
 export function PermintaanMasukPanel() {
   const { user } = useAuth();
   const options = useLokasiOptions();
-  const ckOptions = options.filter((l) => l.entitas === "samsara_ck");
+  // Di-memo-kan (bukan .filter() polos tiap render): array baru tiap render
+  // bikin useEffect di bawah yang bergantung ke ckOptions re-run tiap
+  // render -- pola bug yang sama pernah ditemukan di StokPage.tsx (lihat
+  // komentar di LokasiPicker.tsx), dicegah dari awal di sini.
+  const ckOptions = useMemo(() => options.filter((l) => l.entitas === "samsara_ck"), [options]);
   const canPenuhi = user ? bisaMemenuhiPermintaan(user.role) : false;
 
-  const [locationId, setLocationId] = useState<number | null>(ckOptions[0]?.id ?? null);
+  const [locationId, setLocationId] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("diminta");
   const [rows, setRows] = useState<PermintaanTransferListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<PermintaanTransferListItem | null>(null);
   const [reloadCounter, setReloadCounter] = useState(0);
+
+  // Daftar lokasi dimuat async (lihat LokasiContext) -- `ckOptions` masih
+  // kosong di render pertama, jadi default "lokasi CK = yang pertama" tidak
+  // bisa lagi diisi langsung di useState initializer. Cuma mengisi SEKALI
+  // kalau belum pernah dipilih.
+  useEffect(() => {
+    if (locationId === null && ckOptions.length > 0) setLocationId(ckOptions[0].id);
+  }, [ckOptions, locationId]);
 
   useEffect(() => {
     if (locationId === null) {

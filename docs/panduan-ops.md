@@ -161,13 +161,13 @@ bagian khusus untuk melihat **transfer yang masih dalam perjalanan**
 
 ### Siapa boleh apa
 
-- **Owner & Manajer Ops**: bisa melihat stok **semua lokasi** (Samsara
-  Central Kitchen dan Samsara Outlet 1 Malang, atau lokasi lain kalau
-  nanti ditambah).
+- **Owner & Manajer Ops**: bisa melihat stok **semua lokasi** (Central
+  Kitchen, tiap outlet, atau lokasi lain kalau nanti ditambah — nama
+  persisnya ikut apa yang terdaftar di Pengaturan > Outlet & Kitchen).
 - **Supervisor & Staf**: hanya bisa melihat stok **lokasi yang ditugaskan
-  ke akun mereka**. Kalau akunnya cuma ditugaskan ke Samsara Outlet 1
-  Malang, filter lokasi di halaman ini otomatis hanya menampilkan pilihan
-  itu — tidak bisa mengintip stok lokasi lain.
+  ke akun mereka**. Kalau akunnya cuma ditugaskan ke satu outlet, filter
+  lokasi di halaman ini otomatis hanya menampilkan pilihan itu — tidak
+  bisa mengintip stok lokasi lain.
 
 ### Cara pakai
 
@@ -240,12 +240,12 @@ ditampilkan sebagai tab: **Pembelian**, **Produksi**, **Penjualan**,
 
 ### 5.1 Cara input pembelian
 
-**Skenario**: Samsara Central Kitchen baru saja menerima kiriman **Gula
-pasir** 20 kg dari vendor "CV Sumber Pangan", harga Rp17.500/kg. Perlu
-dicatat supaya stok Gula pasir di Central Kitchen bertambah.
+**Skenario**: Central Kitchen baru saja menerima kiriman **Gula pasir**
+20 kg dari vendor "CV Sumber Pangan", harga Rp17.500/kg. Perlu dicatat
+supaya stok Gula pasir di Central Kitchen bertambah.
 
 1. Buka menu **Transaksi**, lalu pilih tab **Pembelian**.
-2. Di kotak **Lokasi**, pilih **Samsara Central Kitchen**.
+2. Di kotak **Lokasi**, pilih **Central Kitchen**.
 3. Di kotak **Vendor**, pilih vendor yang mengirim barangnya (mis. "CV
    Sumber Pangan"). **Vendor wajib dipilih** — pembelian tidak bisa
    disimpan tanpa vendor. Kalau belinya dadakan di warung/pasar (bukan
@@ -276,7 +276,7 @@ dicatat supaya stok Gula pasir di Central Kitchen bertambah.
 8. Tekan tombol **Simpan pembelian** di paling bawah.
 9. Kalau berhasil, akan muncul kotak hijau "Pembelian #... tersimpan --
    1 baris item, stok bertambah sesuai konversi ke satuan resep." Stok
-   Gula pasir di Samsara Central Kitchen otomatis bertambah — sistem yang
+   Gula pasir di Central Kitchen otomatis bertambah — sistem yang
    menghitung sendiri konversi dari kg (satuan beli) ke gram (satuan
    resep Gula pasir), kamu tidak perlu menghitung manual. Kalau ada baris
    yang harganya naik di atas ambang, ringkasannya muncul lagi di sini
@@ -296,12 +296,12 @@ di Laporan Harian, ditandai "Supplier (lama)").
 
 ### 5.2 Cara input produksi
 
-**Skenario**: Samsara Central Kitchen membuat 1 batch **Kuah bubur**
-(resep RP-002) untuk stok hari ini, dan hasil aktualnya sedikit berbeda
-dari target di atas kertas.
+**Skenario**: Central Kitchen membuat 1 batch **Kuah bubur** (resep
+RP-002) untuk stok hari ini, dan hasil aktualnya sedikit berbeda dari
+target di atas kertas.
 
 1. Buka menu **Transaksi**, pilih tab **Produksi**.
-2. Di kotak **Lokasi produksi**, pilih **Samsara Central Kitchen**.
+2. Di kotak **Lokasi produksi**, pilih **Central Kitchen**.
 3. Di kotak **Resep produksi**, pilih **RP-002 -- Kuah bubur**. Di bawahnya
    akan muncul keterangan "1 batch resep ini menghasilkan 2500 gr Kuah
    bubur (yield teoretis)" — ini target di atas kertas, bukan hasil
@@ -319,13 +319,13 @@ dari target di atas kertas.
    ini 50 gr lebih sedikit dari target. Di belakang layar, sistem otomatis
    mengurangi stok semua bahan resep RP-002 (susu evaporasi, minyak,
    kunyit bubuk, bumbu kare, masako, garam, air) sesuai qty batch, dan
-   menambah stok Kuah bubur di Samsara Central Kitchen sebesar hasil
-   aktual (2450 gr) — bukan sebesar target teoretis.
+   menambah stok Kuah bubur di Central Kitchen sebesar hasil aktual
+   (2450 gr) — bukan sebesar target teoretis.
 
 ### 5.3 Cara transfer barang dua tahap (kirim & terima)
 
-**Skenario**: Samsara Central Kitchen mengirim persediaan **Bubur** 5 kg
-ke **Samsara Outlet 1 Malang** untuk stok hari ini.
+**Skenario**: Central Kitchen mengirim persediaan **Bubur** 5 kg ke
+**satu outlet** untuk stok hari ini.
 
 **Kenapa dua tahap, dan apa arti "dalam perjalanan":**
 Transfer di sistem ini **selalu** dua langkah terpisah, biasanya dilakukan
@@ -344,13 +344,14 @@ tercatat saat langkah "Terima", bukan diam-diam hilang. Ini juga jadi
 bentuk pertanggungjawaban: jelas siapa yang mengirim dan berapa, dan jelas
 siapa yang mengonfirmasi terima dan berapa yang benar-benar sampai.
 
-**Tahap 1 — Kirim (dilakukan di Samsara Central Kitchen):**
+**Tahap 1 — Kirim (dilakukan di Central Kitchen):**
 
 1. Buka menu **Transaksi**, pilih tab **Transfer**, pastikan sub-tab
    **Kirim** aktif (hanya muncul kalau peranmu Owner/Manajer Ops/
    Supervisor).
-2. Di kotak **Lokasi asal**, pilih **Samsara Central Kitchen**.
-3. Di kotak **Lokasi tujuan**, pilih **Samsara Outlet 1 Malang**.
+2. Di kotak **Lokasi asal**, pilih **Central Kitchen**.
+3. Di kotak **Lokasi tujuan**, pilih **outlet tujuan** (nama outletnya
+   sesuai yang terdaftar di sistem).
 4. Isi **Tanggal**.
 5. Di **"Tambah item"**, cari dan pilih **Bubur**.
 6. Isi kolom di baris Bubur:
@@ -363,18 +364,17 @@ siapa yang mengonfirmasi terima dan berapa yang benar-benar sampai.
      bukan sesuatu yang perlu dihitung manual olehmu).
 7. Tekan **Kirim transfer**.
 8. Muncul konfirmasi: "Transfer #... dikirim -- stok lokasi asal sudah
-   berkurang, menunggu diterima di tujuan." Stok Bubur di Samsara Central
-   Kitchen langsung berkurang 5000 gr saat ini juga.
+   berkurang, menunggu diterima di tujuan." Stok Bubur di Central Kitchen
+   langsung berkurang 5000 gr saat ini juga.
 
-**Tahap 2 — Terima (dilakukan di Samsara Outlet 1 Malang, bisa oleh orang
-lain, bisa hari lain):**
+**Tahap 2 — Terima (dilakukan di outlet tujuan, bisa oleh orang lain,
+bisa hari lain):**
 
 1. Buka menu **Transaksi**, pilih tab **Transfer**, pilih sub-tab
    **Terima** (tab ini muncul untuk semua peran).
-2. Di kotak **Lokasi tujuan (lokasi saya)**, pilih **Samsara Outlet 1
-   Malang**.
+2. Di kotak **Lokasi tujuan (lokasi saya)**, pilih **outlet tujuan** tadi.
 3. Akan muncul daftar transfer yang sedang menunggu diterima di lokasi
-   ini. Cari dan tekan **Transfer #... — Dari Samsara Central Kitchen**.
+   ini. Cari dan tekan **Transfer #... — Dari Central Kitchen**.
 4. Untuk setiap item di transfer itu (di sini: Bubur), kamu akan melihat
    dua kolom: **Qty dikirim** (terkunci, tidak bisa diubah — menampilkan
    angka yang dikirim di Tahap 1, yaitu 5000 gr) dan **Qty diterima**
@@ -385,9 +385,8 @@ lain, bisa hari lain):**
 5. Tekan **Konfirmasi terima**.
 6. Muncul hasil: "Transfer #... diterima. Susut per item: BB-001
    (50)." — susut (selisih qty kirim dikurangi qty terima) tercatat
-   otomatis. Stok Bubur di Samsara Outlet 1 Malang sekarang bertambah
-   sebesar qty yang benar-benar diterima (4950 gr), bukan qty yang
-   dikirim.
+   otomatis. Stok Bubur di outlet tujuan sekarang bertambah sebesar qty
+   yang benar-benar diterima (4950 gr), bukan qty yang dikirim.
 
 Catatan penting: transfer yang sudah ditekan "Terima" **tidak bisa
 diterima ulang atau dibatalkan** dari layar ini. Kalau ternyata salah
@@ -396,14 +395,15 @@ mengoreksi stok secara manual, dengan alasan yang jelas.
 
 ### 5.4 Cara catat waste / mutasi lain
 
-**Skenario**: di **Samsara Outlet 1 Malang**, satu Paper Bowl 650 ml berisi
-Bubur Polos tumpah dan tidak bisa dijual. Perlu dicatat sebagai kerugian
-supaya stok Bubur dan Paper Bowl tetap akurat — bukan lewat transaksi
-Penjualan (karena memang tidak terjual).
+**Skenario**: di **satu outlet**, satu Paper Bowl 650 ml berisi Bubur
+Polos tumpah dan tidak bisa dijual. Perlu dicatat sebagai kerugian supaya
+stok Bubur dan Paper Bowl tetap akurat — bukan lewat transaksi Penjualan
+(karena memang tidak terjual).
 
 1. Buka menu **Transaksi**, pilih tab **Mutasi Lain** (muncul untuk semua
    peran).
-2. Pilih **Lokasi**: **Samsara Outlet 1 Malang**.
+2. Pilih **Lokasi**: outlet tempat kejadiannya (supervisor/staf otomatis
+   cuma melihat lokasi yang ditugaskan ke mereka).
 3. Isi **Alasan** — wajib diisi, contoh: `Bubur Polos tumpah saat servis`.
 4. Isi **Tanggal**.
 5. Di **"Tambah item"**, cari dan pilih item yang berkurang. Kalau mau
@@ -416,7 +416,7 @@ Penjualan (karena memang tidak terjual).
    koreksi setelah salah catat sebelumnya) — bukan cuma untuk kerugian.
 7. Tekan **Simpan mutasi**.
 8. Muncul konfirmasi "Mutasi lain #... tersimpan." Stok item-item itu di
-   Samsara Outlet 1 Malang langsung disesuaikan sesuai angka yang diisi.
+   lokasi yang dipilih langsung disesuaikan sesuai angka yang diisi.
 
 Mutasi Lain ini juga jalur yang dipakai kalau perlu **membatalkan/
 mengoreksi** transaksi lain yang sudah kadung disimpan (misalnya transfer
@@ -426,8 +426,8 @@ alasannya jelas, supaya riwayatnya tetap lengkap dan bisa ditelusuri.
 
 ### 5.5 Cara opname dua tahap (hitung fisik & persetujuan)
 
-**Skenario**: setiap periode tertentu, tim di **Samsara Outlet 1 Malang**
-menghitung fisik stok yang ada di outlet, dan ternyata angkanya beda dari
+**Skenario**: setiap periode tertentu, tim di **satu outlet** menghitung
+fisik stok yang ada di outlet itu, dan ternyata angkanya beda dari
 yang dicatat sistem — misalnya sistem mencatat stok Gula pasir 4000 gr,
 tapi hasil hitung fisik cuma 3800 gr.
 
@@ -442,13 +442,13 @@ meninjau dan menyetujuinya secara terpisah. Ini seperti mekanisme
 "empat mata" (dua orang berbeda) sebelum angka stok resmi berubah.
 
 **Tahap 1 — Input Hitungan (bisa dilakukan siapa saja, termasuk Staf, di
-Samsara Outlet 1 Malang):**
+lokasi tempat mereka bertugas):**
 
 1. Buka menu **Transaksi**, pilih tab **Opname**, pastikan sub-tab
    **Input Hitungan** aktif.
 2. Perhatikan catatan kecil di atas form: "Status masih **draft** -- stok
    BELUM berubah sampai owner/manajer ops menyetujui di tab Persetujuan."
-3. Pilih **Lokasi**: **Samsara Outlet 1 Malang**.
+3. Pilih **Lokasi**: outlet (atau Central Kitchen) yang sedang dihitung.
 4. Isi **Tanggal** penghitungan.
 5. Di **"Tambah item"**, cari dan pilih item yang dihitung, misalnya
    **Gula pasir**.
@@ -469,7 +469,7 @@ Samsara Outlet 1 Malang):**
    **Persetujuan** (hanya muncul untuk Owner/Manajer Ops).
 2. Akan tampil daftar semua opname berstatus draft yang menunggu
    keputusan, dari semua lokasi. Cari dan tekan opname yang dimaksud,
-   misalnya **Opname #12** dari Samsara Outlet 1 Malang.
+   misalnya **Opname #12** dari outlet yang bersangkutan.
 3. Akan tampil rincian tiap item: "Gula pasir — sistem 4000 → fisik 3800
    (-200)" — bandingkan dengan kondisi sebenarnya kalau perlu cek ulang.
 4. Ada dua tombol:
@@ -499,10 +499,10 @@ riwayat permintaanmu sendiri) dan **Permintaan Masuk (CK)** (khusus kalau
 akunmu ditugaskan ke lokasi Central Kitchen — untuk melihat & memenuhi
 permintaan yang masuk dari outlet-outlet).
 
-**Skenario**: Samsara Outlet 1 Malang kehabisan **Bubur** menjelang sore
-dan butuh kiriman tambahan besok pagi.
+**Skenario**: satu outlet kehabisan **Bubur** menjelang sore dan butuh
+kiriman tambahan besok pagi.
 
-**Bagian 1 — Ajukan permintaan (dari Samsara Outlet 1 Malang):**
+**Bagian 1 — Ajukan permintaan (dari outlet yang kehabisan):**
 
 1. Buka menu **Transaksi**, pilih tab **Permintaan ke CK**, pastikan
    sub-tab **Ajukan** aktif.
@@ -529,7 +529,7 @@ dan butuh kiriman tambahan besok pagi.
    ternyata tidak dibutuhkan lagi — permintaan yang sudah **Dipenuhi**
    atau **Dibatalkan** tidak bisa dibatalkan lagi (tombolnya hilang).
 
-**Bagian 2 — Penuhi permintaan (dari Samsara Central Kitchen, hanya Owner/
+**Bagian 2 — Penuhi permintaan (dari Central Kitchen, hanya Owner/
 Manajer Ops/Supervisor):**
 
 1. Buka menu **Transaksi**, pilih tab **Permintaan ke CK**, pilih sub-tab
@@ -538,7 +538,7 @@ Manajer Ops/Supervisor):**
 2. Di kotak **Status**, defaultnya sudah "Menunggu dipenuhi" — daftar di
    bawahnya menampilkan semua permintaan dari outlet yang belum
    ditindaklanjuti, termasuk siapa yang mengajukan.
-3. Cari permintaan **Bubur** dari Samsara Outlet 1 Malang, lalu tekan
+3. Cari permintaan **Bubur** dari outlet yang mengajukan, lalu tekan
    **Penuhi permintaan**.
 4. Akan muncul form kirim yang sebagian sudah otomatis terisi: **Qty
    kirim** (default sama dengan qty yang diminta, bisa diubah kalau mau
@@ -549,7 +549,7 @@ Manajer Ops/Supervisor):**
 6. Muncul konfirmasi "Transfer #... dikirim untuk memenuhi permintaan
    PT-...". Di belakang layar ini **persis sama** dengan transfer Tahap 1
    (Kirim) di bagian 5.3 — stok Bubur di Central Kitchen langsung
-   berkurang, tapi **belum masuk ke stok Samsara Outlet 1 Malang** sampai
+   berkurang, tapi **belum masuk ke stok outlet yang mengajukan** sampai
    ada yang menekan **Terima** di tab Transfer (lihat 5.3 Tahap 2). Status
    permintaan otomatis berubah jadi **Dipenuhi**.
 
@@ -718,11 +718,12 @@ ops menyetujui atau menolak).
 
 ### Cara pakai — Tab Jadwal (Owner/Manajer Ops)
 
-**Skenario**: menambahkan shift pagi untuk seorang staf di Samsara Outlet
-1 Malang besok.
+**Skenario**: menambahkan shift pagi untuk seorang staf di satu outlet
+besok.
 
 1. Buka menu **Jadwal & Izin**, pastikan tab **Jadwal** aktif.
-2. Di kotak **Lokasi**, pilih **Samsara Outlet 1 Malang**.
+2. Di kotak **Lokasi**, pilih outlet (atau Central Kitchen) yang
+   jadwalnya mau diatur.
 3. Atur **Dari tanggal** dan **Sampai tanggal** untuk menentukan rentang
    yang ditampilkan di daftar (defaultnya Senin–Minggu minggu ini).
 4. Tekan **+ Tambah shift**.
@@ -796,9 +797,13 @@ atas cocok dengan yang sungguhan ada di layar:
 - Langkah klik demi klik diverifikasi dari kode halaman sungguhan di
   `apps/web/src/pages/` (label tombol, urutan field, pesan konfirmasi —
   disalin persis dari teks yang ada di kode, bukan dikarang).
-- Contoh lokasi/item/menu yang dipakai (Samsara Central Kitchen, Samsara
-  Outlet 1 Malang, Gula pasir, Kuah bubur/RP-002, Bubur/Bubur Polos) adalah
-  data referensi asli yang sudah ada di sistem, bukan nama karangan.
+- Contoh item/menu yang dipakai (Gula pasir, Kuah bubur/RP-002, Bubur/
+  Bubur Polos) adalah data referensi asli yang sudah ada di sistem, bukan
+  nama karangan. Nama **lokasi** di panduan ini SENGAJA ditulis generik
+  ("Central Kitchen", "outlet") alih-alih nama tetap — nama outlet
+  sungguhan bisa berubah kapan saja lewat Pengaturan > Outlet & Kitchen
+  (pernah terjadi, lihat `docs/architecture-decisions.md` §29), jadi
+  panduan ini tidak perlu diperbarui ulang tiap kali itu terjadi.
 - Bagian 5.6 (Permintaan ke CK), 7 (Laporan Harian), dan bagian "Tab
   Pengajuan Libur" di 8 diverifikasi dengan cara yang sama: dibaca
   langsung dari `apps/web/src/pages/transaksi/PermintaanTab.tsx`,

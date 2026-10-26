@@ -440,10 +440,18 @@ function AntrianList({ rows, onDecided }: { rows: PengajuanLiburListItem[]; onDe
  */
 function OverrideLiburDialog({ onClose, onSelesai }: { onClose: () => void; onSelesai: () => void }) {
   const lokasiOptions = useLokasiOptions();
-  const [lokasiId, setLokasiId] = useState<number | null>(lokasiOptions[0]?.id ?? null);
+  const [lokasiId, setLokasiId] = useState<number | null>(null);
   const [staf, setStaf] = useState<StafOption[]>([]);
   const [stafLoading, setStafLoading] = useState(false);
   const [stafError, setStafError] = useState<string | null>(null);
+
+  // Daftar lokasi dimuat async (lihat LokasiContext) -- `lokasiOptions` masih
+  // kosong di render pertama, jadi default "lokasi = yang pertama" tidak
+  // bisa lagi diisi langsung di useState initializer. Cuma mengisi SEKALI
+  // kalau belum pernah dipilih.
+  useEffect(() => {
+    if (lokasiId === null && lokasiOptions.length > 0) setLokasiId(lokasiOptions[0].id);
+  }, [lokasiOptions, lokasiId]);
 
   const [userId, setUserId] = useState("");
   const [tanggalMulai, setTanggalMulai] = useState(todayIso());

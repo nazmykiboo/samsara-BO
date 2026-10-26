@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { LokasiPicker, useLokasiOptions } from "../../components/pickers/LokasiPicker";
 import { MenuPicker } from "../../components/pickers/MenuPicker";
 import { Card } from "../../components/ui/Card";
@@ -19,7 +19,7 @@ interface Baris {
 
 export function PenjualanForm() {
   const options = useLokasiOptions();
-  const [locationId, setLocationId] = useState<number | null>(options[0]?.id ?? null);
+  const [locationId, setLocationId] = useState<number | null>(null);
   const [sumber, setSumber] = useState(MOCK_CHANNEL[0]?.name ?? "");
   const [noReferensi, setNoReferensi] = useState("");
   const [tanggal, setTanggal] = useState(todayIso());
@@ -31,6 +31,15 @@ export function PenjualanForm() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PenjualanResult | null>(null);
+
+  // Daftar lokasi dimuat async (lihat LokasiContext) -- `options` masih
+  // kosong di render pertama, jadi default "lokasi = yang pertama" tidak
+  // bisa lagi diisi langsung di useState initializer. Cuma mengisi SEKALI
+  // kalau belum pernah dipilih. (MOCK_CHANNEL di atas statis/sinkron, jadi
+  // initializer-nya aman, tidak kena bug yang sama.)
+  useEffect(() => {
+    if (locationId === null && options.length > 0) setLocationId(options[0].id);
+  }, [options, locationId]);
 
   function handleAddMenu(menu: MockMenuRef) {
     if (baris.some((b) => b.menu.kode === menu.kode)) return;

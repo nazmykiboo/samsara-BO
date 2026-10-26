@@ -729,7 +729,7 @@ function KotakPesanBatch({ pesan }: { pesan: PesanBatch }) {
  * lalu dicocokkan lewat tanggal+shiftTemplateId+userId). */
 function JadwalKelolaView() {
   const options = useLokasiOptions();
-  const [lokasiId, setLokasiId] = useState<number | null>(options[0]?.id ?? null);
+  const [lokasiId, setLokasiId] = useState<number | null>(null);
   const [minggu, setMinggu] = useState(defaultMinggu());
   const [grid, setGrid] = useState<JadwalGridResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -761,6 +761,14 @@ function JadwalKelolaView() {
   const [selSedangSimpan, setSelSedangSimpan] = useState<string | null>(null);
   const [hasilBatch, setHasilBatch] = useState<PesanBatch | null>(null);
   const [batchError, setBatchError] = useState<string | null>(null);
+
+  // Daftar lokasi dimuat async (lihat LokasiContext) -- `options` masih
+  // kosong di render pertama, jadi default "lokasi = yang pertama" tidak
+  // bisa lagi diisi langsung di useState initializer. Cuma mengisi SEKALI
+  // kalau belum pernah dipilih.
+  useEffect(() => {
+    if (lokasiId === null && options.length > 0) setLokasiId(options[0].id);
+  }, [options, lokasiId]);
 
   // Daftar staf lokasi untuk saran autocomplete di dalam sel -- di-fetch SEKALI per lokasi di level ini
   // (bukan per sel), lalu difilter di sisi UI. Tidak ada endpoint pencarian staf, dan tidak perlu:

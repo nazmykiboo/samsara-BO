@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { LokasiPicker, useLokasiOptions, type LokasiOption } from "../components/pickers/LokasiPicker";
 import { getDalamPerjalanan, getStok } from "../api/stok";
 import { getMinStok, setMinStok } from "../api/minStok";
@@ -87,7 +87,7 @@ export function StokPage() {
   const bisaAturMinStok = user !== null && bisaKelolaMaster(user.role);
 
   const [search, setSearch] = useState("");
-  const [locationFilter, setLocationFilter] = useState<"all" | number>(options[0]?.id ?? "all");
+  const [locationFilter, setLocationFilter] = useState<"all" | number>("all");
   const [entitasFilter, setEntitasFilter] = useState<"all" | string>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("semua");
   const [qtyState, setQtyState] = useState<Record<string, QtyState>>({});
@@ -97,6 +97,23 @@ export function StokPage() {
   const [items, setItems] = useState<StokItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(true);
   const [itemsError, setItemsError] = useState<string | null>(null);
+
+  // `options` (useLokasiOptions()) dimuat async, kosong di render pertama --
+  // filter lokasi SENGAJA default "all" (bukan permanently stuck di nilai
+  // yang salah seperti bug locationId null di tempat lain), TAPI "all" di
+  // sini bisa juga dipilih user sendiri belakangan lewat dropdown, jadi
+  // tidak boleh dipaksa-benerin tiap kali `locationFilter` berubah (itu akan
+  // menimpa balik pilihan "Semua lokasi" yang SENGAJA dipilih user). Pola
+  // guard `=== null` yang dipakai di tempat lain tidak aman dipakai ulang di
+  // sini -- dipakai `useRef` supaya koreksi ke lokasi pertama cuma terjadi
+  // SEKALI, persis saat data lokasi pertama kali selesai dimuat.
+  const defaultLokasiDiterapkan = useRef(false);
+  useEffect(() => {
+    if (!defaultLokasiDiterapkan.current && options.length > 0) {
+      defaultLokasiDiterapkan.current = true;
+      setLocationFilter(options[0].id);
+    }
+  }, [options]);
 
   // Daftar item (nama/kategori/satuan resep) diambil sekali saat halaman dibuka --
   // halaman ini cuma MEMBACA daftar item (penambahan/ubah item dilakukan di Master
@@ -520,11 +537,22 @@ function MinStokModal({
 }
 
 function DalamPerjalananSection({ allowedLocations, items }: { allowedLocations: LokasiOption[]; items: StokItem[] }) {
-  const [locationId, setLocationId] = useState<number | null>(allowedLocations[0]?.id ?? null);
+  const [locationId, setLocationId] = useState<number | null>(null);
   const [keluar, setKeluar] = useState<DalamPerjalananRow[] | null>(null);
   const [masuk, setMasuk] = useState<DalamPerjalananRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // `allowedLocations` (= `options` dari useLokasiOptions() di StokPage,
+  // lihat pemanggilnya) dimuat async -- masih kosong di render pertama,
+  // jadi default "lokasi = yang pertama" tidak bisa diisi langsung di
+  // useState initializer (bug nyata: section ini tidak pernah fetch data
+  // sebelum diperbaiki, karena locationId permanen null dan useEffect di
+  // bawah selalu return lebih awal). Cuma mengisi SEKALI kalau belum
+  // pernah dipilih, pola sama seperti LokasiPicker.
+  useEffect(() => {
+    if (locationId === null && allowedLocations.length > 0) setLocationId(allowedLocations[0].id);
+  }, [allowedLocations, locationId]);
 
   useEffect(() => {
     if (locationId === null) return;

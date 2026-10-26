@@ -3129,14 +3129,18 @@ Diperbaiki dengan pola async-default yang sama seperti `LokasiPicker`/
 `TransferKirimForm` dkk (Tahap 1): initializer `null`, lalu `useEffect`
 yang mengisi SEKALI begitu `options` terisi.
 
-Pola bug yang SAMA PERSIS ditemukan (lewat `grep`, belum diperbaiki)
-di `PenjualanForm.tsx`, `ProduksiForm.tsx`, `OpnameInputForm.tsx`,
-`MutasiLainForm.tsx`, `PermintaanMasukPanel.tsx`, `JadwalTab.tsx`
-(modul HR), `PengajuanLiburTab.tsx` (modul HR), dan `StokPage.tsx` --
-dilempar sebagai task terpisah, bukan diperbaiki di sini (di luar scope
-vendor, dan mengubah 8 file sekaligus tanpa verifikasi satu-satu per
-file berisiko kurang teliti kalau dikerjakan tergesa di tengah tugas
-lain).
+Pola bug yang SAMA PERSIS ditemukan (lewat `grep`, dilempar sebagai task
+terpisah saat itu karena di luar scope vendor) di `PenjualanForm.tsx`,
+`ProduksiForm.tsx`, `OpnameInputForm.tsx`, `MutasiLainForm.tsx`,
+`PermintaanMasukPanel.tsx`, `JadwalTab.tsx` (modul HR),
+`PengajuanLiburTab.tsx` (modul HR), dan `StokPage.tsx` -- **sudah
+diperbaiki** di Tahap A sesi berikutnya (lihat § 30), termasuk dua varian
+lebih halus yang baru ketahuan saat perbaikan menyeluruh itu: turunan
+`.filter()` dari `useLokasiOptions()` (`PermintaanMasukPanel.tsx`'s
+`ckOptions`, butuh `useMemo` juga supaya `useEffect`-nya tidak re-run tiap
+render) dan default yang bukan `null` (StokPage.tsx's `locationFilter`
+default `"all"`, butuh pola koreksi SEKALI pakai `useRef` karena `"all"`
+juga nilai sah yang bisa dipilih user, beda dari sentinel `null` biasa).
 
 ### 29.6 Verifikasi
 
@@ -3152,3 +3156,92 @@ melihat tab Pembelian di Transaksi sama sekali. Laporan Harian
 dikonfirmasi menampilkan nama vendor untuk pembelian baru dan
 "Supplier (lama): ..." untuk satu baris data lama yang sengaja dibuat
 manual lewat SQL lalu dihapus lagi setelah diverifikasi.
+
+## 30. Tahap A — perbaikan tuntas bug lokasi async di seluruh frontend (2026-10-26)
+
+Lanjutan § 29.5: pola bug "state lokasi di-init sinkron dari array yang
+sumbernya async (`useLokasiOptions()`/`LokasiContext`)" ternyata ada di
+lebih banyak tempat daripada yang disebut eksplisit di instruksi awal
+("8 form lain") -- jadi pencarian dilakukan menyeluruh ke SEMUA pemakai
+`useLokasiOptions()`/`useLokasiContext()` di `apps/web/src`, bukan cuma
+8 nama yang disebut, memverifikasi tiap kandidat satu per satu (bukan
+asal grep) untuk memastikan sumber datanya benar-benar async sebelum
+diubah.
+
+### 30.1 Sembilan titik bug ditemukan di 6 file, dua varian baru
+
+Enam file dengan pola standar (initializer `useState(options[0]?.id ??
+null)` -> `useState(null)` + `useEffect` pengisi sekali, identik dengan
+pola `LaporanHarianPage.tsx`/`PembelianForm.tsx` di § 29.5):
+`PenjualanForm.tsx`, `ProduksiForm.tsx`, `OpnameInputForm.tsx`,
+`MutasiLainForm.tsx` (semua di `apps/web/src/pages/transaksi/`), dan
+`JadwalTab.tsx` (`apps/web/src/pages/hr/`, fungsi `JadwalKelolaView`).
+
+Dua varian yang BUKAN pola standar, butuh penanganan beda:
+
+1. **`StokPage.tsx`'s `DalamPerjalananSection`** -- pola standar biasa
+   (`allowedLocations[0]?.id ?? null` -> `null` + `useEffect`), tapi
+   komponennya TERPISAH dari `StokPage` induk (nerima `allowedLocations`
+   lewat props, bukan manggil hook-nya sendiri) -- dikonfirmasi dulu
+   bahwa prop itu memang diisi dari `useLokasiOptions()` di pemanggilnya
+   sebelum diperbaiki, supaya tidak salah sasaran.
+2. **`StokPage.tsx`'s `locationFilter`** (filter dropdown utama, BUKAN
+   `DalamPerjalananSection`) -- defaultnya `options[0]?.id ?? "all"`,
+   TAPI `"all"` ("Semua lokasi") bukan sentinel murni seperti `null`
+   di tempat lain: itu juga pilihan YANG SAH kalau user sengaja
+   memilihnya lewat dropdown. Pola guard biasa
+   (`if (locationFilter === "all" && options.length > 0) ...` di dalam
+   `useEffect` yang depend ke `locationFilter`) akan SALAH: begitu user
+   sengaja pilih "Semua lokasi" lagi belakangan, efek itu akan langsung
+   menimpanya balik ke lokasi pertama -- regresi baru yang lebih
+   tersembunyi dari bug aslinya. Diperbaiki pakai `useRef` sebagai
+   penanda "sudah pernah dikoreksi", supaya pengisian default cuma
+   terjadi SEKALI (saat `options` pertama kali terisi), tidak peduli
+   `locationFilter` berubah-ubah apa pun sesudahnya.
+3. **`PermintaanMasukPanel.tsx`'s `ckOptions`** -- turunan `.filter()`
+   dari `useLokasiOptions()` (bukan hook-nya langsung), persis skenario
+   "turunan/filter" yang disinggung di instruksi. Dua masalah sekaligus:
+   (a) `locationId` init dari `ckOptions[0]?.id` kena bug yang sama,
+   DAN (b) `ckOptions` sendiri dihitung ulang (`.filter()` polos) tiap
+   render -- array baru tiap render bikin `useEffect` yang depend ke
+   situ ikut re-run tiap render (pola bahaya yang sama seperti yang
+   pernah bikin infinite-loop fetch nyata di `StokPage.tsx`, sudah
+   didokumentasikan di komentar `LokasiPicker.tsx`). Diperbaiki dua-duanya:
+   `ckOptions` dibungkus `useMemo`, BARU `locationId`-nya diperbaiki pola
+   standar.
+
+### 30.2 `docs/panduan-ops.md`: nama lokasi tetap -> istilah generik
+
+Semua skenario contoh yang menyebut nama lokasi tetap ("Samsara Central
+Kitchen", "Samsara Outlet 1 Malang") diganti istilah generik ("Central
+Kitchen", "outlet"/"outlet tujuan"/"outlet yang mengajukan", dst,
+disesuaikan konteks tiap kalimat) -- supaya panduan tidak basi lagi
+kalau nama outlet di-rename lagi di masa depan (persis insiden § 29.4).
+Item/menu referensi (Gula pasir, Kuah bubur/RP-002, dst) TETAP memakai
+nama asli -- itu data master yang jauh lebih stabil daripada nama
+lokasi, dan tetap berguna sebagai contoh konkret. Catatan metodologi
+verifikasi di akhir dokumen diperbarui juga supaya tidak lagi
+menyebutkan nama lokasi tetap sebagai "data referensi asli".
+
+Keputusan eksplisit: `docs/architecture-decisions.md` (dokumen ini) TIDAK
+ikut digenerikkan -- ini log keputusan historis, menyebut nama lokasi
+persis seperti yang berlaku pada tanggal kejadian itu memang tujuannya
+(lihat § 29.4 misalnya), beda dari panduan operasional yang harus selalu
+akurat untuk kondisi SAAT INI.
+
+### 30.3 Verifikasi
+
+Typecheck bersih, 313 test lulus (tidak ada test baru -- murni perbaikan
+frontend, tidak ada logika backend yang berubah), `npm run build` sukses
+di semua workspace (termasuk `vite build` utuh, bukan cuma `tsc`).
+Diverifikasi manual di browser untuk 4 role (akun sementara dibuat lewat
+script, kredensial ditulis ke file bertanda akses 600 di luar repo lalu
+dibaca langsung tanpa pernah dicetak ke respons teks -- bukan ke stdout
+biasa -- lalu akun+filenya dihapus tuntas setelah selesai, sesuai aturan
+sesi ini soal kredensial): Owner, Manajer Ops, Supervisor, dan Staf
+masing-masing dicek di tiap halaman yang diperbaiki (Pembelian, Produksi,
+Penjualan, Mutasi Lain, Opname, Permintaan Masuk (CK), Stok -- termasuk
+"Transfer dalam perjalanan" dan filter lokasi utama, Jadwal, dialog
+override Pengajuan Libur) -- dipastikan dropdown lokasi BENAR-BENAR
+ke-select (`option (selected) value="..."` di accessibility tree, bukan
+cuma tampilan) dan data terkait ikut termuat tanpa reload manual.

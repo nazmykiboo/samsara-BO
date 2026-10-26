@@ -13,7 +13,7 @@ import { todayIso } from "../../utils/format";
 
 export function ProduksiForm() {
   const options = useLokasiOptions();
-  const [locationId, setLocationId] = useState<number | null>(options[0]?.id ?? null);
+  const [locationId, setLocationId] = useState<number | null>(null);
   const [resepKode, setResepKode] = useState("");
   const [qtyBatch, setQtyBatch] = useState("1");
   const [hasilAktual, setHasilAktual] = useState("");
@@ -25,6 +25,14 @@ export function ProduksiForm() {
   const [resepList, setResepList] = useState<ResepProduksiListItem[]>([]);
   const [loadingResep, setLoadingResep] = useState(true);
   const [loadResepError, setLoadResepError] = useState<string | null>(null);
+
+  // Daftar lokasi dimuat async (lihat LokasiContext) -- `options` masih
+  // kosong di render pertama, jadi default "lokasi = yang pertama" tidak
+  // bisa lagi diisi langsung di useState initializer. Cuma mengisi SEKALI
+  // kalau belum pernah dipilih.
+  useEffect(() => {
+    if (locationId === null && options.length > 0) setLocationId(options[0].id);
+  }, [options, locationId]);
 
   // Hanya resep AKTIF yang boleh muncul di dropdown -- resep nonaktif tetap
   // ada di response API (dipakai di Master > Resep Produksi untuk ditampilkan
