@@ -16,6 +16,14 @@ pengganti `raw-majoo.json` di atas, tapi jalur alternatif yang mengambil
 data langsung dari API Majoo (tanpa lewat Google Sheets). Lihat § 11
 untuk penjelasan lengkap dan rencana penggantian bertahap.
 
+Ada 2 file lagi menyusul, `log-penjualan-direct.json` dan
+`transaksi-biaya-direct.json` — jalur "langsung API" untuk Shopee/
+GrabFood/GoFood (dan Majoo level-produk), melengkapi `raw-majoo-direct.json`
+yang cuma menangani Majoo level-transaksi. Lihat § 12 untuk penjelasan
+lengkap — **BACA PERINGATAN di § 12 dulu sebelum impor**, file ini
+dibangun sekaligus untuk 7 kombinasi platform×feed TANPA pernah diuji ke
+API platform asli.
+
 Dokumen ini ditulis untuk yang **belum pernah pakai n8n sama sekali**.
 Kalau Anda sudah paham n8n, bisa langsung lompat ke § 4 (kredensial) dan
 § 7 (aktivasi).
@@ -465,13 +473,132 @@ seperti § 5 poin 1-2.
    pertimbangkan menonaktifkan `Majoo - Sales` setelah jalur baru ini
    terbukti stabil tanpa masalah selama beberapa hari berjalan.
 
-### Rencana lanjutan (BELUM dikerjakan)
+### Rencana lanjutan — SUDAH dikerjakan, lihat § 12
 
-Pola yang sama (ambil langsung dari API, bukan dari Sheets) rencananya
-akan dibuat juga untuk Shopee/GrabFood/GoFood — sumbernya workflow lama
+Pola yang sama (ambil langsung dari API, bukan dari Sheets) sudah
+dibuat juga untuk Shopee/GrabFood/GoFood — sumbernya workflow lama
 `All - Get Product Details` (→ `log-penjualan.csv`) dan `Get sales &
-biaya online` (→ `transaksi.csv` + `biaya-platform.csv`). Ini BELUM
-diriset/dibuat — workflow itu jauh lebih besar (~28-32 node, 3 platform
-tergabung dalam 1 workflow) dan butuh riset node-per-node yang sama
-dalamnya seperti Majoo sebelum ditulis jadi workflow baru. Dikerjakan
-setelah `raw-majoo-direct.json` terbukti jalan bersih di production.
+biaya online` (→ `transaksi.csv` + `biaya-platform.csv`) — jadi
+`log-penjualan-direct.json` dan `transaksi-biaya-direct.json`. Lihat
+§ 12 untuk penjelasan lengkap, termasuk peringatan penting: dibangun
+sekaligus (7 kombinasi platform×feed) tanpa pernah diuji ke API
+platform asli — WAJIB dry-run hati-hati sebelum aktivasi.
+
+---
+
+## 12. Workflow baru: `log-penjualan-direct.json` & `transaksi-biaya-direct.json` (Shopee/GrabFood/GoFood/Majoo langsung API)
+
+### Apa ini
+
+Dua file ini melengkapi `raw-majoo-direct.json` (§ 11, yang cuma
+menangani Majoo level-transaksi) dengan jalur "langsung API" untuk
+SISA platform & feed:
+
+- **`log-penjualan-direct.json`** — pengganti pola `log-penjualan.json`
+  (§ 1-10), tarik langsung dari API **Shopee, GrabFood, GoFood, dan
+  Majoo level-produk** (breakdown per item/menu — BEDA dari Majoo di
+  `raw-majoo-direct.json` yang level-transaksi/header saja), gabung
+  jadi satu, kirim ke `/api/sales-sync/import/log-penjualan`. Jadwal:
+  **tiap jam, 06:00–22:00 WIB** (sama seperti `All - Get Product
+  Details` lama).
+- **`transaksi-biaya-direct.json`** — pengganti pola `transaksi.json`
+  DAN `biaya-platform.json` SEKALIGUS (digabung 1 file, lihat alasan di
+  bawah), tarik langsung dari API **Shopee, GrabFood, GoFood** untuk
+  DUA tujuan: rekonsiliasi income/fee per order (`/import/transaksi`)
+  dan biaya/adjustment granular (`/import/biaya-platform`). Jadwal:
+  **sekali sehari, 05:50 WIB** (sama seperti `Get sales & biaya online`
+  lama — mundur ke pagi supaya settlement platform untuk hari
+  sebelumnya sudah final saat ditarik).
+
+**Sama seperti § 0/§ 11**: kedua workflow ini TIDAK PERNAH memanggil
+endpoint pemotong stok (`/sales-sync/proses`). Cuma mengisi arsip lewat
+3 endpoint `/import/*` di atas — mengubah arsip jadi transaksi yang
+memotong stok tetap manual.
+
+### ⚠️ PERINGATAN PENTING sebelum impor
+
+Berbeda dari `raw-majoo-direct.json` (1 platform, dibangun & diuji
+bertahap), **kedua file ini dibangun SEKALIGUS untuk 7 kombinasi
+platform×feed** (Shopee/GrabFood/GoFood/Majoo-produk ×
+log-penjualan, Shopee/GrabFood/GoFood × transaksi+biaya) atas
+keputusan sadar Anda — supaya cepat selesai, dengan trade-off: **belum
+ada satu pun bagian yang diuji ke API platform ASLI** (cuma dirancang
+dari membaca kode workflow lama + verifikasi struktur data `token` di
+database). Sebelum mengaktifkan jadwal penuh:
+
+1. **Dry-run dulu** (§ 6) — kalau `jumlahBaris` di "Pratinjau Dry-Run"
+   nol/aneh, atau workflow error, isolasi platform yang bermasalah:
+   putus sementara koneksi cabang platform LAIN di editor n8n
+   (disconnect node, JANGAN dihapus), jalankan ulang dry-run, ulangi
+   satu-per-satu sampai ketemu cabang yang salah.
+2. Error paling mungkin: **nama/isi header request** (tiap platform
+   punya pola "menyamar dashboard/portal" sendiri-sendiri, lihat
+   catatan di kode tiap node "Validasi Token ..."), atau **nama field
+   respons API** berubah dari yang diasumsikan saat workflow ini
+   ditulis (API pihak ketiga bisa berubah tanpa pemberitahuan).
+3. Kirim sungguhan pertama kali ke jendela yang SANGAT SEMPIT dulu
+   (satu platform, satu hari), bandingkan hasilnya manual sebelum
+   percaya ke seluruh platform.
+4. **Workflow lama (`All - Get Product Details`, `Get sales & biaya
+   online`) TIDAK dimatikan** sampai jalur baru ini terbukti stabil
+   beberapa hari — jaring pengaman kalau ada bug yang baru ketahuan
+   belakangan.
+
+### Temuan penting (regardless Anda pakai workflow baru ini atau tidak)
+
+Saat meriset workflow lama `Get sales & biaya online` untuk membangun
+file ini, ditemukan **kemungkinan bug lama** di node `Parse & Validate
+Token` (cabang Shopee workflow itu): kode-nya membaca
+`tokenData.x_sap_ri`, `tokenData.spc_b_oft` (garis-bawah), padahal
+isi kolom `token` di database untuk Shopee punya nama kunci berbeda
+(dash, `'x-sap-ri'`, `'spc-b-oft'`, dikonfirmasi langsung lewat query
+read-only ke database) — kemungkinan header itu terkirim `undefined`
+ke Shopee selama ini. Workflow baru di sini TIDAK mewarisi pola ini
+(baca kolom `token` secara langsung, bukan destrukturisasi nama field).
+Ini sekadar informasi — tidak mengubah apa pun di workflow lama,
+cuma dicatat supaya Anda tahu kalau suatu saat ada yang terlihat aneh
+di data Shopee dari jalur lama.
+
+### Perbedaan desain dari workflow lama (sengaja, bukan kesalahan)
+
+- **Paginasi ditambahkan** di titik yang dulu hardcode 1 halaman
+  (Shopee & GrabFood di `log-penjualan-direct.json`, endpoint GoFood di
+  situ juga disamakan ke pola paginasi yang SUDAH terbukti jalan di
+  `transaksi-biaya-direct.json`) — mencegah data terpotong diam-diam
+  kalau transaksi ramai.
+- **`unique_key` GrabFood disamakan** ke nama item MENTAH dari
+  platform (dulu satu-satunya yang pakai nama standar hasil alias).
+- **Tidak ada lagi lookup `MENU_ALIAS` dari Google Sheets** —
+  `item_name`/`menu_id` dikirim apa adanya dari platform, app sudah
+  punya mekanismenya sendiri (`syncItemMappingFromLog`) untuk memetakan
+  item baru. **`log-penjualan-direct.json` sekarang 100% tanpa Google
+  Sheets.**
+- **`transaksi-biaya-direct.json` MASIH membaca 1 Google Sheet kecil**:
+  tab `MAPPING_BIAYA_PLATFORM` (lookup kode transaksi → kategori biaya
+  yang bisa dibaca manusia) — ini SENGAJA dipertahankan (beda dari
+  `MENU_ALIAS` yang dihapus) karena tidak ada penggantinya di app;
+  menghapusnya akan membuat SEMUA baris biaya platform baru berlabel
+  "PERLU_REVIEW" selamanya. Kalau suatu saat mau dipindah ke tabel
+  database, itu pekerjaan terpisah.
+- **Biaya Platform GoFood: dedup manual (baca-balik Sheet) dihapus** —
+  endpoint app sudah `ON CONFLICT (id_platform) DO UPDATE`, cukup kirim
+  CSV apa adanya. `per` di `Fetch Payout List` dinaikkan 10→50 sebagai
+  margin aman.
+- **Filter Majoo level-produk (skip transaksi yang masih "refundable")
+  direplikasi APA ADANYA** dari workflow lama — walau berpotensi bikin
+  data selalu telat beberapa hari, ini keputusan sadar untuk putaran
+  kerja ini, bukan diperbaiki diam-diam.
+
+### Credential yang dibutuhkan
+
+Semua REUSED (tidak ada yang baru dibuat):
+- **"Login App Samsara (n8n-integrasi)"** — sama seperti § 4.1.
+- **Credential Postgres ke database `n8n`** ("Postgres account") — sama
+  seperti § 11, dipakai di semua node "Ambil Token ...".
+- **"Google Sheets account" (service account)** — HANYA dipakai node
+  "Baca Mapping Biaya ..." di `transaksi-biaya-direct.json` (3
+  instance, satu per platform). `log-penjualan-direct.json` TIDAK
+  butuh credential Google Sheets sama sekali.
+
+Setelah impor, pilih ulang credential di tiap node bergaris merah
+(pola sama seperti § 5).

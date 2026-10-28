@@ -1,0 +1,1370 @@
+{
+  "name": "Sales-Sync: Ambil & Kirim Transaksi + Biaya Platform (Langsung API)",
+  "nodes": [
+    {
+      "id": "c2351290-fd37-4833-9c94-d7837eed09fa",
+      "name": "Jadwal Otomatis",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "50 5 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "8ac41fc1-2063-4178-a764-815d59fce6dc",
+      "name": "Jalankan Manual (Uji Coba)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        240
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "8ed73de0-4bd3-47d7-91f1-04aab2d247d7",
+      "name": "Atur Mode",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        120
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8c1af8f9-91df-429c-9390-a81aae47302c",
+              "name": "dryRun",
+              "type": "boolean",
+              "value": "={{ $execution.mode === \"manual\" }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "9f93fbd6-e29f-4e5d-b5fa-be3c2563d72a",
+      "name": "Login ke App",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://burnas-app.duckdns.org/api/auth/login",
+        "authentication": "none",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"username\": $credentials.username, \"password\": $credentials.password } }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "",
+          "name": "Login App Samsara (n8n-integrasi)"
+        }
+      }
+    },
+    {
+      "id": "2cf1336c-151a-4452-ad1c-48424e61a2cc",
+      "name": "Simpan Token & Mode",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        660,
+        120
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5b0a2f54-63bc-4b51-921a-50d86e7261e2",
+              "name": "token",
+              "type": "string",
+              "value": "={{ $json.token }}"
+            },
+            {
+              "id": "f1f35563-2b15-4a12-b063-b29b70613015",
+              "name": "dryRun",
+              "type": "boolean",
+              "value": "={{ $('Atur Mode').item.json.dryRun }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "55a7f368-9551-47dc-96c0-2fa6919083cc",
+      "name": "Tentukan Closing Date",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        120
+      ],
+      "parameters": {
+        "jsCode": "// closing_date = H-1 WIB, format YYYYMMDD -- SATU titik tanggal\n// (bukan rentang), pola PERSIS 'timeRange' workflow lama 'Get sales\n// & biaya online'. Workflow dijalankan 05:50 WIB supaya settlement\n// platform untuk closing_date H-1 sudah final saat ditarik.\nconst now = new Date();\nconst wibNow = new Date(now.getTime() + 7 * 3600 * 1000);\nconst yesterday = new Date(wibNow.getTime() - 24 * 3600 * 1000);\nconst yyyy = yesterday.getUTCFullYear();\nconst mm = String(yesterday.getUTCMonth() + 1).padStart(2, '0');\nconst dd = String(yesterday.getUTCDate()).padStart(2, '0');\nreturn [{ json: { closing_date: `${yyyy}${mm}${dd}` } }];"
+      }
+    },
+    {
+      "id": "2dcfb459-12eb-4b07-bb34-d06d9b80b748",
+      "name": "Ambil Token Shopee",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1100,
+        -420
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT token, status, expires_at FROM api_tokens a JOIN platforms p ON p.platform_id = a.platform_id WHERE p.name = 'shopeefood' LIMIT 1;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "4f680c59-e4bf-499e-91ed-3bfaf4856cd3",
+      "name": "Validasi Token Shopee",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -420
+      ],
+      "parameters": {
+        "jsCode": "const row = $input.item.json;\nif (!row) throw new Error('Token Shopee tidak ditemukan di api_tokens untuk platform shopeefood');\nif (row.status !== 'valid') throw new Error(`Token Shopee status: ${row.status} -- cek dan refresh manual dulu di api_tokens`);\nif (row.expires_at && new Date(row.expires_at) < new Date()) throw new Error(`Token Shopee sudah expired pada ${row.expires_at} -- refresh manual dulu`);\n\nlet tokenHeaders;\ntry { tokenHeaders = typeof row.token === 'string' ? JSON.parse(row.token) : row.token; }\ncatch (e) { throw new Error('Kolom token Shopee bukan JSON valid'); }\n\nconst headers = {\n  ...tokenHeaders,\n  priority: 'u=1, i',\n  'sec-ch-ua': '\"Google Chrome\";v=\"149\", \"Chromium\";v=\"149\", \"Not)A;Brand\";v=\"24\"',\n  'sec-ch-ua-mobile': '?0',\n  'sec-ch-ua-platform': '\"macOS\"',\n  'sec-fetch-dest': 'empty',\n  'sec-fetch-mode': 'cors',\n  'sec-fetch-site': 'same-site',\n};\n\nconst closing_date = $('Tentukan Closing Date').first().json.closing_date;\nreturn [{ json: { headers, closing_date } }];"
+      }
+    },
+    {
+      "id": "a6312d11-28d4-4bc1-a27c-40ed748198fd",
+      "name": "Baca Mapping Biaya Shopee",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1540,
+        -540
+      ],
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1k48yRkXBJmEy0n2Du75i8ODhPYXPsHobXMygjqOUPCQ"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "MAPPING_BIAYA_PLATFORM"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "e5eefe68-0e0f-4bce-998b-b2a3a9fd7ad1",
+      "name": "Ambil Daftar Settlement Shopee",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -420
+      ],
+      "parameters": {
+        "jsCode": "// Paginasi SUDAH ADA di workflow lama (while-loop, page_size=10) --\n// dipakai ulang apa adanya, sudah aman.\nconst ctx = $('Validasi Token Shopee').first().json;\nconst { headers, closing_date } = ctx;\nconst mw = '20809370';\n\nlet allLogs = [];\nlet page_num = 1;\nconst page_size = 10;\n\nwhile (true) {\n  const response = await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'https://foody.shopee.co.id/api/seller/v1/wallet/transaction/search/details',\n    headers,\n    body: { filter: { settlement_id: '', closing_date }, summary_type: 2, page_num, page_size, mw },\n    json: true,\n    ignoreHttpStatusErrors: true,\n  });\n\n  if (response.code !== 0) {\n    if (page_num > 1) break;\n    throw new Error(`Shopee API error (code ${response.code}): ${response.msg} | closing_date=${closing_date} page_num=${page_num}`);\n  }\n\n  const logs = (response && response.data && response.data.transaction_logs) || [];\n  allLogs = allLogs.concat(logs);\n\n  if (logs.length < page_size) break;\n  page_num++;\n}\n\nreturn allLogs.map(log => ({ json: { ...log, closing_date, headers, mw } }));"
+      }
+    },
+    {
+      "id": "c50fc408-d104-4262-8737-2088298056de",
+      "name": "Is Order Payment Shopee",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        -420
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "dfe48485-c109-475d-bc79-06090797f24b",
+              "leftValue": "={{ $json.transaction_type }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "9b8030b5-f397-41b2-b8d1-ce33d5dd9703",
+      "name": "Ambil Detail Clearing Shopee",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        -560
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const log = $input.item.json;\nconst response = await this.helpers.httpRequest({\n  method: 'GET',\n  url: `https://foody.shopee.co.id/api/seller/v1/wallet/transaction/clearing-detail/${log.id}?mw=${log.mw}`,\n  headers: log.headers,\n  json: true,\n  ignoreHttpStatusErrors: true,\n});\n\nif (response.code !== 0) throw new Error(`Shopee clearing-detail error (code ${response.code}): ${response.msg} | id=${log.id}`);\n\nawait new Promise(resolve => setTimeout(resolve, 400));\n\nreturn { json: { ...log, clearing: (response && response.data && response.data.clearing) || {} } };"
+      }
+    },
+    {
+      "id": "42a84602-341e-4144-a1ae-1d5287ddee25",
+      "name": "Petakan Transaksi Shopee",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        -560
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// -> 13 kolom KOLOM_TRANSAKSI.\nconst d = $input.item.json;\nconst c = d.clearing || {};\nconst amt = c.amount || {};\n\nfunction toIDR(v) { return v ? Number(v) / 100000 : 0; }\nfunction toWIBString(ms) {\n  if (!ms || ms === '0') return null;\n  const date = new Date(Number(ms));\n  const wib = new Date(date.getTime() + 7 * 3600 * 1000);\n  const yyyy = wib.getUTCFullYear();\n  const mm = String(wib.getUTCMonth() + 1).padStart(2, '0');\n  const dd = String(wib.getUTCDate()).padStart(2, '0');\n  const hh = String(wib.getUTCHours()).padStart(2, '0');\n  const mi = String(wib.getUTCMinutes()).padStart(2, '0');\n  const ss = String(wib.getUTCSeconds()).padStart(2, '0');\n  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}+07:00`;\n}\n\nconst statusMap = { 1: 'Pending', 2: 'Selesai', 3: 'Dibatalkan' };\n\nreturn { json: {\n  platform: 'shopeefood',\n  platform_order_number: c.reference_id || '',\n  platform_transaction_id: c.id || d.id,\n  order_time: toWIBString(c.create_time),\n  settled_time: toWIBString(c.complete_time),\n  status: statusMap[c.settlement_status] || `unknown_${c.settlement_status}`,\n  gross_amount: toIDR(amt.item_subtotal),\n  total_fees: toIDR(amt.store_subsidy) + toIDR(amt.commission),\n  net_revenue: toIDR(amt.amount),\n  currency: 'IDR',\n  source: 'api_clearing_detail',\n  source_id: c.id || d.id,\n  raw_payload: JSON.stringify(c),\n} };"
+      }
+    },
+    {
+      "id": "4426e920-0b95-4c0e-ad70-920ef0e1eb61",
+      "name": "Petakan Biaya Shopee",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        -280
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// -> 11 kolom KOLOM_BIAYA.\nconst d = $input.item.json;\nconst mappingRows = $('Baca Mapping Biaya Shopee').all().map(i => i.json);\nconst match = mappingRows.find(m =>\n  String(m.platform).trim().toLowerCase() === 'shopeefood' &&\n  String(m.transaction_type_raw).trim() === String(d.transaction_type)\n);\nconst kategori = match ? match.kategori_biaya : 'PERLU_REVIEW';\nconst deskripsi = match ? match.deskripsi : `Tipe belum dikenal (type=${d.transaction_type}), cek manual`;\n\nfunction toIDR(v) { return v ? Number(v) / 100000 : 0; }\nfunction toWIBString(ms) {\n  if (!ms || ms === '0') return null;\n  const date = new Date(Number(ms));\n  const wib = new Date(date.getTime() + 7 * 3600 * 1000);\n  const yyyy = wib.getUTCFullYear();\n  const mm = String(wib.getUTCMonth() + 1).padStart(2, '0');\n  const dd = String(wib.getUTCDate()).padStart(2, '0');\n  const hh = String(wib.getUTCHours()).padStart(2, '0');\n  const mi = String(wib.getUTCMinutes()).padStart(2, '0');\n  const ss = String(wib.getUTCSeconds()).padStart(2, '0');\n  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}+07:00`;\n}\nfunction toISODate(yyyymmdd) {\n  return `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}T00:00:00+07:00`;\n}\n\nreturn { json: {\n  tanggal_closing: toISODate(d.closing_date),\n  platform: 'shopeefood',\n  kategori_biaya: kategori,\n  deskripsi: deskripsi,\n  transaction_type_raw: String(d.transaction_type),\n  amount: toIDR(d.amount),\n  amount_raw: d.amount,\n  reference_id: d.reference_id || '',\n  id_platform: d.id,\n  create_time: toWIBString(d.create_time),\n  synced_at: new Date().toISOString(),\n} };"
+      }
+    },
+    {
+      "id": "ffd19527-0916-4c01-89c8-fa2e9ce0f3a4",
+      "name": "Ambil Token GrabFood",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1100,
+        -120
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT token, status, expires_at FROM api_tokens a JOIN platforms p ON p.platform_id = a.platform_id WHERE p.name = 'grabfood' LIMIT 1;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "d79e0931-1ea2-4f53-8719-7eb4bd24261d",
+      "name": "Validasi Token GrabFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const row = $input.item.json;\nif (!row) throw new Error('Token GrabFood tidak ditemukan di api_tokens untuk platform grabfood');\nif (row.status !== 'valid') throw new Error(`Token GrabFood status: ${row.status} -- cek dan refresh manual dulu di api_tokens`);\nif (row.expires_at && new Date(row.expires_at) < new Date()) throw new Error(`Token GrabFood sudah expired pada ${row.expires_at} -- refresh manual dulu`);\n\nlet tokenHeaders;\ntry { tokenHeaders = typeof row.token === 'string' ? JSON.parse(row.token) : row.token; }\ncatch (e) { throw new Error('Kolom token GrabFood bukan JSON valid'); }\n\nconst headers = {\n  ...tokenHeaders,\n  priority: 'u=1, i',\n  'sec-ch-ua': '\"Google Chrome\";v=\"149\", \"Chromium\";v=\"149\", \"Not)A;Brand\";v=\"24\"',\n  'sec-ch-ua-mobile': '?0',\n  'sec-ch-ua-platform': '\"macOS\"',\n  'sec-fetch-dest': 'empty',\n  'sec-fetch-mode': 'cors',\n  'sec-fetch-site': 'same-origin',\n};\n\nconst closing_date_raw = $('Tentukan Closing Date').first().json.closing_date;\nconst closing_date = `${closing_date_raw.slice(0, 4)}-${closing_date_raw.slice(4, 6)}-${closing_date_raw.slice(6, 8)}`;\nconst store_id = '01b23eb5-f43d-48e3-80f2-99237b6c98fa';\nconst merchant_group_id = headers['x-merchant-id'];\n\nreturn [{ json: { headers, closing_date, store_id, merchant_group_id } }];"
+      }
+    },
+    {
+      "id": "01b5eb1e-a3c3-4155-8229-339402a81782",
+      "name": "Baca Mapping Biaya GrabFood",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1540,
+        -240
+      ],
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1k48yRkXBJmEy0n2Du75i8ODhPYXPsHobXMygjqOUPCQ"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "MAPPING_BIAYA_PLATFORM"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "87aa810b-d633-4f58-9a49-a600ba73e146",
+      "name": "Ambil Daftar Transaksi GrabFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "// Paginasi SUDAH ADA di workflow lama (while-loop offset/limit=50)\n// -- dipakai ulang apa adanya, sudah aman.\nconst ctx = $('Validasi Token GrabFood').first().json;\nconst { headers, closing_date, store_id, merchant_group_id } = ctx;\n\nfunction randomRequestId() {\n  const chars = 'abcdef0123456789';\n  let s = '';\n  for (let i = 0; i < 32; i++) s += chars[Math.floor(Math.random() * chars.length)];\n  return s;\n}\nfunction nowWIBISO() {\n  const now = new Date();\n  const wib = new Date(now.getTime() + 7 * 3600 * 1000);\n  const yyyy = wib.getUTCFullYear();\n  const mm = String(wib.getUTCMonth() + 1).padStart(2, '0');\n  const dd = String(wib.getUTCDate()).padStart(2, '0');\n  const hh = String(wib.getUTCHours()).padStart(2, '0');\n  const mi = String(wib.getUTCMinutes()).padStart(2, '0');\n  const ss = String(wib.getUTCSeconds()).padStart(2, '0');\n  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}+07:00`;\n}\nfunction toDDMMYY(yyyy_mm_dd) {\n  const [y, m, d] = yyyy_mm_dd.split('-');\n  return `${d}/${m}/${y.slice(2)}`;\n}\n\nlet allTx = [];\nlet offset = 0;\nconst limit = 50;\n\nwhile (true) {\n  const url = `https://merchant.grab.com/mex/finances/v1/store/${store_id}/transactions?merchant_group_id=${merchant_group_id}&from=${closing_date}&to=${closing_date}&limit=${limit}&offset=${offset}&multi_entity_ids=&currency=IDR`;\n\n  const response = await this.helpers.httpRequest({\n    method: 'GET',\n    url,\n    headers: {\n      ...headers,\n      referer: `https://merchant.grab.com/finances?page=st&startDate=${toDDMMYY(closing_date)}&endDate=${toDDMMYY(closing_date)}&grabID=${store_id}`,\n      'x-date': nowWIBISO(),\n      'x-request-id': randomRequestId(),\n    },\n    json: true,\n    ignoreHttpStatusErrors: true,\n  });\n\n  if (response.error) {\n    if (offset > 0) break;\n    throw new Error(`GrabFood API error: ${JSON.stringify(response.error)} | closing_date=${closing_date} offset=${offset}`);\n  }\n\n  const rows = response.data || [];\n  allTx = allTx.concat(rows);\n\n  if (rows.length < limit) break;\n  offset += limit;\n}\n\nreturn allTx.map(tx => ({ json: { ...tx, closing_date } }));"
+      }
+    },
+    {
+      "id": "e0bbe987-ad8c-4a5d-9d8e-d4a162e54ea1",
+      "name": "Is Payment Category GrabFood",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "16747204-f78c-4d73-a6c3-1fe790285459",
+              "leftValue": "={{ $json.transaction_category }}",
+              "rightValue": "payment",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "51c8d104-220d-493f-9865-650bd7fce7b0",
+      "name": "Petakan Transaksi GrabFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        -220
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// -> 13 kolom KOLOM_TRANSAKSI. gross/net TIDAK dibagi/skala (beda\n// dari Shopee /100000 dan GoFood /100).\nconst d = $input.item.json;\n\nfunction toWIBString(input) {\n  let date;\n  if (typeof input === 'number' || /^\\d+$/.test(String(input))) date = new Date(Number(input));\n  else date = new Date(input);\n  const wib = new Date(date.getTime() + 7 * 3600 * 1000);\n  const yyyy = wib.getUTCFullYear();\n  const mm = String(wib.getUTCMonth() + 1).padStart(2, '0');\n  const dd = String(wib.getUTCDate()).padStart(2, '0');\n  const hh = String(wib.getUTCHours()).padStart(2, '0');\n  const mi = String(wib.getUTCMinutes()).padStart(2, '0');\n  const ss = String(wib.getUTCSeconds()).padStart(2, '0');\n  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}+07:00`;\n}\n\nreturn { json: {\n  platform: 'grabfood',\n  platform_order_number: d.order_id || '',\n  platform_transaction_id: d.transaction_id,\n  order_time: toWIBString(d.created_at),\n  settled_time: toWIBString(d.updated_at),\n  status: d.transaction_status,\n  gross_amount: d.gross_sales,\n  total_fees: d.gross_sales - d.net_total,\n  net_revenue: d.net_total,\n  currency: 'IDR',\n  source: 'api_transactions_list',\n  source_id: d.transaction_id,\n  raw_payload: JSON.stringify(d),\n} };"
+      }
+    },
+    {
+      "id": "1856e87f-a819-492c-935b-3e1aaa6a238b",
+      "name": "Petakan Biaya GrabFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        20
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// -> 11 kolom KOLOM_BIAYA. amount TIDAK dibagi/skala. synced_at WIB\n// (beda dari Shopee/GoFood yang UTC) -- direplikasi apa adanya.\nconst d = $input.item.json;\nconst mappingRows = $('Baca Mapping Biaya GrabFood').all().map(i => i.json);\nconst match = mappingRows.find(m =>\n  String(m.platform).trim().toLowerCase() === 'grabfood' &&\n  String(m.transaction_type_raw).trim() === String(d.transaction_category)\n);\nconst kategori = match ? match.kategori_biaya : 'PERLU_REVIEW';\nconst deskripsi = match ? match.deskripsi : `Kategori belum dikenal (category=${d.transaction_category}), cek manual`;\n\nfunction toWIBString(input) {\n  let date;\n  if (typeof input === 'number' || /^\\d+$/.test(String(input))) date = new Date(Number(input));\n  else date = new Date(input);\n  const wib = new Date(date.getTime() + 7 * 3600 * 1000);\n  const yyyy = wib.getUTCFullYear();\n  const mm = String(wib.getUTCMonth() + 1).padStart(2, '0');\n  const dd = String(wib.getUTCDate()).padStart(2, '0');\n  const hh = String(wib.getUTCHours()).padStart(2, '0');\n  const mi = String(wib.getUTCMinutes()).padStart(2, '0');\n  const ss = String(wib.getUTCSeconds()).padStart(2, '0');\n  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}+07:00`;\n}\n\nreturn { json: {\n  tanggal_closing: d.closing_date,\n  platform: 'grabfood',\n  kategori_biaya: kategori,\n  deskripsi: deskripsi,\n  transaction_type_raw: String(d.transaction_category),\n  amount: d.net_total,\n  amount_raw: d.net_total,\n  reference_id: d.order_id || '',\n  id_platform: d.transaction_id,\n  create_time: toWIBString(d.created_at),\n  synced_at: toWIBString(new Date().toISOString()),\n} };"
+      }
+    },
+    {
+      "id": "3a7e0ce7-c80b-4f53-b6e7-fae65cfcc01a",
+      "name": "Ambil Token GoFood",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1100,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT token, status, expires_at FROM api_tokens a JOIN platforms p ON p.platform_id = a.platform_id WHERE p.name = 'gofood' LIMIT 1;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aad23962-921a-45e1-816e-aba746f3e1fe",
+      "name": "Validasi Token GoFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const row = $input.item.json;\nif (!row) throw new Error('Token GoFood tidak ditemukan di api_tokens untuk platform gofood');\nif (row.status !== 'valid') throw new Error(`Token GoFood status: ${row.status} -- cek dan refresh manual dulu di api_tokens`);\nif (row.expires_at && new Date(row.expires_at) < new Date()) throw new Error(`Token GoFood sudah expired pada ${row.expires_at} -- refresh manual dulu`);\n\nlet tokenData;\ntry { tokenData = typeof row.token === 'string' ? JSON.parse(row.token) : row.token; }\ncatch (e) { throw new Error('Kolom token GoFood bukan JSON valid'); }\n\nconst closing_date_raw = $('Tentukan Closing Date').first().json.closing_date;\nreturn [{ json: {\n  authorization: `${tokenData.token_type} ${tokenData.access_token}`,\n  merchant_id: 'G426274732',\n  user_agent: tokenData.user_agent || 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',\n  closing_date_raw,\n} }];"
+      }
+    },
+    {
+      "id": "d1f79cff-79b3-43fc-97de-b2238a62e7a6",
+      "name": "Baca Mapping Biaya GoFood",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1540,
+        100
+      ],
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1k48yRkXBJmEy0n2Du75i8ODhPYXPsHobXMygjqOUPCQ"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "MAPPING_BIAYA_PLATFORM"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "9d239482-f740-4238-9c58-a464ae6be436",
+      "name": "Ambil Daftar Transaksi GoFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        220
+      ],
+      "parameters": {
+        "jsCode": "// Paginasi SUDAH ADA & SUDAH TERBUKTI jalan di endpoint ini --\n// dipakai ulang apa adanya (BUKAN dari pola param ganda-ambigu di\n// workflow 'All - Get Product Details' untuk endpoint yang sama).\nconst auth = $('Validasi Token GoFood').first().json;\nconst { authorization, merchant_id, user_agent, closing_date_raw } = auth;\n\nfunction toWIBDayRangeUTC(yyyymmdd) {\n  const y = yyyymmdd.slice(0, 4), m = yyyymmdd.slice(4, 6), d = yyyymmdd.slice(6, 8);\n  const startWIB = new Date(`${y}-${m}-${d}T00:00:00+07:00`);\n  const endWIB = new Date(`${y}-${m}-${d}T23:59:59.999+07:00`);\n  return { start_time: startWIB.toISOString(), end_time: endWIB.toISOString() };\n}\n\nconst { start_time, end_time } = toWIBDayRangeUTC(closing_date_raw);\nconst headers = {\n  accept: 'application/json, text/plain, */*',\n  'accept-language': 'en-US,en;q=0.9,id;q=0.8',\n  'authentication-type': 'go-id',\n  authorization,\n  'content-type': 'application/json',\n  origin: 'https://portal.gofoodmerchant.co.id',\n  referer: 'https://portal.gofoodmerchant.co.id/',\n  'user-agent': user_agent,\n};\n\nlet allTx = [];\nlet from = 0;\nconst size = 20;\n\nwhile (true) {\n  const url = `https://api.gojekapi.com/merchant-analytics/v2/merchants/transactions?from=${from}&size=${size}&statuses=SETTLEMENT,CAPTURE,REFUND,PARTIAL_REFUND&payment_types=QRIS,GOPAY,OFFLINE_CREDIT_CARD,OFFLINE_DEBIT_CARD,CREDIT_CARD&start_time=${start_time}&end_time=${end_time}&merchant_ids=${merchant_id}`;\n\n  const response = await this.helpers.httpRequest({ method: 'GET', url, headers, json: true, ignoreHttpStatusErrors: true });\n\n  const rows = Array.isArray(response) ? response : ((response && (response.data || response.transactions)) || []);\n  allTx = allTx.concat(rows);\n\n  if (rows.length < size) break;\n  from += size;\n}\n\nreturn allTx.map(tx => ({ json: tx }));"
+      }
+    },
+    {
+      "id": "5b393d4c-4520-4d63-99e6-616f3cec2e85",
+      "name": "Petakan Transaksi GoFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// -> 13 kolom KOLOM_TRANSAKSI. gross/net dibagi 100.\nconst d = $input.item.json;\nconst share = (d.shares && d.shares[0]) || {};\nconst commerce = d.commerce || {};\n\nfunction toIDR(v) { return v ? Number(v) / 100 : 0; }\nfunction toWIBString(input) {\n  let date;\n  if (typeof input === 'number' || /^\\d+$/.test(String(input))) date = new Date(Number(input));\n  else date = new Date(input);\n  const wib = new Date(date.getTime() + 7 * 3600 * 1000);\n  const yyyy = wib.getUTCFullYear();\n  const mm = String(wib.getUTCMonth() + 1).padStart(2, '0');\n  const dd = String(wib.getUTCDate()).padStart(2, '0');\n  const hh = String(wib.getUTCHours()).padStart(2, '0');\n  const mi = String(wib.getUTCMinutes()).padStart(2, '0');\n  const ss = String(wib.getUTCSeconds()).padStart(2, '0');\n  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}+07:00`;\n}\n\nconst gross = toIDR(d.gross_amount);\nconst net = toIDR(share.merchant_share);\n\nreturn { json: {\n  platform: 'gofood',\n  platform_order_number: d.order_id || '',\n  platform_transaction_id: d.id,\n  order_time: toWIBString(commerce.ordered_at || d.transaction_time),\n  settled_time: toWIBString(d.settlement_time),\n  status: d.transaction_status,\n  gross_amount: gross,\n  total_fees: gross - net,\n  net_revenue: net,\n  currency: d.currency || 'IDR',\n  source: 'api_merchant_analytics_transactions',\n  source_id: d.id,\n  raw_payload: JSON.stringify(d),\n} };"
+      }
+    },
+    {
+      "id": "5f90ff70-3d07-4455-a826-0b3a75de33a2",
+      "name": "Ambil Daftar Payout GoFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        400
+      ],
+      "parameters": {
+        "jsCode": "// per DINAIKKAN 10->50 (keputusan desain, margin aman) -- endpoint\n// ini TIDAK berjendela tanggal sama sekali (keterbatasan API GoFood\n// yang sudah ada), tapi tidak masalah karena dedup sekarang\n// ditangani DB (ON CONFLICT id_platform), bukan baca-balik Sheet.\nconst auth = $('Validasi Token GoFood').first().json;\nconst { authorization, user_agent } = auth;\n\nconst response = await this.helpers.httpRequest({\n  method: 'GET',\n  url: 'https://api.gobiz.co.id/v1/merchants/payouts?page=1&per=50',\n  headers: {\n    accept: 'application/json, text/plain, */*',\n    'accept-language': 'en-US,en;q=0.9,id;q=0.8',\n    'authentication-type': 'go-id',\n    authorization,\n    'content-type': 'application/json',\n    origin: 'https://portal.gofoodmerchant.co.id',\n    referer: 'https://portal.gofoodmerchant.co.id/',\n    'user-agent': user_agent,\n  },\n  json: true,\n  ignoreHttpStatusErrors: true,\n});\n\nconst payouts = Array.isArray(response) ? response : ((response && (response.data || response.payouts)) || []);\nreturn payouts.filter(p => p.status === 'paid').map(p => ({ json: { payout_id: p.payout_id } }));"
+      }
+    },
+    {
+      "id": "94233806-667d-428a-9d61-b5e93b1ba637",
+      "name": "Ambil Detail Payout GoFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const auth = $('Validasi Token GoFood').first().json;\nconst { authorization, user_agent } = auth;\n\nlet allAdjustments = [];\n\nfor (const item of $input.all()) {\n  const payout_id = item.json.payout_id;\n  if (!payout_id) continue;\n\n  let page = 1;\n  const per = 10;\n\n  while (true) {\n    const response = await this.helpers.httpRequest({\n      method: 'GET',\n      url: `https://api.gobiz.co.id/v1/merchants/payouts/${payout_id}/details?page=${page}&per=${per}`,\n      headers: {\n        accept: 'application/json, text/plain, */*',\n        'accept-language': 'en-US,en;q=0.9,id;q=0.8',\n        'authentication-type': 'go-id',\n        authorization,\n        'content-type': 'application/json',\n        origin: 'https://portal.gofoodmerchant.co.id',\n        referer: 'https://portal.gofoodmerchant.co.id/',\n        'user-agent': user_agent,\n      },\n      json: true,\n      ignoreHttpStatusErrors: true,\n    });\n\n    const shares = (response && response.transaction_shares) || [];\n    const adjustments = shares.filter(s => s.payment_type === 'wallet_transaction');\n    allAdjustments = allAdjustments.concat(adjustments.map(a => ({ ...a, payout_id })));\n\n    if (!response || !response.next_page) break;\n    page = response.next_page;\n  }\n}\n\nreturn allAdjustments.map(a => ({ json: a }));"
+      }
+    },
+    {
+      "id": "60811a2e-89f2-42b9-9b8b-2f735ebbb0ec",
+      "name": "Petakan Biaya GoFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        400
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// -> 11 kolom KOLOM_BIAYA. amount dibagi 100 (sama skala dgn\n// Transaksi GoFood). label (d.order_id) berisi teks deskriptif,\n// BUKAN id order sungguhan -- sesuai temuan riset.\nconst d = $input.item.json;\nconst mappingRows = $('Baca Mapping Biaya GoFood').all().map(i => i.json);\nconst label = d.order_id;\nconst match = mappingRows.find(m =>\n  String(m.platform).trim().toLowerCase() === 'gofood' &&\n  String(m.transaction_type_raw).trim() === String(label)\n);\nconst kategori = match ? match.kategori_biaya : 'PERLU_REVIEW';\nconst deskripsi = match ? match.deskripsi : label;\n\nfunction toIDR(v) { return v ? Number(v) / 100 : 0; }\nfunction toWIBDateTime(input) {\n  const date = new Date(input);\n  const wib = new Date(date.getTime() + 7 * 3600 * 1000);\n  const yyyy = wib.getUTCFullYear();\n  const mm = String(wib.getUTCMonth() + 1).padStart(2, '0');\n  const dd = String(wib.getUTCDate()).padStart(2, '0');\n  const hh = String(wib.getUTCHours()).padStart(2, '0');\n  const mi = String(wib.getUTCMinutes()).padStart(2, '0');\n  const ss = String(wib.getUTCSeconds()).padStart(2, '0');\n  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}+07:00`;\n}\nfunction toWIBDateOnly(input) {\n  const date = new Date(input);\n  const wib = new Date(date.getTime() + 7 * 3600 * 1000);\n  const yyyy = wib.getUTCFullYear();\n  const mm = String(wib.getUTCMonth() + 1).padStart(2, '0');\n  const dd = String(wib.getUTCDate()).padStart(2, '0');\n  return `${yyyy}-${mm}-${dd}T00:00:00+07:00`;\n}\n\nreturn { json: {\n  tanggal_closing: toWIBDateOnly(d.transaction_time),\n  platform: 'gofood',\n  kategori_biaya: kategori,\n  deskripsi: deskripsi,\n  transaction_type_raw: label,\n  amount: toIDR(d.amount),\n  amount_raw: d.amount,\n  reference_id: d.payout_id,\n  id_platform: d.payment_transaction_id,\n  create_time: toWIBDateTime(d.transaction_time),\n  synced_at: new Date().toISOString(),\n} };"
+      }
+    },
+    {
+      "id": "f64fec1d-ad6a-4e7f-9818-cfb93bcdb012",
+      "name": "Gabung Transaksi",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2640,
+        -340
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 3,
+        "options": {}
+      }
+    },
+    {
+      "id": "fd9dae28-7dc0-4c3e-aa71-441c541cabbf",
+      "name": "Susun CSV Transaksi",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        -340
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "function csvField(v) {\n  const s = v === null || v === undefined ? \"\" : String(v);\n  return /[\",\\n\\r]/.test(s) ? '\"' + s.replace(/\"/g, '\"\"') + '\"' : s;\n}\nfunction buatBarisCsv(header, obj) {\n  return header.map((h) => csvField(obj[h])).join(\",\");\n}\n\nconst mode = $('Simpan Token & Mode').first().json;\nconst { dryRun, token } = mode;\nconst HEADER = [\"platform\",\"platform_order_number\",\"platform_transaction_id\",\"order_time\",\"settled_time\",\"status\",\"gross_amount\",\"total_fees\",\"net_revenue\",\"currency\",\"source\",\"source_id\",\"raw_payload\"];\nconst MAKS_BARIS = 10000;\n\n// TIDAK ada filter cutoff tanggal -- jendela (closing_date H-1) sudah\n// ditentukan di hulu per cabang platform.\nconst baris = [];\nfor (const item of $input.all()) {\n  const row = item.json;\n  const obj = {};\n  for (const kolom of HEADER) obj[kolom] = row[kolom] ?? \"\";\n  if (!obj.currency) obj.currency = \"IDR\";\n  baris.push(obj);\n}\n\nif (dryRun) {\n  return [{ json: { dryRun: true, jumlahBaris: baris.length, contohBaris: baris.slice(0, 3), csvHeader: HEADER.join(\",\") } }];\n}\n\nconst hasil = [];\nfor (let i = 0; i < baris.length; i += MAKS_BARIS) {\n  const potongan = baris.slice(i, i + MAKS_BARIS);\n  const lines = [HEADER.join(\",\")];\n  for (const obj of potongan) lines.push(buatBarisCsv(HEADER, obj));\n  hasil.push({ json: { dryRun: false, token, csvText: lines.join(\"\\n\") + \"\\n\", jumlahBarisBatch: potongan.length, batchKe: Math.floor(i / MAKS_BARIS) + 1 } });\n}\nif (hasil.length === 0) {\n  hasil.push({ json: { dryRun: false, token, csvText: HEADER.join(\",\") + \"\\n\", jumlahBarisBatch: 0, batchKe: 1 } });\n}\nreturn hasil;"
+      }
+    },
+    {
+      "id": "e58565ba-d9ee-4a4d-bda7-ac484fee982c",
+      "name": "Apakah Dry-Run Transaksi?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3080,
+        -340
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "6eb2f18e-aec7-41e6-ac95-f3fe9814ea3b",
+              "leftValue": "={{ $json.dryRun }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "2f95e2af-f053-43ad-b9f4-76e6e3be365a",
+      "name": "Pratinjau Dry-Run Transaksi",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3300,
+        -460
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "1d810c9e-99ff-4d74-b4fa-f5d1969bd926",
+      "name": "Kirim CSV Transaksi ke App",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3300,
+        -260
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://burnas-app.duckdns.org/api/sales-sync/import/transaksi",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "text/csv"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "raw",
+        "rawContentType": "text/csv",
+        "body": "={{ $json.csvText }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "19c89891-39b6-408e-b9b9-9b95067478c0",
+      "name": "Ada Baris Gagal Transaksi?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3520,
+        -260
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "03c05b4f-5129-4675-ab1b-26ddf7fce711",
+              "leftValue": "={{ $json.errors.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "475f2d4a-4606-4f62-97ac-d30cf80bece0",
+      "name": "Error: Ada Baris Transaksi Gagal",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        3740,
+        -360
+      ],
+      "parameters": {
+        "errorMessage": "={{ 'Import transaksi (langsung API): ' + $json.errors.length + ' baris CSV gagal disimpan. Detail: ' + JSON.stringify($json.errors) }}"
+      }
+    },
+    {
+      "id": "a7cc42d1-d95b-462c-ad8d-a4943c021902",
+      "name": "Selesai Transaksi",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3740,
+        -160
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a0e681f7-6d9f-4379-8a19-920f0532359c",
+      "name": "Gabung Biaya",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2640,
+        300
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 3,
+        "options": {}
+      }
+    },
+    {
+      "id": "7a951e16-93b9-429b-8302-ea3e117c10c6",
+      "name": "Susun CSV Biaya",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "function csvField(v) {\n  const s = v === null || v === undefined ? \"\" : String(v);\n  return /[\",\\n\\r]/.test(s) ? '\"' + s.replace(/\"/g, '\"\"') + '\"' : s;\n}\nfunction buatBarisCsv(header, obj) {\n  return header.map((h) => csvField(obj[h])).join(\",\");\n}\n\nconst mode = $('Simpan Token & Mode').first().json;\nconst { dryRun, token } = mode;\nconst HEADER = [\"tanggal_closing\",\"platform\",\"kategori_biaya\",\"deskripsi\",\"transaction_type_raw\",\"amount\",\"amount_raw\",\"reference_id\",\"id_platform\",\"create_time\",\"synced_at\"];\nconst MAKS_BARIS = 30000;\n\n// TIDAK ADA staticData/dedup/cutoff synced_at di sini -- beda sengaja\n// dari biaya-platform.json. Jendela (closing_date H-1) sudah\n// ditentukan di hulu per cabang platform, dan dedup antar-eksekusi\n// (termasuk payout GoFood yang tidak berjendela tanggal) ditangani\n// DB lewat ON CONFLICT (id_platform) DO UPDATE -- lihat README untuk\n// penjelasan lengkap kenapa ini lebih sederhana & cukup aman.\nconst baris = [];\nfor (const item of $input.all()) {\n  const row = item.json;\n  const obj = {};\n  for (const kolom of HEADER) obj[kolom] = row[kolom] ?? \"\";\n  baris.push(obj);\n}\n\nif (dryRun) {\n  return [{ json: { dryRun: true, jumlahBaris: baris.length, contohBaris: baris.slice(0, 3), csvHeader: HEADER.join(\",\") } }];\n}\n\nconst hasil = [];\nfor (let i = 0; i < baris.length; i += MAKS_BARIS) {\n  const potongan = baris.slice(i, i + MAKS_BARIS);\n  const lines = [HEADER.join(\",\")];\n  for (const obj of potongan) lines.push(buatBarisCsv(HEADER, obj));\n  hasil.push({ json: { dryRun: false, token, csvText: lines.join(\"\\n\") + \"\\n\", jumlahBarisBatch: potongan.length, batchKe: Math.floor(i / MAKS_BARIS) + 1 } });\n}\nif (hasil.length === 0) {\n  hasil.push({ json: { dryRun: false, token, csvText: HEADER.join(\",\") + \"\\n\", jumlahBarisBatch: 0, batchKe: 1 } });\n}\nreturn hasil;"
+      }
+    },
+    {
+      "id": "1be4beee-a815-45ee-a4b7-056211ce1b8d",
+      "name": "Apakah Dry-Run Biaya?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3080,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "1ecbff2d-572a-4739-ba0c-bcbb2acedb2e",
+              "leftValue": "={{ $json.dryRun }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "edaa6305-7549-4583-8f11-41267d608aa2",
+      "name": "Pratinjau Dry-Run Biaya",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3300,
+        180
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "205c55eb-c72e-4a5d-9605-f89869b27014",
+      "name": "Kirim CSV Biaya ke App",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3300,
+        380
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://burnas-app.duckdns.org/api/sales-sync/import/biaya-platform",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "text/csv"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "raw",
+        "rawContentType": "text/csv",
+        "body": "={{ $json.csvText }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "4e9984bd-4205-4dbb-9a5b-6f334cac1f8a",
+      "name": "Ada Baris Gagal Biaya?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3520,
+        380
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "031cd046-8d34-4f9e-b97f-41e68a2ebb7a",
+              "leftValue": "={{ $json.errors.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b7aa9d48-e9cd-44df-8dd6-ac105834dfbf",
+      "name": "Error: Ada Baris Biaya Gagal",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        3740,
+        280
+      ],
+      "parameters": {
+        "errorMessage": "={{ 'Import biaya-platform (langsung API): ' + $json.errors.length + ' baris CSV gagal disimpan. Detail: ' + JSON.stringify($json.errors) }}"
+      }
+    },
+    {
+      "id": "701885ba-0a14-4fb8-a02c-35a686fe00c7",
+      "name": "Selesai Biaya",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3740,
+        480
+      ],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Jadwal Otomatis": {
+      "main": [
+        [
+          {
+            "node": "Atur Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jalankan Manual (Uji Coba)": {
+      "main": [
+        [
+          {
+            "node": "Atur Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atur Mode": {
+      "main": [
+        [
+          {
+            "node": "Login ke App",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Login ke App": {
+      "main": [
+        [
+          {
+            "node": "Simpan Token & Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simpan Token & Mode": {
+      "main": [
+        [
+          {
+            "node": "Tentukan Closing Date",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tentukan Closing Date": {
+      "main": [
+        [
+          {
+            "node": "Ambil Token Shopee",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ambil Token GrabFood",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ambil Token GoFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Token Shopee": {
+      "main": [
+        [
+          {
+            "node": "Validasi Token Shopee",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validasi Token Shopee": {
+      "main": [
+        [
+          {
+            "node": "Baca Mapping Biaya Shopee",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Baca Mapping Biaya Shopee": {
+      "main": [
+        [
+          {
+            "node": "Ambil Daftar Settlement Shopee",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Daftar Settlement Shopee": {
+      "main": [
+        [
+          {
+            "node": "Is Order Payment Shopee",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Order Payment Shopee": {
+      "main": [
+        [
+          {
+            "node": "Ambil Detail Clearing Shopee",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Petakan Biaya Shopee",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Detail Clearing Shopee": {
+      "main": [
+        [
+          {
+            "node": "Petakan Transaksi Shopee",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Petakan Transaksi Shopee": {
+      "main": [
+        [
+          {
+            "node": "Gabung Transaksi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Petakan Biaya Shopee": {
+      "main": [
+        [
+          {
+            "node": "Gabung Biaya",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Token GrabFood": {
+      "main": [
+        [
+          {
+            "node": "Validasi Token GrabFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validasi Token GrabFood": {
+      "main": [
+        [
+          {
+            "node": "Baca Mapping Biaya GrabFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Baca Mapping Biaya GrabFood": {
+      "main": [
+        [
+          {
+            "node": "Ambil Daftar Transaksi GrabFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Daftar Transaksi GrabFood": {
+      "main": [
+        [
+          {
+            "node": "Is Payment Category GrabFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Payment Category GrabFood": {
+      "main": [
+        [
+          {
+            "node": "Petakan Transaksi GrabFood",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Petakan Biaya GrabFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Petakan Transaksi GrabFood": {
+      "main": [
+        [
+          {
+            "node": "Gabung Transaksi",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Petakan Biaya GrabFood": {
+      "main": [
+        [
+          {
+            "node": "Gabung Biaya",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Ambil Token GoFood": {
+      "main": [
+        [
+          {
+            "node": "Validasi Token GoFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validasi Token GoFood": {
+      "main": [
+        [
+          {
+            "node": "Baca Mapping Biaya GoFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Baca Mapping Biaya GoFood": {
+      "main": [
+        [
+          {
+            "node": "Ambil Daftar Transaksi GoFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Daftar Transaksi GoFood": {
+      "main": [
+        [
+          {
+            "node": "Petakan Transaksi GoFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Petakan Transaksi GoFood": {
+      "main": [
+        [
+          {
+            "node": "Gabung Transaksi",
+            "type": "main",
+            "index": 2
+          },
+          {
+            "node": "Ambil Daftar Payout GoFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Daftar Payout GoFood": {
+      "main": [
+        [
+          {
+            "node": "Ambil Detail Payout GoFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Detail Payout GoFood": {
+      "main": [
+        [
+          {
+            "node": "Petakan Biaya GoFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Petakan Biaya GoFood": {
+      "main": [
+        [
+          {
+            "node": "Gabung Biaya",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Gabung Transaksi": {
+      "main": [
+        [
+          {
+            "node": "Susun CSV Transaksi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Susun CSV Transaksi": {
+      "main": [
+        [
+          {
+            "node": "Apakah Dry-Run Transaksi?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apakah Dry-Run Transaksi?": {
+      "main": [
+        [
+          {
+            "node": "Pratinjau Dry-Run Transaksi",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kirim CSV Transaksi ke App",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kirim CSV Transaksi ke App": {
+      "main": [
+        [
+          {
+            "node": "Ada Baris Gagal Transaksi?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ada Baris Gagal Transaksi?": {
+      "main": [
+        [
+          {
+            "node": "Error: Ada Baris Transaksi Gagal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Selesai Transaksi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gabung Biaya": {
+      "main": [
+        [
+          {
+            "node": "Susun CSV Biaya",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Susun CSV Biaya": {
+      "main": [
+        [
+          {
+            "node": "Apakah Dry-Run Biaya?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apakah Dry-Run Biaya?": {
+      "main": [
+        [
+          {
+            "node": "Pratinjau Dry-Run Biaya",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kirim CSV Biaya ke App",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kirim CSV Biaya ke App": {
+      "main": [
+        [
+          {
+            "node": "Ada Baris Gagal Biaya?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ada Baris Gagal Biaya?": {
+      "main": [
+        [
+          {
+            "node": "Error: Ada Baris Biaya Gagal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Selesai Biaya",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta"
+  },
+  "staticData": null,
+  "meta": {
+    "instanceId": null
+  }
+}

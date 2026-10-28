@@ -3359,3 +3359,110 @@ tercetak ke chat/log/git sepanjang Tahap B maupun C -- password database
 hanya pernah "disentuh" lewat shell remote (`source .env.production`
 langsung di proses SSH), tidak pernah lewat argumen command yang terlihat
 di `ps`/riwayat command, tidak pernah lewat variabel yang di-echo.
+
+## 32. Workflow n8n langsung-API (Fase 1 Majoo + Fase 2 Shopee/GrabFood/GoFood): keputusan desain (2026-10-28)
+
+Lanjutan § 25 (4 workflow n8n baca-Sheets yang dibuat sesi lalu, belum
+diaktifkan). Owner minta jalur baru yang menarik data langsung dari API
+platform (Majoo/Shopee/GrabFood/GoFood), bukan dari Google Sheets,
+walau sudah diberi tahu 2x lewat `AskUserQuestion` bahwa jalur Sheets
+lebih rendah risiko dan hasil akhirnya sama — owner tetap pilih jalur
+API langsung. **Motong stok (`/sales-sync/proses`) TIDAK disentuh sama
+sekali** di kedua fase — tetap manual, sesuai batasan keras yang sudah
+berlaku sejak § 20-21.
+
+### 32.1 Fase 1 — Majoo (`devops/n8n/raw-majoo-direct.json`, commit `b1c1994`)
+
+Pilot satu platform dulu sebelum 3 platform lain (riset mendalam per
+platform makan waktu signifikan, membuktikan pola di 1 sumber dulu
+lebih aman). Meniru logika workflow lama `Majoo - Sales` (dibaca
+read-only dari database `n8n` via SSH) untuk tarik `detail_sales` +
+`refund_sales`, dipetakan langsung ke `KOLOM_MAJOO` (20 kolom,
+`import-csv.ts:527-546`), lalu dipakaikan ke node ekor
+"Susun CSV & Pecah Batch" yang sudah ada di `raw-majoo.json` (PETA
+disederhanakan jadi identity-map, filter cutoff tanggal dihapus karena
+jendela sudah ditentukan di hulu). Paginasi pakai loop manual
+If/Wait/Increment Page (node merge index 0/1 dipasangkan ulang tiap
+iterasi) — pola ini jadi rujukan desain sebelum ditemukan bahwa n8n
+Code node juga bisa melakukan paginasi lewat `this.helpers.httpRequest`
+dalam satu `while` loop (lihat § 32.2, dipakai di Fase 2 karena lebih
+sederhana).
+
+### 32.2 Fase 2 — Shopee/GrabFood/GoFood (`log-penjualan-direct.json` +
+`transaksi-biaya-direct.json`)
+
+Riset node-per-node 2 workflow lama (`All - Get Product Details`, 29
+node; `Get sales & biaya online`, 33 node) didelegasikan ke 2 subagent
+riset paralel (hasil tersimpan sementara di `/tmp/n8n-study-fase2/`,
+dihapus setelah file akhir ditulis). Owner mengonfirmasi 4 keputusan
+lewat `AskUserQuestion` sebelum implementasi:
+
+1. **Scope**: bangun SEMUA 7 kombinasi platform×feed sekaligus (Shopee/
+   GrabFood/GoFood/Majoo-level-produk × log-penjualan; Shopee/GrabFood/
+   GoFood × transaksi+biaya-platform) — bukan bertahap. Trade-off
+   eksplisit: belum ada satu pun bagian yang diuji ke API asli,
+   didokumentasikan sebagai peringatan di `devops/n8n/README.md` § 12.
+2. **Paginasi ditambahkan** di semua titik yang workflow lama hardcode
+   1 halaman (Shopee & GrabFood `log-penjualan-direct.json`, endpoint
+   GoFood di situ disamakan ke pola yang SUDAH terbukti jalan di
+   `transaksi-biaya-direct.json`). Ditemukan saat riset: Shopee/
+   GrabFood/GoFood di workflow `Get sales & biaya online` SUDAH punya
+   paginasi aman (Code node dengan `while` loop + `this.helpers.httpRequest`
+   async) — pola ini dipakai ulang/direplikasi untuk tempat yang BELUM
+   punya paginasi, lebih sederhana dari pola multi-node If/Wait/Increment
+   Fase 1.
+3. **`unique_key` GrabFood disamakan** ke nama item mentah dari platform
+   (dulu satu-satunya yang pakai nama standar hasil alias — risiko
+   duplikasi kalau alias direvisi).
+4. **Filter `is_refundable !== 0` Majoo level-produk direplikasi apa
+   adanya** (skip SELURUH transaksi yang masih bisa direfund, bukan
+   cuma baris refund-nya) — berpotensi bug/data-lag, TIDAK diperbaiki
+   di putaran kerja ini, biar tidak tercampur dengan tujuan utama
+   (ganti jalur Sheets->API).
+
+Keputusan desain tambahan (tidak perlu dikonfirmasi ulang, alasan jelas
+dari bukti kode):
+- **Lookup `MENU_ALIAS` (Google Sheets) dihapus total** dari kedua file
+  baru — app sudah punya `syncItemMappingFromLog` (`import-csv.ts:421`)
+  untuk memetakan item baru dari CSV, jadi `item_name` dikirim mentah,
+  `menu_id` kosong. `log-penjualan-direct.json` sekarang 100% tanpa
+  Google Sheets.
+- **Lookup `MAPPING_BIAYA_PLATFORM` (Google Sheets) DIPERTAHANKAN** di
+  `transaksi-biaya-direct.json` — beda dari `MENU_ALIAS`, tidak ada
+  mekanisme pengganti di app untuk kategorisasi biaya; menghapusnya
+  bikin semua baris baru berlabel "PERLU_REVIEW" selamanya.
+- **Dedup manual Biaya GoFood (baca-balik Sheet biaya_platform) dihapus**
+  — endpoint `/import/biaya-platform` sudah `ON CONFLICT (id_platform)
+  DO UPDATE` (`import-csv.ts` SQL_BIAYA_UPSERT), payout GoFood selalu
+  punya `id_platform`, jadi cukup kirim apa adanya. `Fetch Payout List`
+  `per` dinaikkan 10->50 sebagai margin aman (endpoint ini TIDAK
+  berjendela tanggal sama sekali, keterbatasan API GoFood yang sudah
+  ada, bukan baru).
+- **Format kolom `token` tiap platform diverifikasi LANGSUNG via query
+  read-only** (`jsonb_object_keys`, tanpa pernah menampilkan isi/value
+  token) ke `api_tokens`, bukan cuma dipercaya dari baca kode lama —
+  dua agent riset paralel SALING KONTRADIKSI soal format token Shopee &
+  GrabFood (satu bilang key berdash seperti nama header asli, satu
+  bilang key underscore hasil destrukturisasi). Hasil verifikasi:
+  **key aslinya BERDASH** (`'x-sap-ri'`, `'spc-b-oft'`, `'grab-id'`,
+  dst — SAMA DENGAN nama header HTTP asli, bisa langsung disebar/spread
+  sebagai header request tanpa destrukturisasi field-per-field).
+  **Temuan sampingan**: node `Parse & Validate Token` pada workflow
+  LAMA `Get sales & biaya online` (cabang Shopee) ternyata membaca
+  `tokenData.x_sap_ri`/`tokenData.spc_b_oft` (underscore) — SELALU
+  `undefined` karena key aslinya dash. Kemungkinan bug lama yang belum
+  pernah ketahuan (header terkirim `undefined` ke Shopee). TIDAK
+  diperbaiki di workflow lama (luar scope), dicatat di
+  `devops/n8n/README.md` § 12 sebagai informasi untuk owner.
+- Endpoint Majoo level-produk (`services.majoo.id/mayang/0_0_12/transaction/{id}`)
+  memakai header `token: {access_token}` (BUKAN `authorization: Bearer`
+  seperti endpoint `detail_sales`/`refund_sales` Fase 1) — dipertahankan
+  sesuai workflow lama, dicatat eksplisit karena mudah terlewat kalau
+  disamakan dengan pola endpoint Majoo lainnya.
+
+Kedua file dibangun lewat skrip Python (generate node+connections
+terprogram, pola sama seperti Fase 1) untuk hindari salah transkripsi
+di graf besar (33 node untuk log-penjualan-direct.json, 45 node untuk
+transaksi-biaya-direct.json). Divalidasi terprogram: JSON valid, tidak
+ada node yatim/duplikat, tidak ada referensi `/proses`, sebelum
+di-commit.

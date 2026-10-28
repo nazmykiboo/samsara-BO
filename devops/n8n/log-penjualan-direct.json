@@ -1,0 +1,995 @@
+{
+  "name": "Sales-Sync: Ambil & Kirim Log Penjualan (Langsung API)",
+  "nodes": [
+    {
+      "id": "3b40243b-b357-46dd-99d6-2139886fb259",
+      "name": "Jadwal Otomatis",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "1 6-22 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "e0230ad1-5a21-4525-8e30-148a96696b41",
+      "name": "Jalankan Manual (Uji Coba)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        240
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "aa53bf4a-08a7-40d0-a863-a6b12661d4f4",
+      "name": "Atur Mode",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        120
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "eac5ca7e-00ad-4900-ab10-68dabf1a7be5",
+              "name": "dryRun",
+              "type": "boolean",
+              "value": "={{ $execution.mode === \"manual\" }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "95f64bdf-5af9-41d1-bfc6-3a0595316490",
+      "name": "Login ke App",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://burnas-app.duckdns.org/api/auth/login",
+        "authentication": "none",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"username\": $credentials.username, \"password\": $credentials.password } }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "",
+          "name": "Login App Samsara (n8n-integrasi)"
+        }
+      }
+    },
+    {
+      "id": "7ca2a380-2bc0-41d5-b5f7-3c42744cf963",
+      "name": "Simpan Token & Mode",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        660,
+        120
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "0ca031a3-739f-4253-887c-973f178f22d1",
+              "name": "token",
+              "type": "string",
+              "value": "={{ $json.token }}"
+            },
+            {
+              "id": "9cf075b2-7018-48e6-a3d8-91b05a2f1508",
+              "name": "dryRun",
+              "type": "boolean",
+              "value": "={{ $('Atur Mode').item.json.dryRun }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a75d2e98-75f5-431d-b5fb-80c529ba6128",
+      "name": "Tentukan Jendela Waktu",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        120
+      ],
+      "parameters": {
+        "jsCode": "// Jendela SATU: jam operasional outlet 06:00-21:59:59 WIB HARI INI,\n// dipakai bersama oleh 4 cabang platform di bawah -- pola identik\n// 'cd.timeRange' pada workflow lama 'All - Get Product Details'\n// (termasuk teknik toWIBISOString: tambah 7 jam lalu format pakai\n// getter UTC, supaya angka jam yang tercetak benar WIB walau Date\n// internalnya tetap instant UTC asli -- bukan konversi timezone asli,\n// sengaja replikasi persis trik yang sudah dipakai & terbukti jalan).\n// Workflow ini jalan tiap jam (bukan sekali sehari), jadi TIDAK pakai\n// windowDays mundur n-hari seperti raw-majoo-direct.json.\nconst now = new Date();\nconst wibNow = new Date(now.getTime() + 7 * 3600 * 1000);\nconst y = wibNow.getUTCFullYear();\nconst m = String(wibNow.getUTCMonth() + 1).padStart(2, '0');\nconst d = String(wibNow.getUTCDate()).padStart(2, '0');\n\nconst start = new Date(`${y}-${m}-${d}T06:00:00+07:00`);\nconst finish = new Date(`${y}-${m}-${d}T21:59:59+07:00`);\n\nfunction toWIBISOString(date) {\n  const wib = new Date(date.getTime() + 7 * 60 * 60 * 1000);\n  const yy = wib.getUTCFullYear();\n  const mm = String(wib.getUTCMonth() + 1).padStart(2, '0');\n  const dd = String(wib.getUTCDate()).padStart(2, '0');\n  const hh = String(wib.getUTCHours()).padStart(2, '0');\n  const mi = String(wib.getUTCMinutes()).padStart(2, '0');\n  const ss = String(wib.getUTCSeconds()).padStart(2, '0');\n  return `${yy}-${mm}-${dd}T${hh}:${mi}:${ss}+07:00`;\n}\n\nreturn [{ json: {\n  startTime: Math.floor(start.getTime() / 1000),\n  endTime: Math.floor(finish.getTime() / 1000),\n  start_iso: toWIBISOString(start),\n  end_iso: toWIBISOString(finish),\n  majoo_start: `${y}-${m}-${d} 00:00`,\n  majoo_end: `${y}-${m}-${d} 23:59`,\n} }];"
+      }
+    },
+    {
+      "id": "37c132e9-d5e4-4f6d-9e55-c2aa72b62b7b",
+      "name": "Ambil Token Shopee",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1100,
+        -320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT token, status, expires_at FROM api_tokens a JOIN platforms p ON p.platform_id = a.platform_id WHERE p.name = 'shopeefood' LIMIT 1;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cca0d651-dd6c-4c08-8135-3ec10628bf59",
+      "name": "Validasi Token Shopee",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -320
+      ],
+      "parameters": {
+        "jsCode": "const row = $input.item.json;\nif (!row) throw new Error('Token Shopee tidak ditemukan di api_tokens untuk platform shopeefood');\nif (row.status !== 'valid') throw new Error(`Token Shopee status: ${row.status} -- cek dan refresh manual dulu di api_tokens`);\nif (row.expires_at && new Date(row.expires_at) < new Date()) throw new Error(`Token Shopee sudah expired pada ${row.expires_at} -- refresh manual dulu`);\n\nlet tokenHeaders;\ntry { tokenHeaders = typeof row.token === 'string' ? JSON.parse(row.token) : row.token; }\ncatch (e) { throw new Error('Kolom token Shopee bukan JSON valid'); }\n\n// Header fingerprint browser generik TAMBAHAN -- TIDAK tersimpan di\n// token (cuma 10 key inti), tapi disertakan workflow lama di endpoint\n// yang lebih lengkap (Fetch Settlement List) -- disamakan di semua\n// request Shopee demi konsistensi/keamanan.\nconst headers = {\n  ...tokenHeaders,\n  priority: 'u=1, i',\n  'sec-ch-ua': '\"Google Chrome\";v=\"149\", \"Chromium\";v=\"149\", \"Not)A;Brand\";v=\"24\"',\n  'sec-ch-ua-mobile': '?0',\n  'sec-ch-ua-platform': '\"macOS\"',\n  'sec-fetch-dest': 'empty',\n  'sec-fetch-mode': 'cors',\n  'sec-fetch-site': 'same-site',\n};\n\nconst waktu = $('Tentukan Jendela Waktu').first().json;\nreturn [{ json: { headers, startTime: waktu.startTime, endTime: waktu.endTime } }];"
+      }
+    },
+    {
+      "id": "762ed46c-0fb3-437b-beb7-2744df10bf4b",
+      "name": "Ambil Daftar Transaksi Shopee",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        -320
+      ],
+      "parameters": {
+        "jsCode": "// Paginasi DITAMBAHKAN di sini (workflow lama 'All - Get Product\n// Details' hardcode pageNo:1 saja -- berisiko transaksi terpotong\n// diam-diam kalau rame). Pola while-loop ini SAMA seperti yang\n// sudah terbukti jalan di 'Fetch Settlement List' (workflow 'Get\n// sales & biaya online', endpoint beda tapi mekanisme identik).\nconst ctx = $input.item.json;\nconst { headers, startTime, endTime } = ctx;\n\nlet allRows = [];\nlet pageNo = 1;\nconst pageSize = 100;\n\nwhile (true) {\n  const response = await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'https://api.partner.shopee.co.id/nb/mss/web-api/PartnerTransactionServer/GetTransactionList',\n    headers,\n    body: {\n      pageNo, pageSize,\n      filter: { startTime, endTime, serviceList: [2] },\n      sorter: { field: 'createTime', order: 'ascend' },\n    },\n    json: true,\n    ignoreHttpStatusErrors: true,\n  });\n\n  const rows = (response && response.data && response.data.list) || [];\n  allRows = allRows.concat(rows);\n\n  if (rows.length < pageSize) break;\n  pageNo++;\n}\n\n// hanya ShopeeFood (service===2) & transaksi sukses (status===4) --\n// sama seperti filter 'cd.shopee.completedOrders' workflow lama.\nconst selesai = allRows.filter(r => Number(r.service) === 2 && Number(r.status) === 4);\n\nreturn selesai.map(r => ({ json: { ...r, headers } }));"
+      }
+    },
+    {
+      "id": "835048ea-7130-4c9e-896a-43aee3638023",
+      "name": "Ambil Detail Order Shopee",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        -320
+      ],
+      "parameters": {
+        "url": "=https://foody.shopee.co.id/api/seller/web/orders/{{ $json.displayTransactionId }}?feature_flag=64",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "7b379915-1abb-4296-8953-ec0f28a368f3",
+      "name": "Petakan Baris Shopee",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        -320
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// -> 12 kolom KOLOM_LOG. TANPA resolusi alias (item_name/menu_id\n// dikirim apa adanya dari platform -- app sudah punya\n// syncItemMappingFromLog untuk pemetaan item baru). unique_key pakai\n// NAMA MENTAH (bukan nama standar) -- konsisten dengan keputusan\n// penyeragaman lintas-platform.\nconst output = [];\n\nfor (const input of $input.all()) {\n  const order = input.json.data && input.json.data.order;\n  if (!order) continue;\n\n  const orderDate = new Date(Number(order.create_time) * (Number(order.create_time) < 2e10 ? 1000 : 1));\n  const transaction_date = orderDate.toLocaleDateString('en-US', { timeZone: 'Asia/Jakarta' });\n  const transaction_time = orderDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' });\n\n  for (const item of order.items || []) {\n    const rawMenuName = (item.cart_item && item.cart_item.detail && item.cart_item.detail.dish && item.cart_item.detail.dish.name) || '';\n    const qty = (item.cart_item && item.cart_item.quantity) || 1;\n\n    output.push({ json: {\n      transaction_date, transaction_time,\n      platform: 'Shopee',\n      order_id: order.id,\n      item_name: rawMenuName,\n      menu_id: '',\n      quantity: qty,\n      item_type: 'menu',\n      parent_item: '',\n      unique_key: `Shopee|${order.id}|${rawMenuName}|menu`,\n    } });\n\n    const optionGroups = (item.cart_item && item.cart_item.detail && item.cart_item.detail.option_groups) || [];\n    for (const group of optionGroups) {\n      const groupName = (group.name || '').toLowerCase();\n      const isAddon = groupName.includes('bundling') || groupName.includes('add on');\n      if (!isAddon) continue;\n      for (const option of group.options || []) {\n        if (!option.price || Number(option.price) <= 0) continue;\n        output.push({ json: {\n          transaction_date, transaction_time,\n          platform: 'Shopee',\n          order_id: order.id,\n          item_name: option.name,\n          menu_id: '',\n          quantity: qty,\n          item_type: 'addon',\n          parent_item: rawMenuName,\n          unique_key: `Shopee|${order.id}|${option.name}|addon`,\n        } });\n      }\n    }\n  }\n}\n\nreturn output;"
+      }
+    },
+    {
+      "id": "25323a84-053e-4ee7-8a3a-43341a9c7e42",
+      "name": "Ambil Token GrabFood",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1100,
+        -120
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT token, status, expires_at FROM api_tokens a JOIN platforms p ON p.platform_id = a.platform_id WHERE p.name = 'grabfood' LIMIT 1;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ae5eabe6-e072-41a4-b4b9-aedf032063e9",
+      "name": "Validasi Token GrabFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const row = $input.item.json;\nif (!row) throw new Error('Token GrabFood tidak ditemukan di api_tokens untuk platform grabfood');\nif (row.status !== 'valid') throw new Error(`Token GrabFood status: ${row.status} -- cek dan refresh manual dulu di api_tokens`);\nif (row.expires_at && new Date(row.expires_at) < new Date()) throw new Error(`Token GrabFood sudah expired pada ${row.expires_at} -- refresh manual dulu`);\n\nlet tokenHeaders;\ntry { tokenHeaders = typeof row.token === 'string' ? JSON.parse(row.token) : row.token; }\ncatch (e) { throw new Error('Kolom token GrabFood bukan JSON valid'); }\n\n// 'merchantid' (tanpa dash) HARDCODE -- konstanta terpisah dari\n// 'x-merchant-id' yang sudah ada di token, dipertahankan apa adanya\n// sesuai workflow lama 'All - Get Product Details'.\nconst headers = {\n  ...tokenHeaders,\n  merchantid: '6-C7VHLY32GKVACJ',\n  priority: 'u=1, i',\n  'sec-ch-ua': '\"Google Chrome\";v=\"149\", \"Chromium\";v=\"149\", \"Not)A;Brand\";v=\"24\"',\n  'sec-ch-ua-mobile': '?0',\n  'sec-ch-ua-platform': '\"macOS\"',\n  'sec-fetch-dest': 'empty',\n  'sec-fetch-mode': 'cors',\n  'sec-fetch-site': 'same-site',\n};\n\nconst waktu = $('Tentukan Jendela Waktu').first().json;\nreturn [{ json: { headers, start_iso: waktu.start_iso, end_iso: waktu.end_iso } }];"
+      }
+    },
+    {
+      "id": "6fadca52-3bc3-48d7-a8dc-2ac3f0556f1c",
+      "name": "Ambil Daftar Transaksi GrabFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "// Paginasi DITAMBAHKAN (workflow lama hardcode pageIndex:0 saja).\nconst ctx = $input.item.json;\nconst { headers, start_iso, end_iso } = ctx;\n\nlet allRows = [];\nlet pageIndex = 0;\nconst pageSize = 50;\n\nwhile (true) {\n  const response = await this.helpers.httpRequest({\n    method: 'GET',\n    url: 'https://api.grab.com/delvplatformapi/merchant/v1/reports/daily-pagination',\n    qs: { states: '', startTime: start_iso, endTime: end_iso, pageIndex, pageSize },\n    headers,\n    json: true,\n    timeout: 15000,\n    ignoreHttpStatusErrors: true,\n  });\n\n  const rows = (response && response.statements) || [];\n  allRows = allRows.concat(rows);\n\n  if (rows.length < pageSize) break;\n  pageIndex++;\n}\n\n// hanya order yang sudah selesai -- sama seperti filter\n// 'cd.grab.orders' workflow lama.\nconst selesai = allRows.filter(r => r.deliveryStatus === 'COMPLETED');\n\nreturn selesai.map(r => ({ json: { order_id: r.ID, headers } }));"
+      }
+    },
+    {
+      "id": "dc98bb90-5086-445e-b1e5-213b61dff114",
+      "name": "Ambil Detail Order GrabFood",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        -120
+      ],
+      "parameters": {
+        "url": "=https://api.grab.com/food/merchant/v3/orders/{{ $json.order_id }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "d030ea3b-8f46-4109-852a-768b4a4e4e9c",
+      "name": "Petakan Baris GrabFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        -120
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// -> 12 kolom KOLOM_LOG. unique_key DISAMAKAN ke nama MENTAH\n// (keputusan AskUserQuestion) -- workflow lama GrabFood satu-satunya\n// yang pakai nama STANDAR hasil alias, di sini disamakan ke pola 3\n// platform lain. TANPA resolusi alias (item_name apa adanya).\nconst output = [];\n\nfor (const input of $input.all()) {\n  const order = input.json.order;\n  if (!order) continue;\n\n  const orderDate = new Date(order.times.createdAt);\n  const transaction_date = orderDate.toLocaleDateString('en-US', { timeZone: 'Asia/Jakarta' });\n  const transaction_time = orderDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' });\n\n  for (const item of (order.itemInfo && order.itemInfo.items) || []) {\n    output.push({ json: {\n      transaction_date, transaction_time,\n      platform: 'GrabFood',\n      order_id: order.orderID,\n      item_name: item.name,\n      menu_id: '',\n      quantity: item.quantity,\n      item_type: 'menu',\n      parent_item: '',\n      unique_key: `GrabFood|${order.orderID}|${item.name}|menu`,\n    } });\n\n    for (const group of item.modifierGroups || []) {\n      for (const modifier of group.modifiers || []) {\n        const priceStr = String(modifier.priceDisplay || '0').replace(',', '.').trim();\n        if (parseFloat(priceStr) === 0) continue;\n        output.push({ json: {\n          transaction_date, transaction_time,\n          platform: 'GrabFood',\n          order_id: order.orderID,\n          item_name: modifier.modifierName,\n          menu_id: '',\n          quantity: modifier.quantity || item.quantity,\n          item_type: 'addon',\n          parent_item: item.name,\n          unique_key: `GrabFood|${order.orderID}|${modifier.modifierName}|addon`,\n        } });\n      }\n    }\n  }\n}\n\nreturn output;"
+      }
+    },
+    {
+      "id": "413f5cd9-88b2-41ca-889a-0f4d0b2879ce",
+      "name": "Ambil Token GoFood",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1100,
+        80
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT token, status, expires_at FROM api_tokens a JOIN platforms p ON p.platform_id = a.platform_id WHERE p.name = 'gofood' LIMIT 1;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ee034074-215c-466b-aba2-6e840f8b160b",
+      "name": "Validasi Token GoFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        80
+      ],
+      "parameters": {
+        "jsCode": "const row = $input.item.json;\nif (!row) throw new Error('Token GoFood tidak ditemukan di api_tokens untuk platform gofood');\nif (row.status !== 'valid') throw new Error(`Token GoFood status: ${row.status} -- cek dan refresh manual dulu di api_tokens`);\nif (row.expires_at && new Date(row.expires_at) < new Date()) throw new Error(`Token GoFood sudah expired pada ${row.expires_at} -- refresh manual dulu`);\n\nlet tokenData;\ntry { tokenData = typeof row.token === 'string' ? JSON.parse(row.token) : row.token; }\ncatch (e) { throw new Error('Kolom token GoFood bukan JSON valid'); }\n\nconst waktu = $('Tentukan Jendela Waktu').first().json;\nreturn [{ json: {\n  authorization: `${tokenData.token_type} ${tokenData.access_token}`,\n  start_iso: waktu.start_iso,\n  end_iso: waktu.end_iso,\n} }];"
+      }
+    },
+    {
+      "id": "5b1c39b5-a895-4682-8361-394cc886c37e",
+      "name": "Ambil Daftar Transaksi GoFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        80
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $input.item.json;\nconst { authorization, start_iso, end_iso } = ctx;\n\nconst headers = {\n  accept: 'application/json, text/plain, */*',\n  'accept-language': 'en-US,en;q=0.9,id;q=0.8',\n  'authentication-type': 'go-id',\n  authorization,\n  'content-type': 'application/json',\n  origin: 'https://portal.gofoodmerchant.co.id',\n  referer: 'https://portal.gofoodmerchant.co.id/',\n  'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',\n};\n\nlet allTx = [];\nlet from = 0;\nconst size = 20;\n\nwhile (true) {\n  const url = `https://api.gojekapi.com/merchant-analytics/v2/merchants/transactions?from=${from}&size=${size}&statuses=SETTLEMENT,CAPTURE,REFUND,PARTIAL_REFUND&payment_types=QRIS,GOPAY,OFFLINE_CREDIT_CARD,OFFLINE_DEBIT_CARD,CREDIT_CARD&start_time=${start_iso}&end_time=${end_iso}&merchant_ids=G426274732`;\n\n  const response = await this.helpers.httpRequest({\n    method: 'GET', url, headers, json: true, ignoreHttpStatusErrors: true,\n  });\n\n  const rows = Array.isArray(response) ? response : ((response && (response.data || response.transactions)) || []);\n  allTx = allTx.concat(rows);\n\n  if (rows.length < size) break;\n  from += size;\n}\n\nreturn allTx.map(tx => ({ json: tx }));"
+      }
+    },
+    {
+      "id": "8d0c2fa0-885d-4fbd-a343-0b0160f70b35",
+      "name": "Petakan Baris GoFood",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        80
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// -> 12 kolom KOLOM_LOG. Hanya status SETTLEMENT (final) -- sama\n// seperti filter 'cd.gofood.orderDetail' workflow lama. TIDAK ADA\n// baris addon (API ini tidak pernah memberi breakdown addon,\n// keterbatasan lama, bukan regresi baru).\nconst output = [];\n\nfor (const tx of $input.all()) {\n  const d = tx.json;\n  if (d.transaction_status !== 'SETTLEMENT') continue;\n\n  const orderDate = new Date(d.transaction_time);\n  const transaction_date = orderDate.toLocaleDateString('en-US', { timeZone: 'Asia/Jakarta' });\n  const transaction_time = orderDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' });\n\n  for (const item of (d.commerce && d.commerce.items) || []) {\n    output.push({ json: {\n      transaction_date, transaction_time,\n      platform: 'GoFood',\n      order_id: d.order_id,\n      item_name: item.name,\n      menu_id: '',\n      quantity: item.quantity,\n      item_type: 'menu',\n      parent_item: '',\n      unique_key: `GoFood|${d.order_id}|${item.name}|menu`,\n    } });\n  }\n}\n\nreturn output;"
+      }
+    },
+    {
+      "id": "5568438b-3d66-46df-b35a-4a44d5dde3b2",
+      "name": "Ambil Token Majoo",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1100,
+        280
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT token FROM api_tokens t JOIN platforms p ON p.platform_id = t.platform_id WHERE p.name = 'majoo' AND t.status = 'valid' LIMIT 1;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "334c1e70-824b-4278-b1bb-b7f3004c4380",
+      "name": "Parse Token Majoo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        280
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.item.json.token;\nconst parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;\nreturn [{ json: { access_token: parsed.token } }];"
+      }
+    },
+    {
+      "id": "144f39a3-d9af-47b8-adf2-11f43290ec34",
+      "name": "Ambil Daftar Sales Majoo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        280
+      ],
+      "parameters": {
+        "jsCode": "const access_token = $json.access_token;\nconst waktu = $('Tentukan Jendela Waktu').first().json;\n\nconst headers = {\n  accept: '*/*',\n  authorization: `Bearer ${access_token}`,\n  'x-brand-key': 'undefined',\n  'content-type': 'application/json',\n  origin: 'https://dashboard.majoo.id',\n  referer: 'https://dashboard.majoo.id/',\n};\n\nlet allRows = [];\nlet page = 1;\nconst limit = 100;\n\nwhile (true) {\n  const response = await this.helpers.httpRequest({\n    method: 'GET',\n    url: 'https://services.majoo.id/svc-data-reporting/api/v1/detail_sales',\n    qs: {\n      start_date: waktu.majoo_start, end_date: waktu.majoo_end,\n      limit, page, is_payment: 0, template_id: 0,\n      min_total_sales: 0, min_gross_sales: 0,\n    },\n    headers,\n    json: true,\n    ignoreHttpStatusErrors: true,\n  });\n\n  const rows = (response && response.data) || [];\n  allRows = allRows.concat(rows);\n\n  if (rows.length < limit) break;\n  page++;\n}\n\nreturn allRows.map(r => ({ json: { ...r, access_token } }));"
+      }
+    },
+    {
+      "id": "51097135-ab4b-46b7-a99c-1a9d764b0672",
+      "name": "Ambil Detail Transaksi Majoo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        280
+      ],
+      "parameters": {
+        "url": "=https://services.majoo.id/mayang/0_0_12/transaction/{{ $json.id }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "outlet_id",
+              "value": "={{ $json.outlet_id }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "accept",
+              "value": "*/*"
+            },
+            {
+              "name": "token",
+              "value": "={{ $json.access_token }}"
+            },
+            {
+              "name": "x-brand-key",
+              "value": "undefined"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "20965c73-2e5f-40c1-ab8a-e3003ec1926e",
+      "name": "Petakan Baris Majoo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        280
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// -> 12 kolom KOLOM_LOG. Filter is_refundable!==0 (skip SELURUH\n// transaksi yang masih bisa direfund) DIREPLIKASI APA ADANYA dari\n// workflow lama -- keputusan sadar, bukan oversight (lihat README).\nconst output = [];\n\nfor (const input of $input.all()) {\n  const response = input.json;\n  if (!response.data || response.data.is_refundable !== 0) continue;\n\n  const info = response.data.info || {};\n  const details = response.data.detail || [];\n  const refunds = response.data.refund || [];\n  const orderNumber = info.invoice_number || '';\n\n  const orderHour = info.order_hour || '';\n  const [datePart, timePart] = orderHour.split(' ');\n  const transaction_time = timePart ? timePart.slice(0, 5) : '';\n  const [y, m, dd] = (datePart || '').split('-');\n  const transaction_date = (y && m && dd) ? `${parseInt(m, 10)}/${parseInt(dd, 10)}/${y}` : '';\n\n  for (const item of details) {\n    output.push({ json: {\n      transaction_date, transaction_time,\n      platform: 'Majoo',\n      order_id: orderNumber,\n      item_name: item.product_name,\n      menu_id: '',\n      quantity: item.quantity,\n      item_type: 'menu',\n      parent_item: '',\n      unique_key: `Majoo|${response.data.id || orderNumber}|${item.product_name}|menu`,\n    } });\n\n    for (const addon of item.item_addon_detail || []) {\n      if (!addon.price) continue;\n      output.push({ json: {\n        transaction_date, transaction_time,\n        platform: 'Majoo',\n        order_id: orderNumber,\n        item_name: addon.addon_name,\n        menu_id: '',\n        quantity: addon.quantity,\n        item_type: 'addon',\n        parent_item: item.product_name,\n        unique_key: `Majoo|${response.data.id || orderNumber}|${addon.addon_name}|addon`,\n      } });\n    }\n  }\n\n  for (const refund of refunds) {\n    const refundParts = (refund.date || '').split(' ');\n    const refundDatePart = refundParts[0] || datePart;\n    const refundTimePart = refundParts[1] ? refundParts[1].slice(0, 5) : transaction_time;\n    const [ry, rm, rd] = (refundDatePart || '').split('-');\n    const refund_date = (ry && rm && rd) ? `${parseInt(rm, 10)}/${parseInt(rd, 10)}/${ry}` : transaction_date;\n\n    for (const rp of refund.products || []) {\n      if (!rp.qty) continue;\n      const matchedDetail = details.find(dt => dt.product_id === rp.id);\n      const rawName = matchedDetail ? matchedDetail.product_name : `ProductID:${rp.id}`;\n      output.push({ json: {\n        transaction_date: refund_date, transaction_time: refundTimePart,\n        platform: 'Majoo',\n        order_id: orderNumber,\n        item_name: rawName,\n        menu_id: '',\n        quantity: -rp.qty,\n        item_type: 'refund',\n        parent_item: '',\n        unique_key: `Majoo|${response.data.id || orderNumber}|${rawName}|refund`,\n      } });\n    }\n  }\n}\n\nreturn output;"
+      }
+    },
+    {
+      "id": "75f54a64-954b-4ad7-bc11-a597cad0017b",
+      "name": "Gabung Semua Platform",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2200,
+        -120
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 4,
+        "options": {}
+      }
+    },
+    {
+      "id": "e37cddf4-b0af-41c5-8cce-ab48101f4760",
+      "name": "Susun CSV & Pecah Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        -120
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "function csvField(v) {\n  const s = v === null || v === undefined ? \"\" : String(v);\n  return /[\",\\n\\r]/.test(s) ? '\"' + s.replace(/\"/g, '\"\"') + '\"' : s;\n}\nfunction buatBarisCsv(header, obj) {\n  return header.map((h) => csvField(obj[h])).join(\",\");\n}\n\nconst mode = $('Simpan Token & Mode').first().json;\nconst { dryRun, token } = mode;\nconst HEADER = [\"transaction_date\",\"transaction_time\",\"platform\",\"order_id\",\"item_name\",\"menu_id\",\"quantity\",\"item_type\",\"parent_item\",\"unique_key\",\"inv_status\"];\nconst MAKS_BARIS = 50000;\n\n// TIDAK ada filter cutoff tanggal di sini -- beda sengaja dari\n// log-penjualan.json, jendela waktu sudah ditentukan di hulu lewat\n// 'Tentukan Jendela Waktu' per cabang platform (pola sama seperti\n// penyesuaian Fase 1 raw-majoo-direct.json).\nconst baris = [];\nfor (const item of $input.all()) {\n  const row = item.json;\n  const obj = {};\n  for (const kolom of HEADER) obj[kolom] = row[kolom] ?? \"\";\n  if (!obj.inv_status) obj.inv_status = \"OK\";\n  baris.push(obj);\n}\n\nif (dryRun) {\n  return [{\n    json: {\n      dryRun: true,\n      jumlahBaris: baris.length,\n      contohBaris: baris.slice(0, 3),\n      csvHeader: HEADER.join(\",\"),\n    },\n  }];\n}\n\nconst hasil = [];\nfor (let i = 0; i < baris.length; i += MAKS_BARIS) {\n  const potongan = baris.slice(i, i + MAKS_BARIS);\n  const lines = [HEADER.join(\",\")];\n  for (const obj of potongan) lines.push(buatBarisCsv(HEADER, obj));\n  hasil.push({\n    json: {\n      dryRun: false,\n      token,\n      csvText: lines.join(\"\\n\") + \"\\n\",\n      jumlahBarisBatch: potongan.length,\n      batchKe: Math.floor(i / MAKS_BARIS) + 1,\n    },\n  });\n}\nif (hasil.length === 0) {\n  hasil.push({ json: { dryRun: false, token, csvText: HEADER.join(\",\") + \"\\n\", jumlahBarisBatch: 0, batchKe: 1 } });\n}\nreturn hasil;"
+      }
+    },
+    {
+      "id": "55323050-accd-4bc2-bc80-e3666327d64a",
+      "name": "Apakah Dry-Run?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "db39d6d5-1835-4319-98eb-4247c627dfb0",
+              "leftValue": "={{ $json.dryRun }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "9ac1f54f-a8c2-4387-a210-af5406d01907",
+      "name": "Pratinjau Dry-Run (lihat tab Output)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2860,
+        -240
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "896f9e4b-e6c7-4e67-bb7b-45fa3703be1b",
+      "name": "Kirim CSV ke App",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        -40
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://burnas-app.duckdns.org/api/sales-sync/import/log-penjualan",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "text/csv"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "raw",
+        "rawContentType": "text/csv",
+        "body": "={{ $json.csvText }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "81769f5f-be18-43bd-8640-9b1f77953799",
+      "name": "Ada Baris Gagal?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3080,
+        -40
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "413081ee-bc59-4825-8aba-906e7f26ce03",
+              "leftValue": "={{ $json.errors.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b588050b-079c-4e53-b720-cd0a5155364e",
+      "name": "Error: Ada Baris CSV Gagal",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        3300,
+        -140
+      ],
+      "parameters": {
+        "errorMessage": "={{ 'Import log-penjualan (langsung API): ' + $json.errors.length + ' baris CSV gagal disimpan. Detail: ' + JSON.stringify($json.errors) }}"
+      }
+    },
+    {
+      "id": "36b9ad32-43ed-4229-92cc-387531c9ba3b",
+      "name": "Selesai",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3300,
+        60
+      ],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Jadwal Otomatis": {
+      "main": [
+        [
+          {
+            "node": "Atur Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jalankan Manual (Uji Coba)": {
+      "main": [
+        [
+          {
+            "node": "Atur Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atur Mode": {
+      "main": [
+        [
+          {
+            "node": "Login ke App",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Login ke App": {
+      "main": [
+        [
+          {
+            "node": "Simpan Token & Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simpan Token & Mode": {
+      "main": [
+        [
+          {
+            "node": "Tentukan Jendela Waktu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tentukan Jendela Waktu": {
+      "main": [
+        [
+          {
+            "node": "Ambil Token Shopee",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ambil Token GrabFood",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ambil Token GoFood",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ambil Token Majoo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Token Shopee": {
+      "main": [
+        [
+          {
+            "node": "Validasi Token Shopee",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validasi Token Shopee": {
+      "main": [
+        [
+          {
+            "node": "Ambil Daftar Transaksi Shopee",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Daftar Transaksi Shopee": {
+      "main": [
+        [
+          {
+            "node": "Ambil Detail Order Shopee",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Detail Order Shopee": {
+      "main": [
+        [
+          {
+            "node": "Petakan Baris Shopee",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Petakan Baris Shopee": {
+      "main": [
+        [
+          {
+            "node": "Gabung Semua Platform",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Token GrabFood": {
+      "main": [
+        [
+          {
+            "node": "Validasi Token GrabFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validasi Token GrabFood": {
+      "main": [
+        [
+          {
+            "node": "Ambil Daftar Transaksi GrabFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Daftar Transaksi GrabFood": {
+      "main": [
+        [
+          {
+            "node": "Ambil Detail Order GrabFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Detail Order GrabFood": {
+      "main": [
+        [
+          {
+            "node": "Petakan Baris GrabFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Petakan Baris GrabFood": {
+      "main": [
+        [
+          {
+            "node": "Gabung Semua Platform",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Ambil Token GoFood": {
+      "main": [
+        [
+          {
+            "node": "Validasi Token GoFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validasi Token GoFood": {
+      "main": [
+        [
+          {
+            "node": "Ambil Daftar Transaksi GoFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Daftar Transaksi GoFood": {
+      "main": [
+        [
+          {
+            "node": "Petakan Baris GoFood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Petakan Baris GoFood": {
+      "main": [
+        [
+          {
+            "node": "Gabung Semua Platform",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Ambil Token Majoo": {
+      "main": [
+        [
+          {
+            "node": "Parse Token Majoo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Token Majoo": {
+      "main": [
+        [
+          {
+            "node": "Ambil Daftar Sales Majoo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Daftar Sales Majoo": {
+      "main": [
+        [
+          {
+            "node": "Ambil Detail Transaksi Majoo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Detail Transaksi Majoo": {
+      "main": [
+        [
+          {
+            "node": "Petakan Baris Majoo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Petakan Baris Majoo": {
+      "main": [
+        [
+          {
+            "node": "Gabung Semua Platform",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Gabung Semua Platform": {
+      "main": [
+        [
+          {
+            "node": "Susun CSV & Pecah Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Susun CSV & Pecah Batch": {
+      "main": [
+        [
+          {
+            "node": "Apakah Dry-Run?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apakah Dry-Run?": {
+      "main": [
+        [
+          {
+            "node": "Pratinjau Dry-Run (lihat tab Output)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kirim CSV ke App",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kirim CSV ke App": {
+      "main": [
+        [
+          {
+            "node": "Ada Baris Gagal?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ada Baris Gagal?": {
+      "main": [
+        [
+          {
+            "node": "Error: Ada Baris CSV Gagal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Selesai",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta"
+  },
+  "staticData": null,
+  "meta": {
+    "instanceId": null
+  }
+}
