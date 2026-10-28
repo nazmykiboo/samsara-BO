@@ -11,6 +11,11 @@ Ibnu/owner tidak perlu upload CSV manual tiap hari.
 pun sampai Anda aktifkan sendiri di langkah terakhir. Aman dicoba
 pelan-pelan, satu per satu.
 
+Ada file ke-5 di folder ini, `raw-majoo-direct.json` — ini BUKAN
+pengganti `raw-majoo.json` di atas, tapi jalur alternatif yang mengambil
+data langsung dari API Majoo (tanpa lewat Google Sheets). Lihat § 11
+untuk penjelasan lengkap dan rencana penggantian bertahap.
+
 Dokumen ini ditulis untuk yang **belum pernah pakai n8n sama sekali**.
 Kalau Anda sudah paham n8n, bisa langsung lompat ke § 4 (kredensial) dan
 § 7 (aktivasi).
@@ -322,3 +327,151 @@ di sana.
 | Node "Kirim CSV ke App" gagal `403` | Seharusnya tidak terjadi — akun `integrasi` memang diizinkan ke 4 endpoint import ini. Kalau terjadi, kemungkinan URL di node itu salah ketik (cek masih `https://burnas-app.duckdns.org/api/sales-sync/import/...`, bukan domain lain). |
 | Node "Error: Ada Baris CSV Gagal" membuat eksekusi gagal (silang merah di Executions) | **Ini bukan bug workflow** — artinya sebagian baris CSV gagal disimpan app (format salah, dll). Baca pesan errornya (klik node itu di riwayat Executions), cocokkan dengan isi spreadsheet untuk tahu baris mana. Baris lain yang BENAR tetap tersimpan, tidak ikut gagal. |
 | `jumlahBaris`/`jumlahBarisBatch` selalu 0 | Cek § 9 (mapping kolom) dan pastikan ada data baru dalam jendela waktu yang dicek (2 hari untuk jadwal otomatis, 1 hari untuk dry-run). |
+
+---
+
+## 11. Workflow baru: `raw-majoo-direct.json` (langsung dari API Majoo, tanpa Google Sheets)
+
+### Apa bedanya dari `raw-majoo.json`
+
+`raw-majoo.json` (§ 1-10 di atas) membaca data dari tab Google Sheet
+`RAW_TRANSAKSI_MAJOO` — yang sampai saat ini masih diisi oleh workflow
+n8n LAMA `Majoo - Sales` (lewat API Majoo juga, tapi 2 tahap: API →
+Sheet → app). `raw-majoo-direct.json` memotong tahap tengah itu: tarik
+langsung dari API Majoo (endpoint `detail_sales` dan `refund_sales`),
+format jadi CSV, kirim ke app — **tanpa Google Sheets sama sekali**.
+
+Ini **bukan berarti `raw-majoo.json` dihapus atau salah** — sengaja
+dipertahankan sebagai cadangan sampai jalur baru ini terbukti stabil
+berjalan beberapa hari (lihat "Cara mengaktifkan" di bawah).
+
+**Apa yang TETAP SAMA dengan § 0** — ini penting: workflow baru ini
+**TIDAK PERNAH memanggil endpoint pemotong stok** (`/sales-sync/proses`
+atau sejenisnya). Tugasnya SAMA PERSIS seperti `raw-majoo.json`: cuma
+mengisi arsip `salessync_raw_majoo` lewat endpoint
+`/api/sales-sync/import/raw-majoo`. Mengubah arsip itu jadi transaksi
+yang memotong stok tetap manual, lewat tombol di halaman Sinkronisasi
+Penjualan — sama seperti sebelumnya, tidak berubah.
+
+### Peta alur
+
+```
+Jadwal Otomatis (01:00 WIB, SAMA seperti 'Majoo - Sales' lama) ─┐
+Jalankan Manual (Uji Coba) ──────────────────────────────────────┼─→ Atur Mode ─→ Login ke App ─→ Simpan Token & Mode
+                                                                                                           │
+                                            ┌──────────────────────────────────────────────────────────┴──────────────────────────────────────┐
+                                            ▼ (cabang sales, berpaginasi)                                                                        ▼ (cabang refund, satu halaman)
+                              Ambil Token Majoo → Parse Token → Tentukan Rentang Tanggal                              Ambil Token Majoo (Refund) → Parse Token (Refund) → Siapkan Request Refund
+                                            │                                                                                                    │
+                                            ▼                                                                                                    ▼
+                              Siapkan Request Sales → Get Detail Sales ─┐                                                              Get Refund Sales → Petakan Baris Refund
+                                                              ▲          ▼                                                                                      │
+                                                              │   Gabung Konteks Halaman ──→ Petakan Baris Sales (tambah ke akumulator)                        │
+                                                              │          ▼                                                                                      │
+                                                   Increment Page ← Tunggu 2 Detik ← [ya] Ada Halaman Lagi? ──[tidak]──→ Ambil Baris Sales Terkumpul             │
+                                                                                                                                      │                          │
+                                                                                                                                      └──────────┬───────────────┘
+                                                                                                                                                 ▼
+                                                                                                                                      Gabung Semua Baris
+                                                                                                                                                 │
+                                                                                                                                                 ▼
+                                                                                                                              Susun CSV & Pecah Batch ─→ (dry-run/kirim/error, SAMA seperti § 3)
+```
+
+- **Ambil Token Majoo** / **Ambil Token Majoo (Refund)**: query SQL yang
+  SAMA PERSIS dengan yang dipakai workflow lama `Majoo - Sales` —
+  `SELECT token FROM api_tokens t JOIN platforms p ON p.platform_id =
+  t.platform_id WHERE p.name = 'majoo' AND t.status = 'valid' LIMIT 1` —
+  ke database `n8n` (bukan database `samsara`), credential Postgres yang
+  SUDAH ADA (dipakai ulang, bukan baru, lihat "Credential" di bawah).
+- **Tentukan Rentang Tanggal** / **Siapkan Request Refund**: hitung
+  jendela `[hari ini - windowDays, hari ini]` dalam jam dinding WIB —
+  windowDays datang dari "Atur Mode" (2 hari jadwal otomatis, 1 hari
+  dry-run manual), sama seperti `raw-majoo.json`.
+- **Get Detail Sales** / **Get Refund Sales**: panggil langsung
+  `services.majoo.id`, header dan parameter query disalin persis dari
+  workflow `Majoo - Sales` (termasuk header "menyamar sebagai dashboard
+  Majoo" — `x-brand-key: undefined`, `origin`/`referer`
+  `dashboard.majoo.id` — karena token yang dipakai adalah token sesi
+  dashboard, bukan API key resmi, dan kemungkinan ditolak Majoo tanpa
+  header ini).
+- **Petakan Baris Sales** / **Petakan Baris Refund**: ubah respons Majoo
+  jadi 20 kolom yang dimengerti app (`id, transaction_no,
+  transaction_date, ..., refund_reason`) — LANGSUNG, tanpa perantara
+  nama kolom Sheet.
+- **Get Detail Sales** berpaginasi (bisa lebih dari 1 halaman per hari
+  kalau transaksi ramai) — pola "ambil halaman → cek masih ada halaman
+  lagi → tunggu 2 detik → ambil halaman berikutnya" ini SAMA PERSIS
+  dengan yang dipakai `Majoo - Sales`, supaya perilaku terhadap API
+  Majoo (termasuk jeda antar-request) sudah teruji. **Get Refund Sales
+  TIDAK berpaginasi** (satu halaman saja) — ini bukan kekurangan baru,
+  `Majoo - Sales` yang jadi rujukan juga begitu (volume refund jauh lebih
+  kecil dari sales).
+- **Satu penyesuaian sengaja dari pola `raw-majoo.json`**: node "Susun
+  CSV & Pecah Batch" di sini **tidak lagi memfilter tanggal berdasarkan
+  cutoff relatif ke waktu eksekusi** — di `raw-majoo.json` filter itu
+  perlu karena Google Sheet berisi SELURUH histori dan harus dipotong ke
+  `windowDays` terakhir di sisi kode n8n. Di sini jendela tanggal SUDAH
+  ditentukan di hulu lewat parameter `start_date`/`end_date` yang dikirim
+  ke API Majoo — memfilter ulang pakai cutoff waktu eksekusi akan
+  berisiko memotong baris di tepi hari secara tidak konsisten dengan
+  jendela yang sudah diminta ke API.
+
+### Credential yang dibutuhkan
+
+**Tidak ada credential baru yang perlu dibuat.** Workflow ini memakai 2
+credential yang SUDAH ADA di n8n Anda:
+
+1. **"Login App Samsara (n8n-integrasi)"** — sama seperti § 4.1, sudah
+   ada kalau Anda sudah mengimpor salah satu dari 4 workflow di § 1-10.
+2. **Credential Postgres ke database `n8n`** — credential yang SAMA yang
+   SUDAH dipakai workflow lama `Majoo - Sales` untuk mengambil token
+   (biasanya bernama **"Postgres account"** di daftar Credentials Anda).
+   **Jangan buat credential Postgres baru** — pakai yang sudah ada,
+   supaya tidak ada 2 koneksi berbeda ke database yang sama.
+
+Setelah impor, 2 node Postgres baru (**"Ambil Token Majoo"** dan **"Ambil
+Token Majoo (Refund)"**) akan bergaris merah — klik masing-masing, pilih
+credential **"Postgres account"** (atau nama credential Postgres `n8n`
+yang sudah ada) dari dropdown, sama seperti § 5. Node **"Login ke
+App"** perlu credential **"Login App Samsara (n8n-integrasi)"**, sama
+seperti § 5 poin 1-2.
+
+### Cara mengaktifkan (bertahap, jangan langsung full-schedule)
+
+1. **Impor** `devops/n8n/raw-majoo-direct.json` (cara sama seperti § 2),
+   workflow masuk dalam keadaan NON-AKTIF.
+2. Pilih credential di 3 node bergaris merah (lihat di atas).
+3. **Dry-run dulu** (§ 6) — klik "Jalankan Manual (Uji Coba)", lihat
+   `jumlahBaris`/`contohBaris` di node "Pratinjau Dry-Run". Pastikan
+   jumlah & isi baris masuk akal dibanding data yang Anda tahu ada di
+   Majoo untuk 1 hari terakhir.
+4. **Kirim sungguhan pertama kali dengan jendela sempit** — jangan
+   langsung aktifkan jadwal penuh. Opsi paling aman: ubah sementara
+   `windowDays` di node "Atur Mode" jadi nilai tetap kecil (misal `1`),
+   paksa `dryRun` jadi `false` (lihat catatan § 6), jalankan sekali
+   manual, lalu **segera kembalikan dua nilai itu ke rumus semula**.
+5. **Bandingkan hasilnya**: cek beberapa baris di tabel
+   `salessync_raw_majoo` (lewat halaman app atau query langsung) untuk
+   tanggal yang baru dikirim, bandingkan dengan data yang sama di Majoo
+   (dashboard atau export CSV manual `RAW_TRANSAKSI_MAJOO` untuk periode
+   yang sama) — harus identik (`id`, `transaction_no`, nilai `total_sales`
+   dkk).
+6. Kalau sudah terbukti bersih, **aktifkan jadwal** (§ 7) — jalan sendiri
+   tiap hari jam 01:00 WIB.
+7. **JANGAN matikan workflow lama `Majoo - Sales` dulu** — biarkan
+   keduanya jalan paralel beberapa hari (Sheet `RAW_TRANSAKSI_MAJOO`
+   tetap ter-update dari jalur lama sebagai jaring pengaman). Baru
+   pertimbangkan menonaktifkan `Majoo - Sales` setelah jalur baru ini
+   terbukti stabil tanpa masalah selama beberapa hari berjalan.
+
+### Rencana lanjutan (BELUM dikerjakan)
+
+Pola yang sama (ambil langsung dari API, bukan dari Sheets) rencananya
+akan dibuat juga untuk Shopee/GrabFood/GoFood — sumbernya workflow lama
+`All - Get Product Details` (→ `log-penjualan.csv`) dan `Get sales &
+biaya online` (→ `transaksi.csv` + `biaya-platform.csv`). Ini BELUM
+diriset/dibuat — workflow itu jauh lebih besar (~28-32 node, 3 platform
+tergabung dalam 1 workflow) dan butuh riset node-per-node yang sama
+dalamnya seperti Majoo sebelum ditulis jadi workflow baru. Dikerjakan
+setelah `raw-majoo-direct.json` terbukti jalan bersih di production.

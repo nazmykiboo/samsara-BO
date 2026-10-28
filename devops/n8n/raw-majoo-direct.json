@@ -1,0 +1,1018 @@
+{
+  "name": "Sales-Sync: Ambil & Kirim Raw Majoo (Langsung API)",
+  "nodes": [
+    {
+      "id": "486f2f14-fad7-4d16-be13-766c9947d36a",
+      "name": "Jadwal Otomatis",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 1 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ceb86608-2504-4f96-a98d-f9902f7bdcde",
+      "name": "Jalankan Manual (Uji Coba)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        240
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "341720d5-563d-4cb3-be04-d2bb74d4d2e1",
+      "name": "Atur Mode",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        120
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d3321aa4-d3c3-4eb2-a4ce-3eaf544eb53d",
+              "name": "dryRun",
+              "type": "boolean",
+              "value": "={{ $execution.mode === \"manual\" }}"
+            },
+            {
+              "id": "8ee1a1fa-c20b-428a-a7f1-bb14567f7ddb",
+              "name": "windowDays",
+              "type": "number",
+              "value": "={{ $execution.mode === \"manual\" ? 1 : 2 }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "20571940-ac1f-481e-a147-7b7ccf2d7334",
+      "name": "Login ke App",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://burnas-app.duckdns.org/api/auth/login",
+        "authentication": "none",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"username\": $credentials.username, \"password\": $credentials.password } }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "",
+          "name": "Login App Samsara (n8n-integrasi)"
+        }
+      }
+    },
+    {
+      "id": "7c2571a7-a800-4b51-a61d-a8ff0ddec049",
+      "name": "Simpan Token & Mode",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        660,
+        120
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ad03daa4-cada-4bf9-a2f7-c72e717ba020",
+              "name": "token",
+              "type": "string",
+              "value": "={{ $json.token }}"
+            },
+            {
+              "id": "4ed26812-73c8-4df9-97b0-7a24514f4cfd",
+              "name": "dryRun",
+              "type": "boolean",
+              "value": "={{ $('Atur Mode').item.json.dryRun }}"
+            },
+            {
+              "id": "1a2988ef-aa44-4dd2-9ca6-5a00d2511dff",
+              "name": "windowDays",
+              "type": "number",
+              "value": "={{ $('Atur Mode').item.json.windowDays }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ea240bd7-4ed6-44b6-bc16-57f97181a446",
+      "name": "Ambil Token Majoo",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        880,
+        -60
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT token FROM api_tokens t JOIN platforms p ON p.platform_id = t.platform_id WHERE p.name = 'majoo' AND t.status = 'valid' LIMIT 1;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "abc9e6c9-4a3a-4255-8d95-48cc6c14c41d",
+      "name": "Parse Token Majoo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        -60
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.item.json.token;\nconst parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;\nreturn [{ json: { access_token: parsed.token } }];"
+      }
+    },
+    {
+      "id": "e85f8fef-d425-4342-acb9-ca70a07d9ce9",
+      "name": "Tentukan Rentang Tanggal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -60
+      ],
+      "parameters": {
+        "jsCode": "// Rentang [hari ini - windowDays, hari ini], jam dinding WIB (UTC+7) --\n// windowDays datang dari 'Simpan Token & Mode' (2 hari jadwal otomatis,\n// 1 hari dry-run manual), pola SAMA seperti 'Atur Mode' di workflow ini\n// dan 'Generate Date Chunks' mode 'daily' di workflow 'Majoo - Sales'\n// (database n8n) yang jadi rujukan logika ini -- TANPA mode backfill\n// manual (itu cuma dipakai sekali saat setup, bukan jadwal rutin).\n//\n// Akumulator baris sales di-reset di sini (sekali per eksekusi workflow,\n// node ini cuma jalan sekali per run) -- dibaca ulang nanti di 'Ambil\n// Baris Sales Terkumpul' setelah loop halaman selesai. Pola static data\n// dipakai karena loop manual (If/Wait/Set) di n8n TIDAK otomatis\n// mengumpulkan output tiap iterasi jadi satu daftar -- beda dari\n// workflow 'Majoo - Sales' yang tidak perlu akumulasi karena tiap\n// halaman langsung ditulis ke Google Sheets saat itu juga (append\n// per-halaman). Di sini butuh SEMUA baris terkumpul dulu sebelum masuk\n// ke 'Susun CSV & Pecah Batch' (desainnya menerima semua baris sekaligus,\n// sama seperti saat sumbernya pembacaan Google Sheets utuh).\n$getWorkflowStaticData('node').barisSalesMajoo = [];\n\nconst windowDays = $('Simpan Token & Mode').first().json.windowDays;\nconst access_token = $json.access_token;\n\nconst nowUTC = new Date();\nconst wibNow = new Date(nowUTC.getTime() + 7 * 3600 * 1000);\nconst today = new Date(Date.UTC(wibNow.getUTCFullYear(), wibNow.getUTCMonth(), wibNow.getUTCDate()));\n\nconst start = new Date(today);\nstart.setUTCDate(start.getUTCDate() - windowDays);\n\nconst pad = n => String(n).padStart(2, '0');\nconst fmt = (d, endOfDay) => {\n  const y = d.getUTCFullYear();\n  const m = pad(d.getUTCMonth() + 1);\n  const day = pad(d.getUTCDate());\n  return endOfDay ? `${y}-${m}-${day} 23:59` : `${y}-${m}-${day} 00:00`;\n};\n\nreturn [{ json: {\n  start_date: fmt(start, false),\n  end_date: fmt(today, true),\n  access_token,\n} }];"
+      }
+    },
+    {
+      "id": "f9e10f2c-61e7-4e5d-a250-fb1b8edf027e",
+      "name": "Siapkan Request Sales",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1540,
+        -60
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b5c0c35f-9e59-4926-8227-69e82016b4bb",
+              "name": "page",
+              "type": "number",
+              "value": 1
+            },
+            {
+              "id": "0675c5a5-d3d7-4641-b38b-05b2b334c313",
+              "name": "access_token",
+              "type": "string",
+              "value": "={{ $json.access_token }}"
+            },
+            {
+              "id": "2a3f8d49-855a-4877-84d3-ccc26193a926",
+              "name": "start_date",
+              "type": "string",
+              "value": "={{ $json.start_date }}"
+            },
+            {
+              "id": "9779b9e3-ec47-4fa4-9d0a-a276f8e1e54d",
+              "name": "end_date",
+              "type": "string",
+              "value": "={{ $json.end_date }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "f0f96123-f054-4529-a9d2-5b12307fc30d",
+      "name": "Get Detail Sales",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        -60
+      ],
+      "parameters": {
+        "url": "https://services.majoo.id/svc-data-reporting/api/v1/detail_sales",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "start_date",
+              "value": "={{ $json.start_date }}"
+            },
+            {
+              "name": "end_date",
+              "value": "={{ $json.end_date }}"
+            },
+            {
+              "name": "limit",
+              "value": "100"
+            },
+            {
+              "name": "page",
+              "value": "={{ $json.page }}"
+            },
+            {
+              "name": "is_payment",
+              "value": "0"
+            },
+            {
+              "name": "template_id",
+              "value": "0"
+            },
+            {
+              "name": "min_total_sales",
+              "value": "0"
+            },
+            {
+              "name": "min_gross_sales",
+              "value": "0"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={\"authorization\": \"Bearer {{ $json.access_token }}\", \"content-type\": \"application/json\", \"origin\": \"https://dashboard.majoo.id\", \"referer\": \"https://dashboard.majoo.id/\", \"x-brand-key\": \"undefined\", \"accept\": \"*/*\"}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "71bed6d6-2357-43af-8ca5-5d4ee1b9fc7d",
+      "name": "Gabung Konteks Halaman",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1980,
+        -60
+      ],
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "497f877d-b264-4350-9439-cc81c18de9a1",
+      "name": "Petakan Baris Sales",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        -220
+      ],
+      "parameters": {
+        "jsCode": "// Baris 'sales' satu halaman -> 20 kolom KOLOM_MAJOO\n// (modules/sales-sync/src/domain/import-csv.ts:527-546), LANGSUNG\n// ditambahkan ke akumulator statis (bukan cuma di-return) -- node ini\n// jalan ulang tiap iterasi loop halaman, outputnya sendiri cuma dipakai\n// untuk debug per-halaman, sumber kebenarannya akumulator di\n// 'Ambil Baris Sales Terkumpul'. Kolom refund_* dikosongkan di sini --\n// diisi 'Petakan Baris Refund' untuk baris dari endpoint refund_sales.\nconst merged = $input.first().json;\nconst items = merged.data || [];\n\nconst baris = items.map(t => ({\n  id: t.id,\n  transaction_no: t.transaction_no,\n  transaction_date: t.transaction_date,\n  payment_date: t.payment_date,\n  order_type_name: t.order_type_name,\n  payment_method_name: t.payment_method_name,\n  payment_cashier_name: t.payment_cashier_name,\n  total_sales: t.total_sales,\n  receivables: t.receivables,\n  total_discount_amount: t.total_discount_amount,\n  refund_amount: t.refund_amount,\n  is_paid: t.is_paid,\n  outlet_id: t.outlet_id,\n  hasMore: '',\n  nextPage: '',\n  _empty: '',\n  refund_id: '',\n  refund_no: '',\n  refund_date: '',\n  refund_reason: '',\n}));\n\nconst sd = $getWorkflowStaticData('node');\nsd.barisSalesMajoo = (sd.barisSalesMajoo || []).concat(baris);\n\nreturn [{ json: { jumlahDitambahkan: baris.length, totalSejauhIni: sd.barisSalesMajoo.length } }];"
+      }
+    },
+    {
+      "id": "066ed9b4-0ced-48e1-bc5a-70b03caea3e4",
+      "name": "Loop Control Sales",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        60
+      ],
+      "parameters": {
+        "jsCode": "const limit = 100;\nconst merged = $input.first().json;\nconst items = merged.data || [];\n\nreturn [{\n  json: {\n    hasMore: items.length === limit,\n    nextPage: merged.page + 1,\n    access_token: merged.access_token,\n    start_date: merged.start_date,\n    end_date: merged.end_date\n  }\n}];"
+      }
+    },
+    {
+      "id": "1b68af9a-87c7-4cc3-9a4d-7ba487b01eb7",
+      "name": "Ada Halaman Lagi?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        60
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "2f81d05e-bda3-4426-8faa-e038eeda1082",
+              "leftValue": "={{ $json.hasMore }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "2babeae5-f177-4efa-87e7-e407280fa0a2",
+      "name": "Tunggu 2 Detik",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        -20
+      ],
+      "parameters": {
+        "amount": 2
+      }
+    },
+    {
+      "id": "7095ade0-00c8-489c-85ae-82ce2de7280c",
+      "name": "Increment Page Sales",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2860,
+        -20
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7f3fe832-2343-4b8a-8710-e1bd25038097",
+              "name": "page",
+              "type": "number",
+              "value": "={{ $json.nextPage }}"
+            },
+            {
+              "id": "cdcbbea9-0c6d-4827-b6ef-a64ffdadcd05",
+              "name": "access_token",
+              "type": "string",
+              "value": "={{ $json.access_token }}"
+            },
+            {
+              "id": "51f48ecc-ed33-4b70-8345-4b9fba0ce0cc",
+              "name": "start_date",
+              "type": "string",
+              "value": "={{ $json.start_date }}"
+            },
+            {
+              "id": "05edde3d-f26e-4da9-bbff-ea42ba0811cb",
+              "name": "end_date",
+              "type": "string",
+              "value": "={{ $json.end_date }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b7eee035-e203-4367-9557-cc1e2e86572b",
+      "name": "Ambil Baris Sales Terkumpul",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        160
+      ],
+      "parameters": {
+        "jsCode": "// Loop halaman selesai ('Ada Halaman Lagi?' cabang 'tidak') -- baca\n// balik akumulator yang diisi 'Petakan Baris Sales' tiap iterasi.\nconst sd = $getWorkflowStaticData('node');\nconst baris = sd.barisSalesMajoo || [];\nreturn baris.map(b => ({ json: b }));"
+      }
+    },
+    {
+      "id": "6e1e6a78-859c-4049-a858-eecd30fce87d",
+      "name": "Ambil Token Majoo (Refund)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        880,
+        420
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT token FROM api_tokens t JOIN platforms p ON p.platform_id = t.platform_id WHERE p.name = 'majoo' AND t.status = 'valid' LIMIT 1;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "65a5a35a-1b69-465c-85e8-2146a4066eaa",
+      "name": "Parse Token Majoo (Refund)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        420
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.item.json.token;\nconst parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;\nreturn [{ json: { access_token: parsed.token } }];"
+      }
+    },
+    {
+      "id": "7b2f99b7-8358-4a4e-bb79-2bcbfdddfe43",
+      "name": "Siapkan Request Refund",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        420
+      ],
+      "parameters": {
+        "jsCode": "// Jendela sama persis dengan 'Tentukan Rentang Tanggal' (sales), tapi\n// refund_sales cuma terima tanggal polos YYYY-MM-DD (tanpa jam) -- lihat\n// 'Get Refund Sales' di workflow 'Majoo - Sales' (database n8n), format\n// aslinya memang begitu di sana.\nconst windowDays = $('Simpan Token & Mode').first().json.windowDays;\nconst access_token = $json.access_token;\n\nconst nowUTC = new Date();\nconst wibNow = new Date(nowUTC.getTime() + 7 * 3600 * 1000);\nconst today = new Date(Date.UTC(wibNow.getUTCFullYear(), wibNow.getUTCMonth(), wibNow.getUTCDate()));\nconst start = new Date(today);\nstart.setUTCDate(start.getUTCDate() - windowDays);\n\nconst pad = n => String(n).padStart(2, '0');\nconst fmt = d => `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}`;\n\nreturn [{ json: { start_date: fmt(start), end_date: fmt(today), page: 1, access_token } }];"
+      }
+    },
+    {
+      "id": "8efae001-7045-468a-830b-c9e7cad3b113",
+      "name": "Get Refund Sales",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        420
+      ],
+      "parameters": {
+        "url": "https://services.majoo.id/svc-data-reporting/api/v4/refund_sales",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "start_date",
+              "value": "={{ $json.start_date }}"
+            },
+            {
+              "name": "end_date",
+              "value": "={{ $json.end_date }}"
+            },
+            {
+              "name": "limit",
+              "value": "100"
+            },
+            {
+              "name": "page",
+              "value": "={{ $json.page }}"
+            },
+            {
+              "name": "template_id",
+              "value": "0"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={\"authorization\": \"Bearer {{ $json.access_token }}\", \"content-type\": \"application/json\", \"origin\": \"https://dashboard.majoo.id\", \"referer\": \"https://dashboard.majoo.id/\", \"x-brand-key\": \"undefined\", \"accept\": \"*/*\"}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "567b7752-b0e3-4115-b89f-c5758a125d07",
+      "name": "Petakan Baris Refund",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        420
+      ],
+      "parameters": {
+        "jsCode": "// Baris 'refund' -> 20 kolom KOLOM_MAJOO. Kolom sales dikosongkan --\n// transaction_no dipakai sebagai field gabung ke baris sales terkait\n// (join dilakukan di sisi pembaca laporan, BUKAN di sini -- sama\n// seperti perilaku 'Format Refund Rows' yang sudah ada).\nconst items = $input.first().json.data || [];\n\nreturn items.map(r => ({ json: {\n  id: '',\n  transaction_no: r.no_transaksi_penjualan,\n  transaction_date: '',\n  payment_date: '',\n  order_type_name: '',\n  payment_method_name: '',\n  payment_cashier_name: '',\n  total_sales: '',\n  receivables: '',\n  total_discount_amount: '',\n  refund_amount: r.refund_rp,\n  is_paid: '',\n  outlet_id: '',\n  hasMore: '',\n  nextPage: '',\n  _empty: '',\n  refund_id: r.id,\n  refund_no: r.no_transaksi_refund,\n  refund_date: r.tanggal,\n  refund_reason: r.alasan_refund || '',\n} }));"
+      }
+    },
+    {
+      "id": "c9ad9004-831e-43c5-bd9d-3445e728b656",
+      "name": "Gabung Semua Baris",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        2860,
+        280
+      ],
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      }
+    },
+    {
+      "id": "fd492481-a823-48b5-abff-5577801c72a4",
+      "name": "Susun CSV & Pecah Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        280
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "function csvField(v) {\n  const s = v === null || v === undefined ? \"\" : String(v);\n  return /[\\\",\\n\\r]/.test(s) ? '\"' + s.replace(/\\\"/g, '\"\"') + '\"' : s;\n}\nfunction buatBarisCsv(header, obj) {\n  return header.map((h) => csvField(obj[h])).join(\",\");\n}\n\nconst mode = $('Simpan Token & Mode').first().json;\nconst { dryRun, token } = mode;\nconst HEADER = [\"id\",\"transaction_no\",\"transaction_date\",\"payment_date\",\"order_type_name\",\"payment_method_name\",\"payment_cashier_name\",\"total_sales\",\"receivables\",\"total_discount_amount\",\"refund_amount\",\"is_paid\",\"outlet_id\",\"hasMore\",\"nextPage\",\"_empty\",\"refund_id\",\"refund_no\",\"refund_date\",\"refund_reason\"];\nconst MAKS_BARIS = 30000;\n\nconst PETA = {\n  id: \"id\", transaction_no: \"transaction_no\", transaction_date: \"transaction_date\",\n  payment_date: \"payment_date\", order_type_name: \"order_type_name\",\n  payment_method_name: \"payment_method_name\", payment_cashier_name: \"payment_cashier_name\",\n  total_sales: \"total_sales\", receivables: \"receivables\",\n  total_discount_amount: \"total_discount_amount\", refund_amount: \"refund_amount\",\n  is_paid: \"is_paid\", outlet_id: \"outlet_id\", hasMore: \"hasMore\", nextPage: \"nextPage\",\n  _empty: \"_empty\", refund_id: \"refund_id\", refund_no: \"refund_no\",\n  refund_date: \"refund_date\", refund_reason: \"refund_reason\",\n};\n\n// TIDAK ada filter tanggal cutoff di sini -- beda sengaja dari\n// raw-majoo.json, lihat catatan di atas blok ini.\nconst baris = [];\nfor (const item of $input.all()) {\n  const row = item.json;\n  const obj = {};\n  for (const kolom of HEADER) obj[kolom] = row[PETA[kolom]] ?? \"\";\n  baris.push(obj);\n}\n\nif (dryRun) {\n  return [{\n    json: {\n      dryRun: true,\n      jumlahBaris: baris.length,\n      contohBaris: baris.slice(0, 3),\n      csvHeader: HEADER.join(\",\"),\n    },\n  }];\n}\n\nconst hasil = [];\nfor (let i = 0; i < baris.length; i += MAKS_BARIS) {\n  const potongan = baris.slice(i, i + MAKS_BARIS);\n  const lines = [HEADER.join(\",\")];\n  for (const obj of potongan) lines.push(buatBarisCsv(HEADER, obj));\n  hasil.push({\n    json: {\n      dryRun: false,\n      token,\n      csvText: lines.join(\"\\n\") + \"\\n\",\n      jumlahBarisBatch: potongan.length,\n      batchKe: Math.floor(i / MAKS_BARIS) + 1,\n    },\n  });\n}\nif (hasil.length === 0) {\n  hasil.push({ json: { dryRun: false, token, csvText: HEADER.join(\",\") + \"\\n\", jumlahBarisBatch: 0, batchKe: 1 } });\n}\nreturn hasil;"
+      }
+    },
+    {
+      "id": "ea289dea-43bb-4190-8c1a-624cd50d2cd6",
+      "name": "Apakah Dry-Run?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3300,
+        280
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "2b1ee6ef-1b4d-4480-a69d-b1857ab524c2",
+              "leftValue": "={{ $json.dryRun }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "0af48878-a28c-4b21-b5cf-623b8ff31712",
+      "name": "Pratinjau Dry-Run (lihat tab Output)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3520,
+        160
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "925da578-e4c4-48b9-ba07-a8b6a2314d5b",
+      "name": "Kirim CSV ke App",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3520,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://burnas-app.duckdns.org/api/sales-sync/import/raw-majoo",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "text/csv"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "raw",
+        "rawContentType": "text/csv",
+        "body": "={{ $json.csvText }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "0f0fefb2-24c2-4690-844b-10d150260b48",
+      "name": "Ada Baris Gagal?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3740,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "3f52eabb-d270-44db-a784-f014e2e18dcf",
+              "leftValue": "={{ $json.errors.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "71be6529-8a7b-4b4a-844d-79ec4a8335c0",
+      "name": "Error: Ada Baris CSV Gagal",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        3960,
+        280
+      ],
+      "parameters": {
+        "errorMessage": "={{ 'Import Majoo langsung-API: ' + $json.errors.length + ' baris CSV gagal disimpan. Detail: ' + JSON.stringify($json.errors) }}"
+      }
+    },
+    {
+      "id": "43a9e08d-9922-46d4-87be-41526670d439",
+      "name": "Selesai",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3960,
+        500
+      ],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Jadwal Otomatis": {
+      "main": [
+        [
+          {
+            "node": "Atur Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jalankan Manual (Uji Coba)": {
+      "main": [
+        [
+          {
+            "node": "Atur Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atur Mode": {
+      "main": [
+        [
+          {
+            "node": "Login ke App",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Login ke App": {
+      "main": [
+        [
+          {
+            "node": "Simpan Token & Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simpan Token & Mode": {
+      "main": [
+        [
+          {
+            "node": "Ambil Token Majoo",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ambil Token Majoo (Refund)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Token Majoo": {
+      "main": [
+        [
+          {
+            "node": "Parse Token Majoo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Token Majoo": {
+      "main": [
+        [
+          {
+            "node": "Tentukan Rentang Tanggal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tentukan Rentang Tanggal": {
+      "main": [
+        [
+          {
+            "node": "Siapkan Request Sales",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Siapkan Request Sales": {
+      "main": [
+        [
+          {
+            "node": "Get Detail Sales",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Gabung Konteks Halaman",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Get Detail Sales": {
+      "main": [
+        [
+          {
+            "node": "Gabung Konteks Halaman",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Increment Page Sales": {
+      "main": [
+        [
+          {
+            "node": "Get Detail Sales",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Gabung Konteks Halaman",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Gabung Konteks Halaman": {
+      "main": [
+        [
+          {
+            "node": "Petakan Baris Sales",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Loop Control Sales",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Control Sales": {
+      "main": [
+        [
+          {
+            "node": "Ada Halaman Lagi?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ada Halaman Lagi?": {
+      "main": [
+        [
+          {
+            "node": "Tunggu 2 Detik",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ambil Baris Sales Terkumpul",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tunggu 2 Detik": {
+      "main": [
+        [
+          {
+            "node": "Increment Page Sales",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Token Majoo (Refund)": {
+      "main": [
+        [
+          {
+            "node": "Parse Token Majoo (Refund)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Token Majoo (Refund)": {
+      "main": [
+        [
+          {
+            "node": "Siapkan Request Refund",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Siapkan Request Refund": {
+      "main": [
+        [
+          {
+            "node": "Get Refund Sales",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Refund Sales": {
+      "main": [
+        [
+          {
+            "node": "Petakan Baris Refund",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Baris Sales Terkumpul": {
+      "main": [
+        [
+          {
+            "node": "Gabung Semua Baris",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Petakan Baris Refund": {
+      "main": [
+        [
+          {
+            "node": "Gabung Semua Baris",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Gabung Semua Baris": {
+      "main": [
+        [
+          {
+            "node": "Susun CSV & Pecah Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Susun CSV & Pecah Batch": {
+      "main": [
+        [
+          {
+            "node": "Apakah Dry-Run?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apakah Dry-Run?": {
+      "main": [
+        [
+          {
+            "node": "Pratinjau Dry-Run (lihat tab Output)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kirim CSV ke App",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kirim CSV ke App": {
+      "main": [
+        [
+          {
+            "node": "Ada Baris Gagal?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ada Baris Gagal?": {
+      "main": [
+        [
+          {
+            "node": "Error: Ada Baris CSV Gagal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Selesai",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta"
+  },
+  "staticData": null,
+  "meta": {
+    "instanceId": null
+  }
+}
