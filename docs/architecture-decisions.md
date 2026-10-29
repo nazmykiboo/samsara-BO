@@ -3466,3 +3466,47 @@ di graf besar (33 node untuk log-penjualan-direct.json, 45 node untuk
 transaksi-biaya-direct.json). Divalidasi terprogram: JSON valid, tidak
 ada node yatim/duplikat, tidak ada referensi `/proses`, sebelum
 di-commit.
+
+## 33. Bug produksi: `menu_id` kosong di `log-penjualan-direct.json` membuat item tidak pernah bisa dipetakan (2026-10-29)
+
+Owner menjalankan `raw-majoo-direct.json` dan `log-penjualan-direct.json`
+(§ 32) langsung di VPS. Data berhasil masuk ke arsip
+(`salessync_raw_majoo`/`salessync_log_penjualan`, dikonfirmasi lewat
+query read-only ke production), tapi "Proses Sinkronisasi" melaporkan
+"53 order dilewati karena item belum terpetakan" SEMENTARA halaman
+"daftar item belum dipetakan" kosong — kontradiksi yang jadi tanda bug.
+
+**Root cause** (dikonfirmasi baca kode langsung, `modules/sales-sync/src/domain/item-mapping.ts:68-79`
+dan `modules/sales-sync/src/domain/proses.ts:258-265`): keputusan desain
+§ 32.2 "hapus lookup `MENU_ALIAS`, `menu_id` dikirim kosong" SALAH
+asumsi. `syncItemMappingFromLog` cuma mengantrikan baris ke
+`salessync_item_mapping` kalau `menu_id IS NOT NULL AND menu_id <> ''`
+(`item-mapping.ts:74`) -- baris `menu_id` NULL TIDAK PERNAH masuk
+antrian pemetaan sama sekali. Sementara itu `prosesSinkronisasi`
+memperlakukan `menu_id` NULL sebagai "belum terpetakan" (lookup
+pemetaan di-skip langsung, `proses.ts:261`) dan men-skip SELURUH order
+yang punya minimal 1 baris begitu. Hasilnya: order dari 4 platform baru
+ini (Shopee/GrabFood/GoFood/Majoo-level-produk) TIDAK PUNYA jalur apa
+pun -- otomatis maupun manual lewat UI -- untuk dipetakan, karena
+`kode_eksternal`-nya memang tidak pernah tercipta.
+
+**Perbaikan**: `menu_id` di 4 node "Petakan Baris ..."
+(`devops/n8n/log-penjualan-direct.json`) diisi SAMA DENGAN `item_name`
+(nama mentah dari platform dipakai juga sebagai kode eksternal
+sementara) -- bukan dikosongkan. Ini membuat `syncItemMappingFromLog`
+kembali bisa mengantrikan item baru, dan owner bisa memetakannya manual
+lewat halaman Pemetaan Item seperti alur normal yang sudah ada.
+
+**Konsekuensi yang perlu owner tahu**: item yang DULU sudah dipetakan
+lewat jalur Google Sheets lama (kode eksternalnya hasil lookup
+`MENU_ALIAS`, kemungkinan berbeda dari nama mentah platform) TIDAK
+otomatis "nyambung" ke pemetaan lama -- perlu dipetakan ulang sekali di
+bawah kode eksternal baru (nama mentah). Ini biaya satu-kali, bukan
+masalah berulang. Detail lengkap + contoh kode sebelum/sesudah: lihat
+`devops/n8n/README.md` § 12 "Perbedaan desain dari workflow lama".
+
+Pelajaran untuk keputusan desain berikutnya yang mirip: sebelum
+menghapus suatu field/lookup dengan asumsi "app punya mekanisme
+pengganti", baca dulu kode mekanisme pengganti itu sampai ke detail
+(field mana yang jadi kunci, bukan cuma nama fungsinya) -- bukan cuma
+percaya nama fungsi/komentar levelnya saja.

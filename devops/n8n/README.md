@@ -569,10 +569,25 @@ di data Shopee dari jalur lama.
 - **`unique_key` GrabFood disamakan** ke nama item MENTAH dari
   platform (dulu satu-satunya yang pakai nama standar hasil alias).
 - **Tidak ada lagi lookup `MENU_ALIAS` dari Google Sheets** —
-  `item_name`/`menu_id` dikirim apa adanya dari platform, app sudah
-  punya mekanismenya sendiri (`syncItemMappingFromLog`) untuk memetakan
-  item baru. **`log-penjualan-direct.json` sekarang 100% tanpa Google
+  `item_name` dikirim apa adanya dari platform, app sudah punya
+  mekanismenya sendiri (`syncItemMappingFromLog`) untuk memetakan item
+  baru. **`log-penjualan-direct.json` sekarang 100% tanpa Google
   Sheets.**
+  > **Koreksi (2026-10-29, ditemukan dari insiden produksi)**: versi
+  > awal node "Petakan Baris ..." mengirim `menu_id` KOSONG untuk
+  > semua baris. Ini SALAH — `syncItemMappingFromLog`
+  > (`import-csv.ts:421`, lihat `modules/sales-sync/src/domain/item-mapping.ts:74`)
+  > HANYA mengantrikan baris ke daftar "item belum dipetakan" kalau
+  > `menu_id` TERISI; `menu_id` kosong membuat `/sales-sync/proses`
+  > melewati SELURUH order tanpa ada jalan untuk memetakannya lewat UI
+  > sama sekali (53 order tersangkut saat pertama kali diuji ke
+  > production). Sudah diperbaiki: `menu_id` sekarang diisi SAMA
+  > DENGAN `item_name` (nama mentah jadi "kode eksternal" sementara,
+  > bisa dipetakan manual lewat halaman Pemetaan Item seperti biasa).
+  > **Konsekuensi**: item yang DULU sudah dipetakan lewat jalur Sheets
+  > lama (kode eksternalnya beda, hasil lookup `MENU_ALIAS`) perlu
+  > DIPETAKAN ULANG sekali di bawah kode eksternal baru ini — tidak
+  > otomatis "nyambung" ke pemetaan lama.
 - **`transaksi-biaya-direct.json` MASIH membaca 1 Google Sheet kecil**:
   tab `MAPPING_BIAYA_PLATFORM` (lookup kode transaksi → kategori biaya
   yang bisa dibaca manusia) — ini SENGAJA dipertahankan (beda dari
