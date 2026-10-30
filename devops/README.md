@@ -1,8 +1,44 @@
 # Runbook Deploy Production — Samsara Backoffice
 
-Status per 2026-10-26 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
+Status per 2026-10-30 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
 disalin dari versi dokumen sebelumnya). **App sudah LIVE, dipakai owner
-sungguhan, dan sudah melewati Deploy #2** — lihat § "Deploy #2" di bawah.
+sungguhan, dan sudah melewati Deploy #3** — lihat § "Deploy #3" di bawah.
+
+## Deploy #3: Pemrosesan otomatis sales-sync, izin staf granular, rename item/menu/kategori, keamanan kredensial (2026-10-30)
+
+4 migrasi baru lintas 3 modul (`core/0011-0012`, `inventory/0032`,
+`sales-sync/0003`) berhasil dijalankan ke production, container `api`/`web`
+di-rebuild & restart (n8n/Postgres/VNC **tidak disentuh sama sekali** --
+uptime tetap "Up 11 hari"/"Up 12 hari" sebelum & sesudah, dicek eksplisit).
+
+**Metodologi** (sama persis Deploy #2): `pg_dump` production → restore ke
+database lokal terpisah (`samsara_prod_rehearsal`) → keempat migrasi
+dijalankan ke salinan itu → 57 tabel lama dibandingkan jumlah barisnya
+sebelum/sesudah (**identik**, cuma `core_roles` +1 dan `salessync_settings`
++1 sesuai yang memang diharapkan migrasi baru) → `npm run seed:sistem-otomatis`
+dites 2x di salinan itu (**idempoten**, baris kedua tidak dibuat) → database
+lokal dihapus → BARU dicoba ke production sungguhan.
+
+**Smoke test production**: HTTPS valid, `/health` OK (3 modul aktif),
+endpoint login merespons benar (dites dengan kredensial sengaja salah,
+BUKAN kredensial sungguhan), `GET /api/core/lokasi` publik normal,
+60 tabel di production (58 lama + 2 baru `salessync_otomatis_log`/
+`salessync_import_log`, sesuai ekspektasi). **Status fitur setelah deploy
+-- SESUAI RENCANA, bukan kecelakaan**: `otomatis_aktif = false` (default
+migrasi, tidak pernah disentuh selama deploy ini), ketujuh user production
+existing punya `wajib_ganti_kredensial = false` (kolom baru, default
+`false`, tidak ada yang dipaksa ganti kredensial sebagai efek samping
+deploy). `npm run seed:sistem-otomatis` dijalankan sekali di production
+(idempoten, dites jalan ke-2 tidak membuat baris baru) -- identitas
+`sistem-otomatis-sales-sync` SEKARANG ADA di production tapi tidak pernah
+dipakai sampai owner menyalakan `otomatis_aktif` sendiri lewat UI.
+
+Backup pra-deploy diverifikasi dulu (permission 600, `gzip -t` valid,
+ukuran 1.9MB wajar dibanding backup harian) SEBELUM migrasi dijalankan --
+tersimpan di `/root/samsara-backups/samsara_pre-deploy-DEF_2026-10-30_221356.sql.gz`
+di VPS, ikut rotasi retensi 7 hari otomatis seperti backup harian lainnya.
+Tidak ada kredensial apa pun yang pernah terbaca/tertulis ke chat/log/git
+sepanjang proses.
 
 ## Deploy #2: Outlet & Kitchen, Identitas Bisnis, Vendor & Katalog, perbaikan bug lokasi-async (2026-10-26)
 
@@ -87,7 +123,7 @@ live secara teknis, sudah benar-benar dipakai.
 | 6 | Swap VPS 2GB | ✅ Sudah ada sejak awal, tidak perlu dipasang lagi |
 | 7 | JWT secret production | ✅ Selesai, di `.env.production` |
 | 8 | Backup otomatis (pg_dump harian) | ✅ Cron terpasang (jam 3 pagi), sudah dites manual sekali — file backup valid (32KB, 5239 baris, permission 600) |
-| 9 | Migrasi ke database production | ✅ **Selesai, sekarang 47 file migrasi lintas 4 modul berhasil** (42 saat Deploy #1, +5 saat Deploy #2 2026-10-26 — lihat § "Deploy #2" di atas; bug migrasi yang ditemukan & diperbaiki saat Deploy #1 di bawah) |
+| 9 | Migrasi ke database production | ✅ **Selesai, sekarang 51 file migrasi lintas 4 modul berhasil** (42 saat Deploy #1, +5 saat Deploy #2 2026-10-26, +4 saat Deploy #3 2026-10-30 — lihat § "Deploy #3"/"Deploy #2" di atas; bug migrasi yang ditemukan & diperbaiki saat Deploy #1 di bawah) |
 | 10 | Monitoring dasar | ✅ Docker healthcheck aktif, keduanya `healthy` |
 | 11 | Smoke test | ✅ HTTPS valid, `/health` OK, restart `api` sekali → naik lagi sendiri otomatis, n8n/Postgres/VNC tidak terganggu (uptime tidak reset) |
 | 12 | Akun owner & integrasi production | ✅ **Selesai** — `owner` dan `n8n-integrasi` sudah dibuat owner sendiri (Langkah 7), owner juga sudah menambah akun tim sendiri (`hisyam`/supervisor, `naura`/staf) lewat UI |

@@ -94,14 +94,26 @@ sungguhan, bukan disalin dari versi dokumen sebelumnya):
   endpoint login itu sendiri — diharapkan), n8n/Postgres/VNC tidak
   terganggu (uptime tetap "Up 7 days" sebelum & sesudah). Detail lengkap
   metodologi: `docs/architecture-decisions.md` § 31.
+- **Deploy #3 (2026-10-30): Pemrosesan otomatis sales-sync, izin staf
+  granular, rename item/menu/kategori, keamanan kredensial** — 4 migrasi
+  baru (`core/0011-0012`, `inventory/0032`, `sales-sync/0003`) lintas 3
+  modul, metodologi latihan-dulu yang sama persis Deploy #2. 57 tabel lama
+  identik sebelum/sesudah (cuma `core_roles`/`salessync_settings` +1 sesuai
+  ekspektasi migrasi baru), `npm run seed:sistem-otomatis` dites idempoten
+  2x di salinan lokal dulu. Smoke test production lulus semua, n8n/Postgres/
+  VNC tidak terganggu (uptime tetap "Up 11 hari"/"Up 12 hari"). **Status
+  fitur setelah deploy SESUAI RENCANA**: `otomatis_aktif = false` dan
+  ketujuh user production existing `wajib_ganti_kredensial = false` --
+  tidak ada yang berubah untuk pemakai sungguhan sebagai efek deploy ini.
+  Detail lengkap: `devops/README.md` § "Deploy #3".
 
 Ringkasnya: app Samsara Backoffice sudah bisa diakses publik dengan HTTPS
 valid di `burnas-app.duckdns.org`, berjalan berdampingan dengan n8n/VNC yang
 sudah ada tanpa mengganggu satu pun, database production sudah termigrasi
 bersih dari nol DAN data masternya sudah disinkronkan penuh dengan dev, DAN
-sudah melewati satu siklus deploy lanjutan penuh (Deploy #2, dengan latihan
-di salinan lokal lebih dulu) tanpa insiden — app sudah benar-benar dipakai
-owner, bukan cuma live secara teknis. Production sekarang jadi acuan utama
+sudah melewati dua siklus deploy lanjutan penuh (Deploy #2 & #3, dengan
+latihan di salinan lokal lebih dulu tiap kalinya) tanpa insiden — app sudah
+benar-benar dipakai owner, bukan cuma live secara teknis. Production sekarang jadi acuan utama
 data master ke depan, bukan dev.
 
 ---
