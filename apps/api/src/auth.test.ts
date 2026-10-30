@@ -423,7 +423,12 @@ test("staf tidak bisa menyetujui/menolak opname (owner/manajer_ops saja)", async
   }
 });
 
-test("PIN duplikat di lokasi sama ditolak, PIN sama di lokasi beda diterima", async () => {
+test("PIN duplikat (lokasi sama MAUPUN beda) DITERIMA -- aturan unik-per-lokasi dicabut 2026-10-30", async () => {
+  // Alasan dicabut: login PIN selalu lewat pilih-nama-dulu (POST /login-pin
+  // mengirim {userId, pin} eksplisit) -- PIN cuma pernah diverifikasi ke SATU
+  // user yang sudah diketahui id-nya, tidak pernah dicari lintas user. Aturan
+  // unik ini tidak pernah benar-benar dibutuhkan untuk korektnes login, lihat
+  // juga apps/api/src/kredensial.test.ts untuk cakupan F lainnya.
   const token = await getOwnerToken("pindup");
 
   const staf1 = await createUserViaApi(token, {
@@ -440,8 +445,7 @@ test("PIN duplikat di lokasi sama ditolak, PIN sama di lokasi beda diterima", as
     locationIds: [ckLocationId],
     pin: "135790",
   });
-  assert.equal(staf2SameLocation.status, 400, "PIN sama di LOKASI SAMA ditolak");
-  assert.match(staf2SameLocation.body.error ?? "", /pin.*sudah dipakai/i);
+  assert.equal(staf2SameLocation.status, 201, "PIN sama persis di LOKASI SAMA sekarang DITERIMA");
 
   const staf3OtherLocation = await createUserViaApi(token, {
     name: "Test Staf Tiga",
@@ -449,7 +453,7 @@ test("PIN duplikat di lokasi sama ditolak, PIN sama di lokasi beda diterima", as
     locationIds: [outletLocationId],
     pin: "135790",
   });
-  assert.equal(staf3OtherLocation.status, 201, "PIN sama persis tapi di LOKASI BEDA diterima");
+  assert.equal(staf3OtherLocation.status, 201, "PIN sama persis di LOKASI BEDA tetap diterima (tidak pernah dibatasi)");
 });
 
 test("POST /api/auth/users: PIN kosong di-generate otomatis dan dikembalikan sekali di response", async () => {
@@ -1249,6 +1253,23 @@ test("role integrasi: DITOLAK 403 di endpoint lain apa pun (sales-sync non-impor
       catatan: "ubah pemetaan item -- 403 sebelum sempat cek 404",
     },
     { method: "GET", path: "/api/sales-sync/belum-diproses", catatan: "arsip belum diproses" },
+    {
+      method: "GET",
+      path: "/api/sales-sync/otomatis/pengaturan",
+      catatan: "baca pengaturan otomatis (2026-10-30, lihat juga role sistem_otomatis TIDAK bisa login di auth.test.ts lain)",
+    },
+    {
+      method: "PUT",
+      path: "/api/sales-sync/otomatis/pengaturan",
+      body: JSON.stringify({ aktif: true }),
+      catatan: "ubah pengaturan otomatis -- paling penting ditolak, ini yang menyalakan pemotongan stok otomatis",
+    },
+    {
+      method: "GET",
+      path: "/api/sales-sync/otomatis/pratinjau?tanggal_mulai=2026-01-01",
+      catatan: "pratinjau pemrosesan otomatis",
+    },
+    { method: "GET", path: "/api/sales-sync/otomatis/status", catatan: "status dashboard otomatis" },
 
     // --- Inventory: 6 endpoint yang SEBELUMNYA tanpa gate permission ---
     { method: "GET", path: "/api/inventory/menu", catatan: "daftar menu -- contoh eksplisit dari owner" },
@@ -1277,6 +1298,16 @@ test("role integrasi: DITOLAK 403 di endpoint lain apa pun (sales-sync non-impor
     const json = (await res.json()) as { error: string };
     assert.match(json.error, /integrasi/, `pesan 403 menyebut role-nya: ${method} ${path}`);
   }
+});
+
+test("role sistem_otomatis TIDAK bisa login interaktif (2026-10-30, hanya dipakai lewat token internal yang di-mint server untuk pemrosesan otomatis sales-sync)", async () => {
+  await createTestUser("test_sistem_otomatis_login", "rahasia-internal-123", "sistem_otomatis");
+  const res = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "test_sistem_otomatis_login", password: "rahasia-internal-123" }),
+  });
+  assert.equal(res.status, 401, "login untuk role sistem_otomatis harus ditolak walau password-nya benar");
 });
 
 test("regresi: owner & manajer_ops TETAP boleh keempat endpoint import setelah dipisah ke sales_sync.import", async () => {
@@ -1335,6 +1366,67 @@ test("regresi: supervisor & staf TETAP boleh 6 endpoint Inventory yang baru di-g
       const res = await fetch(`${baseUrl}${path}`, { headers: { Authorization: `Bearer ${token}` } });
       assert.equal(res.status, 200, `${role} TETAP boleh GET ${path} (tidak ada regresi dari gate baru)`);
     }
+  }
+});
+
+test("POST /transaksi/mutasi-lain: staf DITOLAK 403 untuk jenis retur_supplier/koreksi_tambah, BOLEH jenis pengurangan standar; supervisor boleh semua jenis (2026-10-30)", async () => {
+  const stafId = await createTestStafUser("Test Staf Mutasi Jenis", "778899", [ckLocationId]);
+  const stafToken = await loginPin(stafId, "778899");
+  await createTestUser("test_supervisor_mutasi_jenis", "rahasia123", "supervisor", [ckLocationId]);
+  const supervisorToken = await login("test_supervisor_mutasi_jenis", "rahasia123");
+
+  async function postMutasi(token: string, jenis: string, qty: number) {
+    return fetch(`${baseUrl}/api/inventory/transaksi/mutasi-lain`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        locationId: ckLocationId,
+        jenis,
+        alasan: "test otomatis",
+        tanggal: "2026-01-15",
+        baris: [{ itemKode: "BB-001", qtyChange: qty }],
+      }),
+    });
+  }
+
+  const stafDitolak = await postMutasi(stafToken, "retur_supplier", -1);
+  assert.equal(stafDitolak.status, 403, "staf DITOLAK 403 untuk jenis retur_supplier");
+  const stafDitolakBody = (await stafDitolak.json()) as { error: string };
+  assert.match(stafDitolakBody.error, /supervisor/i, "pesan 403 menyebut perlu supervisor ke atas");
+
+  const stafDitolakTambah = await postMutasi(stafToken, "koreksi_tambah", 1);
+  assert.equal(stafDitolakTambah.status, 403, "staf DITOLAK 403 untuk jenis koreksi_tambah");
+
+  const stafBoleh = await postMutasi(stafToken, "waste_rusak", -1);
+  assert.equal(stafBoleh.status, 201, "staf BOLEH jenis pengurangan standar (waste_rusak)");
+  const stafBolehBody = (await stafBoleh.json()) as { headerId: number };
+
+  const supervisorBoleh = await postMutasi(supervisorToken, "retur_supplier", -1);
+  assert.equal(supervisorBoleh.status, 201, "supervisor BOLEH jenis retur_supplier");
+  const supervisorBolehBody = (await supervisorBoleh.json()) as { headerId: number };
+
+  // Dua POST di atas BERHASIL membuat baris inventory_transaksi_mutasi_lain
+  // sungguhan (dibuat_oleh = stafId/userId supervisor) -- cleanup eksplisit di
+  // sini SEBELUM after() global menghapus core_users, supaya tidak melanggar
+  // FK inventory_transaksi_mutasi_lain_dibuat_oleh_fkey.
+  const client = await pool.connect();
+  try {
+    for (const headerId of [stafBolehBody.headerId, supervisorBolehBody.headerId]) {
+      const { rows: barisRows } = await client.query<{ id: number }>(
+        `SELECT id FROM inventory_transaksi_mutasi_lain_baris WHERE header_id = $1`,
+        [headerId],
+      );
+      for (const baris of barisRows) {
+        await client.query(
+          `DELETE FROM inventory_stock_ledger WHERE reference_table = 'inventory_transaksi_mutasi_lain_baris' AND reference_id = $1`,
+          [baris.id],
+        );
+      }
+      await client.query(`DELETE FROM inventory_transaksi_mutasi_lain_baris WHERE header_id = $1`, [headerId]);
+      await client.query(`DELETE FROM inventory_transaksi_mutasi_lain WHERE id = $1`, [headerId]);
+    }
+  } finally {
+    client.release();
   }
 });
 
@@ -1444,7 +1536,20 @@ test("revoke token: token lama ditolak setelah reset password, token hasil login
   await assertTokenBasi(tokenA, "token A DITOLAK setelah password user di-reset");
 
   const tokenB = await login("test_revoke_resetpw", generatedPassword!);
-  await assertTokenHidup(tokenB, "token B (login pakai password BARU) bekerja normal");
+  // Password hasil RESET selalu menyalakan wajib_ganti_kredensial (2026-10-30)
+  // -- token B sendiri HARUS 403 di endpoint biasa dulu (bukan langsung 200),
+  // baru setelah ganti kredensial sendiri token-nya "hidup penuh".
+  const sebelumGanti = await cekEndpoint(tokenB);
+  assert.equal(sebelumGanti.status, 403, "token B BELUM bisa akses endpoint biasa sebelum ganti kredensial sendiri");
+
+  const gantiRes = await fetch(`${baseUrl}/api/auth/ganti-kredensial`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${tokenB}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ kredensialLama: generatedPassword, kredensialBaru: "password-permanen-revoke-pw" }),
+  });
+  assert.equal(gantiRes.status, 200);
+  const { token: tokenC } = (await gantiRes.json()) as { token: string };
+  await assertTokenHidup(tokenC, "token C (setelah ganti kredensial sendiri) bekerja normal");
 });
 
 test("revoke token: token lama staf ditolak setelah reset PIN, PIN baru dipakai login ulang normal", async () => {
@@ -1465,7 +1570,19 @@ test("revoke token: token lama staf ditolak setelah reset PIN, PIN baru dipakai 
   await assertTokenBasi(tokenA, "token A staf DITOLAK setelah PIN di-reset");
 
   const tokenB = await loginPin(stafId, generatedPin!);
-  await assertTokenHidup(tokenB, "token B (login pakai PIN BARU) bekerja normal");
+  // PIN hasil RESET selalu menyalakan wajib_ganti_kredensial (2026-10-30) --
+  // sama seperti password, token B dulu HARUS 403 di endpoint biasa.
+  const sebelumGanti = await cekEndpoint(tokenB);
+  assert.equal(sebelumGanti.status, 403, "token B staf BELUM bisa akses endpoint biasa sebelum ganti PIN sendiri");
+
+  const gantiRes = await fetch(`${baseUrl}/api/auth/ganti-kredensial`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${tokenB}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ kredensialLama: generatedPin, kredensialBaru: "824719" }),
+  });
+  assert.equal(gantiRes.status, 200);
+  const { token: tokenC } = (await gantiRes.json()) as { token: string };
+  await assertTokenHidup(tokenC, "token C (setelah ganti PIN sendiri) bekerja normal");
 });
 
 test("revoke token: counter per-USER -- deactivate/reset satu user tidak mengganggu token user LAIN", async () => {

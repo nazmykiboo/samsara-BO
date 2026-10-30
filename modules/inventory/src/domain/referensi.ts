@@ -18,6 +18,36 @@ export interface RefItem {
   isActive: boolean;
 }
 
+/**
+ * Cek keunikan nama TANPA membedakan huruf besar/kecil dan TANPA terpengaruh
+ * spasi di ujung (2026-10-30, fitur rename item/menu/kategori) -- lebih
+ * ketat dari constraint `UNIQUE` mentah yang sudah ada di database. Dipakai
+ * SEBAGAI PRE-CHECK aplikasi (bukan mengandalkan pesan error Postgres
+ * mentah dari index `..._ci_key` di migrasi 0032 -- repo ini tidak punya
+ * mekanisme menerjemahkan error 23505 ke Bahasa Indonesia, index itu
+ * murni jaring pengaman race-condition).
+ *
+ * `table`/`column` SELALU literal hardcode dari pemanggil di file ini
+ * sendiri (tidak pernah dari input user) -- aman diselipkan langsung ke
+ * SQL tanpa parameterisasi.
+ */
+export async function namaSudahDipakai(
+  client: PoolClient,
+  table: string,
+  column: string,
+  name: string,
+  excludeId?: number,
+): Promise<boolean> {
+  const params: unknown[] = [name];
+  let sql = `SELECT 1 FROM ${table} WHERE lower(trim(${column})) = lower(trim($1))`;
+  if (excludeId !== undefined) {
+    params.push(excludeId);
+    sql += ` AND id != $${params.length}`;
+  }
+  const { rows } = await client.query(sql, params);
+  return rows.length > 0;
+}
+
 // ---------------------------------------------------------------------------
 // Kategori item
 // ---------------------------------------------------------------------------
@@ -59,7 +89,33 @@ export async function updateKategori(
   const old = rows[0];
   if (!old) throw new Error(`Kategori id ${id} tidak ditemukan`);
 
-  const newRow = { name: input.name ?? old.name, is_active: input.isActive ?? old.is_active };
+  const namaBaru = input.name !== undefined ? input.name.trim() : old.name;
+  if (input.name !== undefined) {
+    if (!namaBaru) throw new Error("Nama kategori tidak boleh kosong");
+    if (namaBaru.toLowerCase() !== old.name.trim().toLowerCase()) {
+      if (await namaSudahDipakai(client, "inventory_kategori_item", "name", namaBaru, id)) {
+        throw new Error(`Nama "${namaBaru}" sudah dipakai kategori item lain -- pilih nama lain.`);
+      }
+    }
+  }
+
+  const newRow = { name: namaBaru, is_active: input.isActive ?? old.is_active };
+
+  // Rename kategori (2026-10-30): `inventory_items.category` menyimpan nama
+  // kategori sebagai TEKS BEBAS tanpa foreign key (keputusan desain lama,
+  // lihat migrasi 0019) -- tanpa cascade ini, item yang sudah dikategorikan
+  // akan jadi orphan diam-diam begitu kategorinya di-rename. Dijalankan
+  // SEBELUM UPDATE kategorinya sendiri, dalam transaksi yang sama (caller
+  // membungkus lewat withTransaction).
+  let jumlahItemTerdampak = 0;
+  if (newRow.name !== old.name) {
+    const cascade = await client.query(`UPDATE inventory_items SET category = $1 WHERE category = $2`, [
+      newRow.name,
+      old.name,
+    ]);
+    jumlahItemTerdampak = cascade.rowCount ?? 0;
+  }
+
   await client.query(`UPDATE inventory_kategori_item SET name = $1, is_active = $2 WHERE id = $3`, [
     newRow.name,
     newRow.is_active,
@@ -73,6 +129,19 @@ export async function updateKategori(
     newRow,
     fields: ["name", "is_active"],
   });
+  if (jumlahItemTerdampak > 0) {
+    // Entri PENANDA terpisah (bukan ikut `logFieldChanges` di atas) supaya
+    // riwayat audit kategori ini juga menjelaskan SKALA dampak cascade-nya,
+    // bukan cuma nama lama/baru.
+    await writeAuditLog(client, {
+      userId: userId ?? null,
+      tableName: "inventory_kategori_item",
+      recordId: id,
+      fieldName: "item_terdampak",
+      oldValue: null,
+      newValue: `${jumlahItemTerdampak} item ikut diperbarui kategorinya dari "${old.name}" ke "${newRow.name}"`,
+    });
+  }
 }
 
 export async function kategoriExists(client: PoolClient, name: string): Promise<boolean> {
@@ -246,9 +315,22 @@ export async function updateKategoriMenu(
   const old = rows[0];
   if (!old) throw new Error(`Kategori menu id ${id} tidak ditemukan`);
 
+  const namaBaru = input.nama !== undefined ? input.nama.trim() : old.nama;
+  if (input.nama !== undefined) {
+    if (!namaBaru) throw new Error("Nama kategori menu tidak boleh kosong");
+    if (namaBaru.toLowerCase() !== old.nama.trim().toLowerCase()) {
+      if (await namaSudahDipakai(client, "inventory_kategori_menu", "nama", namaBaru, id)) {
+        throw new Error(`Nama "${namaBaru}" sudah dipakai kategori menu lain -- pilih nama lain.`);
+      }
+    }
+  }
+
+  // TIDAK perlu cascade seperti kategori item: `inventory_menu.kategori_id`
+  // sudah foreign key proper ke tabel ini, bukan teks bebas -- rename aman
+  // otomatis.
   const newRow = {
     kode: input.kode ?? old.kode,
-    nama: input.nama ?? old.nama,
+    nama: namaBaru,
     urutan_tampil: input.urutanTampil ?? old.urutan_tampil,
     aktif: input.aktif ?? old.aktif,
   };

@@ -174,6 +174,8 @@ export type SumberPencatatan = "manual" | "sinkronisasi";
 export interface DetailTransaksiPenjualanBaris {
   headerId: number;
   tanggal: string;
+  /** "HH:MM:SS" atau `null` -- kolom TIME dari migrasi 0026, baris SEBELUM migrasi itu (dan input manual yang jamnya tidak diisi) selalu null. Lihat juga komentar `heatmapJam` di bawah untuk alasan kenapa ini TIDAK PERNAH diperkirakan dari `created_at`. */
+  jam: string | null;
   lokasiId: number;
   lokasiNama: string;
   /** Channel penjualan, nilai mentah kolom `sumber` (mis. "Offline", "GrabFood"). */
@@ -217,12 +219,16 @@ export interface GetDetailTransaksiPenjualanFilter {
   kodeMenu?: string;
   /** Diabaikan untuk role non-allLocations kalau bukan lokasi sendiri -- lihat doc fungsi. */
   lokasiId?: number;
-  /**
-   * TIDAK diekspos sebagai query param di API (belum ada pola pagination di
-   * repo ini -- lihat catatan di `DEFAULT_LIMIT_DETAIL_PENJUALAN`). Disediakan
-   * supaya test/pemanggil internal bisa menguji batasnya.
-   */
+  /** Jumlah TRANSAKSI (header) per halaman, bukan jumlah baris menu -- lihat `DEFAULT_LIMIT_DETAIL_PENJUALAN`. */
   limit?: number;
+  /** Jumlah TRANSAKSI yang dilewati dari awal (paginasi) -- 0/tidak diisi = halaman pertama. */
+  offset?: number;
+}
+
+export interface HasilDetailTransaksiPenjualan {
+  rows: DetailTransaksiPenjualanBaris[];
+  /** Jumlah TOTAL transaksi (bukan baris menu) yang cocok filter, TANPA memperhitungkan limit/offset -- dipakai untuk ringkasan "menampilkan X dari Y transaksi" dan tombol "muat lebih banyak" di frontend. */
+  totalTransaksi: number;
 }
 
 /**
@@ -292,7 +298,7 @@ export async function getDetailTransaksiPenjualan(
   client: PoolClient,
   user: AuthUser,
   filter: GetDetailTransaksiPenjualanFilter = {},
-): Promise<DetailTransaksiPenjualanBaris[]> {
+): Promise<HasilDetailTransaksiPenjualan> {
   const rentang = await resolveRentangTanggal(client, filter);
 
   const params: unknown[] = [rentang.mulai, rentang.selesai];
@@ -320,17 +326,45 @@ export async function getDetailTransaksiPenjualan(
   if (filter.channel !== undefined) {
     conditions.push(`h.sumber = ${bind(filter.channel)}`);
   }
+  // Filter menu BERPENGARUH ke header mana yang lolos (EXISTS), bukan
+  // menyaring baris satu-satu -- paginasi di bawah ini per TRANSAKSI, jadi
+  // kondisinya harus bisa dievaluasi di level header SEBELUM join ke baris.
   if (filter.kodeMenu !== undefined) {
-    conditions.push(`m.kode = ${bind(filter.kodeMenu)}`);
+    conditions.push(
+      `EXISTS (SELECT 1 FROM inventory_transaksi_penjualan_baris b0 JOIN inventory_menu m0 ON m0.id = b0.menu_id WHERE b0.header_id = h.id AND m0.kode = ${bind(filter.kodeMenu)})`,
+    );
   }
 
   const limit = Number.isFinite(filter.limit) && (filter.limit as number) > 0
     ? Math.min(filter.limit as number, DEFAULT_LIMIT_DETAIL_PENJUALAN)
     : DEFAULT_LIMIT_DETAIL_PENJUALAN;
+  const offset = Number.isFinite(filter.offset) && (filter.offset as number) > 0 ? (filter.offset as number) : 0;
 
+  // Langkah 1: PAGINASI DI LEVEL HEADER (transaksi), bukan baris menu -- satu
+  // transaksi dengan banyak baris menu TIDAK BOLEH terpotong di tengah kalau
+  // kebetulan jatuh di batas halaman. `count(*) OVER()` memberi total TANPA
+  // query terpisah (jendela dihitung SEBELUM LIMIT diterapkan Postgres).
+  const { rows: headerRows } = await client.query<{ header_id: string; total: string }>(
+    `SELECT h.id AS header_id, count(*) OVER() AS total
+     FROM inventory_transaksi_penjualan h
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY h.tanggal DESC, h.id DESC
+     LIMIT ${bind(limit)} OFFSET ${bind(offset)}`,
+    params,
+  );
+
+  const totalTransaksi = headerRows[0] ? Number(headerRows[0].total) : 0;
+  if (headerRows.length === 0) {
+    return { rows: [], totalTransaksi };
+  }
+  const headerIds = headerRows.map((r) => r.header_id);
+
+  // Langkah 2: detail baris menu untuk header-header di halaman ini saja --
+  // TANPA limit (jumlah menu per satu transaksi kecil & wajar diambil utuh).
   const { rows } = await client.query<{
     header_id: string;
     tanggal: string;
+    jam: string | null;
     lokasi_id: string;
     lokasi_nama: string;
     sumber: string;
@@ -344,6 +378,7 @@ export async function getDetailTransaksiPenjualan(
   }>(
     `SELECT h.id AS header_id,
             to_char(h.tanggal, 'YYYY-MM-DD') AS tanggal,
+            h.jam::text AS jam,
             h.location_id AS lokasi_id, l.name AS lokasi_nama,
             h.sumber, h.no_referensi,
             m.kode AS menu_kode, m.name AS menu_nama, b.qty,
@@ -353,28 +388,31 @@ export async function getDetailTransaksiPenjualan(
      JOIN inventory_transaksi_penjualan_baris b ON b.header_id = h.id
      JOIN inventory_menu m ON m.id = b.menu_id
      JOIN core_locations l ON l.id = h.location_id
-     WHERE ${conditions.join(" AND ")}
-     ORDER BY h.tanggal DESC, h.id DESC, b.id
-     LIMIT ${bind(limit)}`,
-    params,
+     WHERE h.id = ANY($1::bigint[])
+     ORDER BY h.tanggal DESC, h.jam DESC NULLS LAST, h.id DESC, b.id`,
+    [headerIds],
   );
 
   // Number(...) WAJIB untuk kolom BIGINT/NUMERIC -- driver pg mengembalikannya
   // sebagai string JS (pola yang sama dicatat di getLaporanHarian di atas).
-  return rows.map((r) => ({
-    headerId: Number(r.header_id),
-    tanggal: r.tanggal,
-    lokasiId: Number(r.lokasi_id),
-    lokasiNama: r.lokasi_nama,
-    sumber: r.sumber,
-    noReferensi: r.no_referensi,
-    menuKode: r.menu_kode,
-    menuNama: r.menu_nama,
-    qty: Number(r.qty),
-    sumberPencatatan: r.dari_sinkronisasi ? "sinkronisasi" : "manual",
-    hppSaatTransaksi: r.hpp_saat_transaksi === null ? null : Number(r.hpp_saat_transaksi),
-    hppSumber: r.hpp_sumber,
-  }));
+  return {
+    rows: rows.map((r) => ({
+      headerId: Number(r.header_id),
+      tanggal: r.tanggal,
+      jam: r.jam,
+      lokasiId: Number(r.lokasi_id),
+      lokasiNama: r.lokasi_nama,
+      sumber: r.sumber,
+      noReferensi: r.no_referensi,
+      menuKode: r.menu_kode,
+      menuNama: r.menu_nama,
+      qty: Number(r.qty),
+      sumberPencatatan: r.dari_sinkronisasi ? "sinkronisasi" : "manual",
+      hppSaatTransaksi: r.hpp_saat_transaksi === null ? null : Number(r.hpp_saat_transaksi),
+      hppSumber: r.hpp_sumber,
+    })),
+    totalTransaksi,
+  };
 }
 
 // ===========================================================================

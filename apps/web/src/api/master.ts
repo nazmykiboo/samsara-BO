@@ -112,6 +112,13 @@ export function createMenu(input: CreateMenuInput): Promise<{ id: string }> {
   return api.post("/api/inventory/menu", input);
 }
 
+/** Rename menu, kode TETAP (2026-10-30). Permission: `master_menu.edit`. Nama unik
+ * tanpa besar/kecil & spasi tepi -- pesan error dari backend sudah rapi Bahasa
+ * Indonesia (pre-check aplikasi, bukan pesan Postgres mentah), tampilkan apa adanya. */
+export function updateMenu(kode: string, name: string): Promise<{ kode: string }> {
+  return api.patch(`/api/inventory/menu/${encodeURIComponent(kode)}`, { name });
+}
+
 /** Body POST /menu/:kode/duplikat -- field opsionalnya SEMANTIKNYA SAMA dengan CreateMenuInput
  * (termasuk aturan `lokasiIds` di atas). Kategori & lokasi diambil dari body ini, BUKAN diwarisi
  * dari menu sumber. */

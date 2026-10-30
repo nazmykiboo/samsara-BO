@@ -16,6 +16,8 @@ import {
   getMenuResep,
   listKategoriMenu,
   listMenu,
+  updateKategoriMenu,
+  updateMenu,
   updateMenuResep,
   deactivateMenu,
 } from "../../api/master";
@@ -171,6 +173,113 @@ function MenuResepEditor({ kode }: { kode: string }) {
   );
 }
 
+/**
+ * Kelola kategori menu (ubah nama, kode TETAP) -- 2026-10-30. Panel kecil
+ * yang bisa dibuka/tutup, TERPISAH dari `MenuBaruSheet` (yang cuma untuk
+ * BUAT menu baru) karena kategori bukan milik satu menu, lebih pas sebagai
+ * daftar mandiri yang bisa dibuka kapan saja. Tidak perlu cascade ke
+ * `inventory_menu` saat rename -- `kategori_id` sudah foreign key proper
+ * (lihat backend `updateKategoriMenu`), rename otomatis aman.
+ */
+function KategoriMenuManager({ bisaEdit }: { bisaEdit: boolean }) {
+  const [terbuka, setTerbuka] = useState(false);
+  const [daftar, setDaftar] = useState<KategoriMenu[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [namaBaru, setNamaBaru] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function muat() {
+    setLoading(true);
+    setLoadError(null);
+    listKategoriMenu()
+      .then(setDaftar)
+      .catch((err) => setLoadError(err instanceof ApiError ? err.message : "Gagal memuat kategori menu."))
+      .finally(() => setLoading(false));
+  }
+
+  async function handleSimpanRename(kat: KategoriMenu) {
+    const trimmed = namaBaru.trim();
+    if (!trimmed) {
+      setError("Nama tidak boleh kosong.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await updateKategoriMenu(kat.id, { nama: trimmed });
+      setDaftar((prev) => prev.map((k) => (k.id === kat.id ? { ...k, nama: trimmed } : k)));
+      setRenamingId(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Gagal mengubah nama kategori.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div>
+      <Button
+        type="button"
+        variant="secondary"
+        className="w-full"
+        onClick={() => {
+          const next = !terbuka;
+          setTerbuka(next);
+          if (next && daftar.length === 0) muat();
+        }}
+      >
+        {terbuka ? "Tutup kelola kategori menu" : "Kelola kategori menu"}
+      </Button>
+
+      {terbuka ? (
+        <div className="mt-2 space-y-2 rounded-lg border border-slate-200 p-3">
+          {loading ? <Spinner label="Memuat kategori..." /> : null}
+          {loadError ? <ErrorBox>{loadError}</ErrorBox> : null}
+          {daftar.map((kat) =>
+            renamingId === kat.id ? (
+              <div key={kat.id} className="flex gap-2">
+                <Input autoFocus value={namaBaru} onChange={(e) => setNamaBaru(e.target.value)} className="flex-1" />
+                <Button type="button" onClick={() => handleSimpanRename(kat)} disabled={saving}>
+                  {saving ? "..." : "Simpan"}
+                </Button>
+                <Button type="button" variant="ghost" onClick={() => setRenamingId(null)} disabled={saving}>
+                  Batal
+                </Button>
+              </div>
+            ) : (
+              <div key={kat.id} className="flex items-center justify-between gap-2 text-sm">
+                <span>
+                  {kat.nama} <span className="text-slate-400">({kat.kode})</span>
+                  {!kat.aktif ? <Badge tone="neutral">Nonaktif</Badge> : null}
+                </span>
+                {bisaEdit ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="shrink-0 px-2 py-1 text-xs"
+                    onClick={() => {
+                      setNamaBaru(kat.nama);
+                      setError(null);
+                      setRenamingId(kat.id);
+                    }}
+                  >
+                    Ubah nama
+                  </Button>
+                ) : null}
+              </div>
+            ),
+          )}
+          {!loading && daftar.length === 0 ? <p className="text-sm text-slate-500">Belum ada kategori menu.</p> : null}
+          {error ? <ErrorBox>{error}</ErrorBox> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function ResepMenuTab() {
   // Form resep menu ini sebelumnya TIDAK punya pengecekan permission sama sekali (cuma mengandalkan
   // gate route halaman Master) -- sekarang digate eksplisit ke `resep.edit`.
@@ -183,6 +292,10 @@ export function ResepMenuTab() {
   const [confirmingDeactivate, setConfirmingDeactivate] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
   const [deactivateError, setDeactivateError] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [namaBaru, setNamaBaru] = useState("");
+  const [savingRename, setSavingRename] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
   /** null = form menu baru tertutup. `{ sumber: null }` = menu baru dari nol,
    * `{ sumber: menu }` = duplikat dari menu itu. */
   const [formMenuBaru, setFormMenuBaru] = useState<{ sumber: MockMenuRef | null } | null>(null);
@@ -193,6 +306,32 @@ export function ResepMenuTab() {
   function handleSelectMenu(menu: MockMenuRef) {
     setSelectedMenu(menu);
     setDeactivateError(null);
+    setRenaming(false);
+    setRenameError(null);
+  }
+
+  async function handleRename() {
+    if (!selectedMenu) return;
+    const trimmed = namaBaru.trim();
+    if (!trimmed) {
+      setRenameError("Nama tidak boleh kosong.");
+      return;
+    }
+    setSavingRename(true);
+    setRenameError(null);
+    try {
+      await updateMenu(selectedMenu.kode, trimmed);
+      setSelectedMenu({ ...selectedMenu, name: trimmed });
+      setRenaming(false);
+      // Daftar menu di MenuPicker dimuat sekali saat dipasang -- segarkan supaya
+      // nama baru ikut muncul di pencarian tanpa perlu reload halaman (pola sama
+      // seperti setelah menu baru dibuat, lihat pickerKey di bawah).
+      setPickerKey((n) => n + 1);
+    } catch (err) {
+      setRenameError(err instanceof ApiError ? err.message : "Gagal mengubah nama menu.");
+    } finally {
+      setSavingRename(false);
+    }
   }
 
   async function handleDeactivate() {
@@ -220,6 +359,8 @@ export function ResepMenuTab() {
         </Button>
       ) : null}
 
+      <KategoriMenuManager bisaEdit={bisaBuatMenu} />
+
       <MenuPicker key={pickerKey} label="Pilih menu" value={selectedMenu?.kode ?? null} onSelect={handleSelectMenu} />
 
       {selectedMenu ? (
@@ -231,16 +372,50 @@ export function ResepMenuTab() {
               </p>
               {isDeactivated ? <Badge tone="neutral">Nonaktif</Badge> : null}
             </div>
-            {bisaBuatMenu ? (
-              <Button
-                variant="secondary"
-                className="shrink-0 px-3 py-1.5 text-xs"
-                onClick={() => setFormMenuBaru({ sumber: selectedMenu })}
-              >
-                Duplikat
-              </Button>
-            ) : null}
+            <div className="flex shrink-0 gap-2">
+              {bisaBuatMenu && !renaming ? (
+                <Button
+                  variant="secondary"
+                  className="px-3 py-1.5 text-xs"
+                  onClick={() => {
+                    setNamaBaru(selectedMenu.name);
+                    setRenameError(null);
+                    setRenaming(true);
+                  }}
+                >
+                  Ubah nama
+                </Button>
+              ) : null}
+              {bisaBuatMenu ? (
+                <Button
+                  variant="secondary"
+                  className="px-3 py-1.5 text-xs"
+                  onClick={() => setFormMenuBaru({ sumber: selectedMenu })}
+                >
+                  Duplikat
+                </Button>
+              ) : null}
+            </div>
           </div>
+
+          {/* Rename menu, KODE TETAP (2026-10-30) -- riwayat transaksi lama & pemetaan
+              sales-sync tetap nyambung karena semuanya merujuk kode, bukan nama. */}
+          {renaming ? (
+            <div className="space-y-2 rounded-lg border border-slate-200 p-3">
+              <Field label="Nama menu baru">
+                <Input value={namaBaru} onChange={(e) => setNamaBaru(e.target.value)} required />
+              </Field>
+              {renameError ? <ErrorBox>{renameError}</ErrorBox> : null}
+              <div className="flex gap-2">
+                <Button onClick={handleRename} disabled={savingRename} className="flex-1">
+                  {savingRename ? "Menyimpan..." : "Simpan nama"}
+                </Button>
+                <Button variant="secondary" onClick={() => setRenaming(false)} disabled={savingRename} className="flex-1">
+                  Batal
+                </Button>
+              </div>
+            </div>
+          ) : null}
 
           <MenuResepEditor kode={selectedMenu.kode} />
 

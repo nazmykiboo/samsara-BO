@@ -22,6 +22,7 @@ export function RefSelect({
   value,
   onChange,
   onCreate,
+  onRename,
   placeholder = "Pilih...",
   required,
 }: {
@@ -30,6 +31,10 @@ export function RefSelect({
   value: string;
   onChange: (name: string) => void;
   onCreate: (name: string) => Promise<RefItem>;
+  /** Opsional -- kalau diberikan, muncul tombol "Ubah nama" untuk opsi yang SEDANG
+   * terpilih (2026-10-30, dipakai kategori item -- SENGAJA tidak dipasang untuk
+   * satuan, di luar cakupan rename). Dipanggil dengan id opsi terpilih + nama baru. */
+  onRename?: (id: string | number, newName: string) => Promise<void>;
   placeholder?: string;
   required?: boolean;
 }) {
@@ -37,12 +42,38 @@ export function RefSelect({
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [savingRename, setSavingRename] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   const visibleOptions = options.some((o) => o.name === value)
     ? options
     : value
       ? [...options, { id: "current", name: value, isActive: true }]
       : options;
+
+  const selectedOption = visibleOptions.find((o) => o.name === value);
+
+  async function handleRename() {
+    if (!selectedOption) return;
+    const trimmed = renameValue.trim();
+    if (!trimmed) {
+      setRenameError("Nama tidak boleh kosong.");
+      return;
+    }
+    setSavingRename(true);
+    setRenameError(null);
+    try {
+      await onRename?.(selectedOption.id, trimmed);
+      onChange(trimmed);
+      setRenaming(false);
+    } catch (err) {
+      setRenameError(err instanceof ApiError ? err.message : "Gagal mengubah nama.");
+    } finally {
+      setSavingRename(false);
+    }
+  }
 
   async function handleCreate() {
     setError(null);
@@ -95,31 +126,78 @@ export function RefSelect({
     );
   }
 
+  if (renaming && selectedOption) {
+    return (
+      <Field label={label}>
+        <div className="flex gap-2">
+          <Input
+            autoFocus
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            placeholder="Nama baru..."
+            className="flex-1"
+          />
+          <Button type="button" onClick={handleRename} disabled={savingRename}>
+            {savingRename ? "..." : "Simpan"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => {
+              setRenaming(false);
+              setRenameError(null);
+            }}
+          >
+            Batal
+          </Button>
+        </div>
+        {renameError ? <span className="mt-1 block text-sm text-red-600">{renameError}</span> : null}
+      </Field>
+    );
+  }
+
   return (
     <Field label={label}>
-      <Select
-        value={value}
-        required={required}
-        onChange={(e) => {
-          if (e.target.value === ADD_NEW_VALUE) {
-            setAdding(true);
-            return;
-          }
-          onChange(e.target.value);
-        }}
-      >
-        <option value="" disabled>
-          {placeholder}
-        </option>
-        {visibleOptions
-          .filter((o) => o.isActive || o.name === value)
-          .map((o) => (
-            <option key={o.id} value={o.name}>
-              {o.name}
-            </option>
-          ))}
-        <option value={ADD_NEW_VALUE}>+ Tambah baru...</option>
-      </Select>
+      <div className="flex gap-2">
+        <Select
+          value={value}
+          required={required}
+          className="flex-1"
+          onChange={(e) => {
+            if (e.target.value === ADD_NEW_VALUE) {
+              setAdding(true);
+              return;
+            }
+            onChange(e.target.value);
+          }}
+        >
+          <option value="" disabled>
+            {placeholder}
+          </option>
+          {visibleOptions
+            .filter((o) => o.isActive || o.name === value)
+            .map((o) => (
+              <option key={o.id} value={o.name}>
+                {o.name}
+              </option>
+            ))}
+          <option value={ADD_NEW_VALUE}>+ Tambah baru...</option>
+        </Select>
+        {onRename && selectedOption ? (
+          <Button
+            type="button"
+            variant="secondary"
+            className="shrink-0 px-2 text-xs"
+            onClick={() => {
+              setRenameValue(selectedOption.name);
+              setRenameError(null);
+              setRenaming(true);
+            }}
+          >
+            Ubah nama
+          </Button>
+        ) : null}
+      </div>
     </Field>
   );
 }

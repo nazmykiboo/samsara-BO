@@ -1,5 +1,5 @@
 import { api, postCsv } from "./client";
-import type { BarisBelumDiproses, HasilImportCsv, HasilProsesSinkronisasi, ItemMapping } from "./types";
+import type { HasilBelumDiproses, HasilImportCsv, HasilProsesSinkronisasi, ItemMapping } from "./types";
 
 /**
  * Modul sales-sync -- 4 endpoint import permission `sales_sync.import`
@@ -61,19 +61,20 @@ export function setItemMapping(id: string, kodeMenu: string): Promise<ItemMappin
  * tapi belum memotong stok.
  *
  * KEDUA filter tanggal OPSIONAL -- beda dari `prosesSinkronisasi` yang mewajibkan `tanggalMulai`.
- * Tanpa filter sama sekali backend mengembalikan SELURUH arsip yang belum diproses tanpa batas
- * tanggal (juga beda dari `listDetailTransaksiPenjualan` yang default 30 hari terakhir), jadi
- * hasilnya bisa ratusan baris -- UI sebaiknya menyarankan rentang tanggal.
+ * `limit`/`offset` (2026-10-30) membatasi jumlah ORDER per halaman (lihat `HasilBelumDiproses`),
+ * bukan jumlah baris -- kosong = default backend (200 order).
  *
  * Tidak ada parameter channel/lokasi/menu di endpoint ini. */
 export function listBelumDiproses(
-  filter: { tanggalMulai?: string; tanggalSelesai?: string } = {},
-): Promise<BarisBelumDiproses[]> {
+  filter: { tanggalMulai?: string; tanggalSelesai?: string; limit?: number; offset?: number } = {},
+): Promise<HasilBelumDiproses> {
   const params = new URLSearchParams();
   if (filter.tanggalMulai) params.set("tanggal_mulai", filter.tanggalMulai);
   if (filter.tanggalSelesai) params.set("tanggal_selesai", filter.tanggalSelesai);
+  if (filter.limit !== undefined) params.set("limit", String(filter.limit));
+  if (filter.offset !== undefined) params.set("offset", String(filter.offset));
   const query = params.toString();
-  return api.get<BarisBelumDiproses[]>(`/api/sales-sync/belum-diproses${query ? `?${query}` : ""}`);
+  return api.get<HasilBelumDiproses>(`/api/sales-sync/belum-diproses${query ? `?${query}` : ""}`);
 }
 
 /** POST /api/sales-sync/proses -- body {tanggalMulai} WAJIB. Mengubah arsip log penjualan jadi
@@ -86,9 +87,11 @@ export function listBelumDiproses(
  * untuk seluruh riwayat sekaligus. Kalau kosong/formatnya salah, backend menolak dengan HTTP 400
  * (ditangkap sebagai ApiError seperti endpoint lain), jadi UI wajib mengisinya.
  *
- * Order yang tanggalnya lebih awal dari `tanggalMulai` tetap tersimpan sebagai arsip tapi TIDAK
- * memotong stok, dan oleh backend tetap ditandai sudah-diproses -- jadi keputusan tanggal ini
- * sifatnya satu arah, tidak bisa dibatalkan dengan memanggil ulang pakai tanggal lebih awal. */
+ * Order yang tanggalnya lebih awal dari `tanggalMulai` TIDAK memotong stok dan `processed_at`-nya
+ * SENGAJA TIDAK ditandai (tetap NULL) -- koreksi dokumentasi 2026-10-30, komentar lama di sini
+ * salah: order itu BISA "ditangkap lagi" kalau proses dipanggil ulang dengan tanggalMulai yang
+ * lebih awal, bukan keputusan satu arah. Order dengan baris `item_type='refund'` JUGA tidak pernah
+ * memotong stok (ditambahkan 2026-10-30) -- masuk kategori "perlu ditinjau", lihat HasilProses. */
 export function prosesSinkronisasi(tanggalMulai: string): Promise<HasilProsesSinkronisasi> {
   return api.post<HasilProsesSinkronisasi>("/api/sales-sync/proses", { tanggalMulai });
 }

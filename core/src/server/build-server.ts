@@ -1,7 +1,7 @@
 import express from "express";
 import type { LoadedModule } from "../manifest/types.js";
 import { createAuthRouter } from "../auth/router.js";
-import { initPermissionRegistry, requireAuth } from "../auth/permissions.js";
+import { initPermissionRegistry, requireAuth, requireGantiKredensialDulu } from "../auth/permissions.js";
 import { createPublicCoreRouter } from "../public/router.js";
 
 /**
@@ -46,6 +46,14 @@ export function buildServer(allModules: LoadedModule[], enabledInOrder: LoadedMo
   // "semua endpoint wajib login" -- /health dan /api/auth/login adalah
   // pengecualian yang memang perlu tetap terbuka).
   app.use(requireAuth);
+
+  // Selama kredensial user wajib diganti (baru di-reset owner), TOLAK semua
+  // endpoint modul bisnis -- dipasang di sini (bukan di tiap modul) supaya
+  // berlaku otomatis untuk modul apa pun tanpa perlu diingat tiap kali modul
+  // baru ditambah. Endpoint lain di dalam `/api/auth` (mis. `/users`) TIDAK
+  // lewat baris ini (lihat komentar di atas) -- masing-masing memasang
+  // `requireGantiKredensialDulu` sendiri secara eksplisit di `auth/router.ts`.
+  app.use(requireGantiKredensialDulu);
 
   for (const mod of enabledInOrder) {
     app.use(mod.manifest.api.basePath, mod.createRouter());

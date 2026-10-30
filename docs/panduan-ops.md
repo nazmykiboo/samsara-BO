@@ -75,14 +75,24 @@ yang muncul dan tombol apa yang bisa kamu tekan:
   dia**. Tidak bisa mengubah data master (item/resep/harga jual) dan tidak
   bisa menyetujui hasil opname.
 - **Staf** — peran paling terbatas. Bisa lihat stok (lokasi sendiri),
-  menerima transfer, mencatat waste/mutasi lain, dan input hitungan fisik
-  opname — tapi **tidak bisa** mencatat pembelian/produksi/penjualan, tidak
-  bisa mengirim transfer (cuma bisa terima), dan tidak bisa lihat HPP/harga
-  beli/margin.
+  menerima transfer, mencatat waste/mutasi lain **jenis pengurangan
+  sehari-hari saja** (rusak, hilang, dipakai makan staf, dipakai sampel —
+  **retur ke supplier dan koreksi tambah stok perlu Supervisor ke atas**),
+  dan input hitungan fisik opname — tapi **tidak bisa** mencatat
+  pembelian/produksi/penjualan, tidak bisa mengirim transfer (cuma bisa
+  terima), tidak bisa lihat Riwayat Transaksi, dan tidak bisa lihat
+  HPP/harga beli/margin.
 
 Peran ini ditentukan owner saat akun kamu dibuat. Kalau merasa peranmu
 salah atau kamu butuh akses ke lokasi lain, minta owner yang mengubahnya —
 tim operasional tidak bisa mengubah peran sendiri.
+
+**Lupa PIN/password?** Owner bisa reset lewat halaman Kelola User (PIN/
+password baru dibuat otomatis atau diketik owner). Begitu di-reset, kamu
+**wajib membuat PIN/password baru sendiri** di kesempatan pertama buka
+aplikasi (layar "Buat kredensial baru" muncul otomatis) — kredensial
+sementara dari owner cuma berlaku untuk langkah itu, tidak untuk dipakai
+sehari-hari.
 
 Ringkasan menu yang muncul per peran, di sisi kiri/bawah layar:
 
@@ -222,7 +232,11 @@ ditampilkan sebagai tab: **Pembelian**, **Produksi**, **Penjualan**,
   - Sub-tab **Terima** muncul untuk **semua peran termasuk Staf** — tapi
     tetap dibatasi ke lokasi yang ditugaskan ke akun itu.
 - **Tab Mutasi Lain** — semua peran (Owner, Manajer Ops, Supervisor, Staf)
-  boleh mencatat, dibatasi ke lokasi sendiri untuk Supervisor/Staf.
+  boleh mencatat, dibatasi ke lokasi sendiri untuk Supervisor/Staf. **Jenis
+  mutasinya dibatasi untuk Staf** (2026-10-30): cuma 4 jenis pengurangan
+  sehari-hari (rusak, hilang, dipakai makan staf, dipakai sampel) yang
+  muncul di dropdown-nya — **retur ke supplier dan koreksi tambah stok
+  cuma untuk Supervisor ke atas** (backend menolak 403 kalau dipaksa).
 - **Tab Opname**:
   - Sub-tab **Input Hitungan** — semua peran boleh, dibatasi lokasi
     sendiri untuk Supervisor/Staf.
@@ -404,18 +418,24 @@ stok Bubur dan Paper Bowl tetap akurat — bukan lewat transaksi Penjualan
    peran).
 2. Pilih **Lokasi**: outlet tempat kejadiannya (supervisor/staf otomatis
    cuma melihat lokasi yang ditugaskan ke mereka).
-3. Isi **Alasan** — wajib diisi, contoh: `Bubur Polos tumpah saat servis`.
-4. Isi **Tanggal**.
-5. Di **"Tambah item"**, cari dan pilih item yang berkurang. Kalau mau
+3. Pilih **Jenis mutasi** — kategori penyebabnya (rusak, hilang, dipakai
+   makan staf, dipakai sampel, dikembalikan ke supplier, atau koreksi
+   tambah stok). **Staf cuma melihat 4 pilihan pengurangan sehari-hari**
+   (rusak/hilang/makan staf/sampel) di dropdown ini — retur ke supplier
+   dan koreksi tambah stok cuma muncul untuk Supervisor ke atas.
+4. Isi **Alasan** — wajib diisi, contoh: `Bubur Polos tumpah saat servis`.
+5. Isi **Tanggal**.
+6. Di **"Tambah item"**, cari dan pilih item yang berkurang. Kalau mau
    mencatat rugi bahan mentahnya langsung, tambahkan misalnya **Bubur**
    dan **Paper Bowl 650 ml + tutup**.
-6. Untuk tiap item, isi kolom qty dengan **angka negatif** untuk
+7. Untuk tiap item, isi kolom qty dengan **angka negatif** untuk
    mengurangi stok (misalnya `-300` untuk Bubur kalau porsi itu berisi
-   300 gr, `-1` untuk Paper Bowl). Kolom ini juga bisa diisi angka positif
-   kalau suatu saat kamu perlu **menambah** stok secara manual (misalnya
-   koreksi setelah salah catat sebelumnya) — bukan cuma untuk kerugian.
-7. Tekan **Simpan mutasi**.
-8. Muncul konfirmasi "Mutasi lain #... tersimpan." Stok item-item itu di
+   300 gr, `-1` untuk Paper Bowl), atau **angka positif** kalau jenisnya
+   koreksi tambah stok. Qty wajib konsisten dengan jenis yang dipilih di
+   langkah 3 (semua baris minus untuk jenis pengurangan, semua plus untuk
+   koreksi tambah).
+8. Tekan **Simpan mutasi**.
+9. Muncul konfirmasi "Mutasi lain #... tersimpan." Stok item-item itu di
    lokasi yang dipilih langsung disesuaikan sesuai angka yang diisi.
 
 Mutasi Lain ini juga jalur yang dipakai kalau perlu **membatalkan/
@@ -600,7 +620,12 @@ Halaman ini punya 4 tab: **Item**, **Resep Produksi**, **Resep Menu**,
   data" dan tidak akan menghalangi bagian lain sistem berjalan). Tekan
   satu item di daftar untuk mengubah data atau menonaktifkannya (item yang
   masih dipakai di resep/menu aktif akan ditolak dinonaktifkan, sistem
-  akan menyebutkan resep/menu mana saja yang masih memakainya).
+  akan menyebutkan resep/menu mana saja yang masih memakainya). **Nama
+  item bisa diubah kapan saja (kode TETAP)** — ketik nama baru di kolom
+  Nama lalu Simpan; ditolak kalau nama itu sudah dipakai item lain (tanpa
+  peduli besar/kecil huruf atau spasi di ujung).
+  Tombol **"Ubah nama"** di sebelah dropdown Kategori mengubah nama
+  kategori itu sendiri untuk semua item yang memakainya sekaligus.
 - **Tab Resep Produksi**: kelola resep seperti RP-002 (Kuah bubur) —
   tambah resep baru atau ubah daftar bahan & jumlahnya. Aturan penting:
   bahan di resep produksi **hanya boleh** bahan baku atau kemasan, tidak
@@ -611,7 +636,12 @@ Halaman ini punya 4 tab: **Item**, **Resep Produksi**, **Resep Menu**,
   dari resep produksi, resep menu **boleh** memakai hasil produksi (mis.
   Kuah bubur, Chili oil) selain bahan baku/kemasan/operasional. Mengubah
   resep menu di sini langsung memengaruhi perhitungan HPP menu itu di
-  halaman Menu & HPP.
+  halaman Menu & HPP. **Nama menu bisa diubah (kode TETAP)** — pilih menu
+  di dropdown, tekan **"Ubah nama"**, ditolak kalau nama itu sudah dipakai
+  menu lain. Riwayat transaksi lama & pemetaan data sales-sync tetap
+  nyambung karena semuanya merujuk kode, bukan nama. Tombol **"Kelola
+  kategori menu"** di atas daftar menu membuka panel untuk mengubah nama
+  tiap kategori menu.
 - **Tab Vendor**: daftar vendor/supplier langganan. Tekan **+ Tambah
   vendor** untuk menambah vendor baru (nama wajib unik, kontak/telepon/
   alamat/termin pembayaran opsional). Tekan **Lihat katalog** di satu

@@ -18,6 +18,7 @@ function fakeUser(role: AuthUser["role"], locationIds: number[] = []): AuthUser 
     // Tidak relevan di domain layer (cuma dibandingkan oleh middleware
     // requireAuth saat request HTTP masuk) -- 0 = baseline user baru.
     tokenVersion: 0,
+    wajibGantiKredensial: false,
   };
 }
 
@@ -91,7 +92,7 @@ test("getDetailTransaksiPenjualan: satu objek per BARIS menu, bukan per header",
       ],
     });
 
-    const rows = await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber });
+    const { rows } = await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber });
 
     assert.equal(rows.length, 2, "satu transaksi dengan 2 baris menu harus jadi 2 objek di response");
     assert.ok(
@@ -141,7 +142,7 @@ test("getDetailTransaksiPenjualan: ikut membawa snapshot HPP (hppSaatTransaksi/h
     ]);
     assert.equal(mentah[0].hpp_sumber, "snapshot_asli");
 
-    const rows = await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber });
+    const { rows } = await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber });
     assert.equal(rows.length, 1);
     assert.equal(rows[0].hppSumber, "snapshot_asli");
     assert.equal(
@@ -172,7 +173,7 @@ test("getDetailTransaksiPenjualan: filter rentang tanggal (BETWEEN, batas ikut t
       });
     }
 
-    const rows = await getDetailTransaksiPenjualan(client, fakeUser("owner"), {
+    const { rows } = await getDetailTransaksiPenjualan(client, fakeUser("owner"), {
       channel: sumber,
       tanggalMulai: batasAwal,
       tanggalSelesai: batasAkhir,
@@ -213,7 +214,7 @@ test("getDetailTransaksiPenjualan: tanpa param tanggal -> default 30 hari terakh
       });
     }
 
-    const rows = await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber });
+    const { rows } = await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber });
     const ditemukan = rows.map((r) => r.headerId);
 
     assert.ok(ditemukan.includes(ids[hariIni]), "transaksi hari ini harus ikut di rentang default");
@@ -242,7 +243,7 @@ test("getDetailTransaksiPenjualan: cuma tanggal_mulai diisi -> sisi selesai = ha
       });
     }
 
-    const rows = await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber, tanggalMulai: mulai });
+    const { rows } = await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber, tanggalMulai: mulai });
     const ditemukan = rows.map((r) => r.headerId);
 
     assert.ok(ditemukan.includes(ids[mulai]), "tanggal_mulai yang diisi dipakai apa adanya (bukan diganti 30 hari)");
@@ -271,7 +272,7 @@ test("getDetailTransaksiPenjualan: cuma tanggal_selesai diisi -> sisi mulai = 30
       });
     }
 
-    const rows = await getDetailTransaksiPenjualan(client, fakeUser("owner"), {
+    const { rows } = await getDetailTransaksiPenjualan(client, fakeUser("owner"), {
       channel: sumber,
       tanggalSelesai: selesai,
     });
@@ -304,7 +305,7 @@ test("getDetailTransaksiPenjualan: filter channel cocok PERSIS ke kolom sumber (
     });
 
     const user = fakeUser("owner");
-    const hanyaOffline = await getDetailTransaksiPenjualan(client, user, {
+    const { rows: hanyaOffline } = await getDetailTransaksiPenjualan(client, user, {
       channel: "Offline",
       tanggalMulai: tanggal,
       tanggalSelesai: tanggal,
@@ -317,7 +318,7 @@ test("getDetailTransaksiPenjualan: filter channel cocok PERSIS ke kolom sumber (
       "semua baris hasil harus bersumber channel yang difilter",
     );
 
-    const hanyaGrab = await getDetailTransaksiPenjualan(client, user, {
+    const { rows: hanyaGrab } = await getDetailTransaksiPenjualan(client, user, {
       channel: "GrabFood",
       tanggalMulai: tanggal,
       tanggalSelesai: tanggal,
@@ -327,7 +328,7 @@ test("getDetailTransaksiPenjualan: filter channel cocok PERSIS ke kolom sumber (
     assert.ok(!idsGrab.includes(offlineId));
 
     // Case-sensitive: 'offline' (huruf kecil) BUKAN 'Offline'.
-    const salahCasing = await getDetailTransaksiPenjualan(client, user, {
+    const { rows: salahCasing } = await getDetailTransaksiPenjualan(client, user, {
       channel: "offline",
       tanggalMulai: tanggal,
       tanggalSelesai: tanggal,
@@ -339,7 +340,7 @@ test("getDetailTransaksiPenjualan: filter channel cocok PERSIS ke kolom sumber (
   });
 });
 
-test("getDetailTransaksiPenjualan: filter kode_menu cuma mengambil baris menu itu, header lain tidak bocor", async () => {
+test("getDetailTransaksiPenjualan: filter kode_menu memilih TRANSAKSI yang mengandung menu itu -- SELURUH baris transaksi itu ikut, header lain tidak bocor", async () => {
   await withRollback(async (client) => {
     const outlet = await outletLocationId(client);
     const tanggal = await tanggalRelatif(client, 0);
@@ -361,13 +362,21 @@ test("getDetailTransaksiPenjualan: filter kode_menu cuma mengambil baris menu it
       baris: [{ menuKode: "M-003", qty: 7 }],
     });
 
-    const rows = await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber, kodeMenu: "M-002" });
+    const { rows } = await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber, kodeMenu: "M-002" });
 
-    assert.equal(rows.length, 1, "cuma baris M-002 yang cocok, baris M-001 di header yang sama tidak ikut");
-    assert.equal(rows[0].headerId, campurId);
-    assert.equal(rows[0].menuKode, "M-002");
-    assert.equal(rows[0].qty, 4);
-    assert.ok(!rows.map((r) => r.headerId).includes(lainId));
+    // Paginasi 2026-10-30 per TRANSAKSI (bukan baris menu, lihat laporan.ts) mengubah
+    // perilaku ini SENGAJA: kodeMenu sekarang memilih TRANSAKSI mana yang ikut, lalu
+    // SELURUH baris transaksi itu dikembalikan -- bukan cuma baris yang cocok. Ini lebih
+    // benar untuk tampilan "satu kartu = satu order": menyembunyikan M-001 dari order yang
+    // sama akan membuat order itu terlihat cuma berisi 1 menu padahal sebenarnya 2.
+    assert.equal(rows.length, 2, "SELURUH baris transaksi campurId ikut (M-001 dan M-002), bukan cuma yang cocok filter");
+    assert.ok(rows.every((r) => r.headerId === campurId));
+    assert.deepEqual(
+      rows.map((r) => r.menuKode).sort(),
+      ["M-001", "M-002"],
+      "M-001 ikut terbawa karena satu transaksi dengan M-002 yang jadi target filter",
+    );
+    assert.ok(!rows.map((r) => r.headerId).includes(lainId), "transaksi lain yang tidak punya M-002 tidak ikut sama sekali");
   });
 });
 
@@ -414,7 +423,7 @@ test("getDetailTransaksiPenjualan: sumberPencatatan 'sinkronisasi' kalau ada jej
       newValue: "sales-sync",
     });
 
-    const rows = await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber });
+    const { rows } = await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber });
 
     const barisManual = rows.filter((r) => r.headerId === manualId);
     const barisSinkron = rows.filter((r) => r.headerId === sinkronId);
@@ -427,6 +436,35 @@ test("getDetailTransaksiPenjualan: sumberPencatatan 'sinkronisasi' kalau ada jej
       barisSinkron.every((r) => r.sumberPencatatan === "sinkronisasi"),
       "SEMUA baris dari header yang punya jejak sales-sync ditandai 'sinkronisasi'",
     );
+  });
+});
+
+test("getDetailTransaksiPenjualan: kolom jam ikut dibawa (terisi atau null)", async () => {
+  await withRollback(async (client) => {
+    const outlet = await outletLocationId(client);
+    const tanggal = await tanggalRelatif(client, 0);
+    const sumber = channelTest("JAM");
+
+    const idDenganJam = await buatPenjualan(client, {
+      locationId: outlet,
+      sumber,
+      tanggal,
+      jam: "14:30",
+      baris: [{ menuKode: "M-001", qty: 1 }],
+    });
+    const idTanpaJam = await buatPenjualan(client, {
+      locationId: outlet,
+      sumber,
+      tanggal,
+      baris: [{ menuKode: "M-001", qty: 1 }],
+    });
+
+    const { rows } = await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber });
+    const barisDenganJam = rows.find((r) => r.headerId === idDenganJam);
+    const barisTanpaJam = rows.find((r) => r.headerId === idTanpaJam);
+
+    assert.ok(barisDenganJam?.jam?.startsWith("14:30"), "jam yang diisi harus ikut terbawa (format HH:MM:SS)");
+    assert.equal(barisTanpaJam?.jam, null, "jam yang tidak diisi harus null, bukan dikira-kira dari created_at");
   });
 });
 
@@ -451,7 +489,7 @@ test("getDetailTransaksiPenjualan: role non-allLocations dipaksa ke lokasi sendi
     });
 
     // owner: semua lokasi kelihatan.
-    const semua = (await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber })).map(
+    const semua = (await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber })).rows.map(
       (r) => r.headerId,
     );
     assert.ok(semua.includes(diOutlet), "owner harus lihat transaksi outlet");
@@ -459,21 +497,21 @@ test("getDetailTransaksiPenjualan: role non-allLocations dipaksa ke lokasi sendi
 
     // supervisor lokasi outlet, TANPA mengirim lokasiId -> tetap cuma outlet.
     const supervisor = fakeUser("supervisor", [outlet]);
-    const idsSupervisor = (await getDetailTransaksiPenjualan(client, supervisor, { channel: sumber })).map(
+    const idsSupervisor = (await getDetailTransaksiPenjualan(client, supervisor, { channel: sumber })).rows.map(
       (r) => r.headerId,
     );
     assert.ok(idsSupervisor.includes(diOutlet));
     assert.ok(!idsSupervisor.includes(diCk), "transaksi lokasi lain tidak boleh bocor ke role lokasi-scoped");
 
     // lokasiId lokasi orang lain DIABAIKAN (bukan ditolak), hasil tetap lokasi sendiri.
-    const idsDipaksa = (await getDetailTransaksiPenjualan(client, supervisor, { channel: sumber, lokasiId: ck })).map(
+    const idsDipaksa = (await getDetailTransaksiPenjualan(client, supervisor, { channel: sumber, lokasiId: ck })).rows.map(
       (r) => r.headerId,
     );
     assert.ok(!idsDipaksa.includes(diCk));
     assert.ok(idsDipaksa.includes(diOutlet));
 
     // Role lokasi-scoped tanpa lokasi yang ditugaskan: tidak lihat apa pun.
-    const tanpaLokasi = await getDetailTransaksiPenjualan(client, fakeUser("supervisor", []), { channel: sumber });
+    const { rows: tanpaLokasi } = await getDetailTransaksiPenjualan(client, fakeUser("supervisor", []), { channel: sumber });
     assert.equal(tanpaLokasi.length, 0);
   });
 });
@@ -498,7 +536,7 @@ test("getDetailTransaksiPenjualan: owner boleh mempersempit ke satu lokasi lewat
       baris: [{ menuKode: "M-001", qty: 1 }],
     });
 
-    const ids = (await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber, lokasiId: ck })).map(
+    const ids = (await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber, lokasiId: ck })).rows.map(
       (r) => r.headerId,
     );
     assert.ok(ids.includes(diCk));
@@ -506,12 +544,15 @@ test("getDetailTransaksiPenjualan: owner boleh mempersempit ke satu lokasi lewat
   });
 });
 
-test("getDetailTransaksiPenjualan: hasil selalu dibatasi LIMIT, tidak pernah mengembalikan tabel penuh", async () => {
+test("getDetailTransaksiPenjualan: LIMIT membatasi jumlah TRANSAKSI (header), bukan baris menu -- satu transaksi tidak pernah terpotong di tengah", async () => {
   await withRollback(async (client) => {
     const outlet = await outletLocationId(client);
     const tanggal = await tanggalRelatif(client, 0);
     const sumber = channelTest("LIMIT");
 
+    // SATU transaksi dengan 3 baris menu: limit: 2 (artinya "2 transaksi")
+    // TIDAK BOLEH memotongnya jadi 2 baris -- ini justru kasus yang mau
+    // dicegah oleh paginasi per-header (lihat komentar di laporan.ts).
     await buatPenjualan(client, {
       locationId: outlet,
       sumber,
@@ -523,8 +564,22 @@ test("getDetailTransaksiPenjualan: hasil selalu dibatasi LIMIT, tidak pernah men
       ],
     });
 
+    const satuTransaksi = await getDetailTransaksiPenjualan(client, fakeUser("owner"), {
+      channel: sumber,
+      limit: 2,
+    });
+    assert.equal(satuTransaksi.rows.length, 3, "1 transaksi dengan 3 baris menu harus utuh 3 baris, bukan terpotong ke 2");
+    assert.equal(satuTransaksi.totalTransaksi, 1, "totalTransaksi menghitung TRANSAKSI, bukan baris menu");
+
+    // Tambah transaksi ke-2 & ke-3 -- sekarang limit: 2 beneran membatasi ke
+    // 2 TRANSAKSI (bukan 2 baris).
+    await buatPenjualan(client, { locationId: outlet, sumber, tanggal, baris: [{ menuKode: "M-001", qty: 1 }] });
+    await buatPenjualan(client, { locationId: outlet, sumber, tanggal, baris: [{ menuKode: "M-001", qty: 1 }] });
+
     const dibatasi = await getDetailTransaksiPenjualan(client, fakeUser("owner"), { channel: sumber, limit: 2 });
-    assert.equal(dibatasi.length, 2);
+    const headerIdsDibatasi = new Set(dibatasi.rows.map((r) => r.headerId));
+    assert.equal(headerIdsDibatasi.size, 2, "limit: 2 harus membatasi ke 2 transaksi, apa pun jumlah barisnya");
+    assert.equal(dibatasi.totalTransaksi, 3, "totalTransaksi tetap 3 (jumlah SEBENARNYA), tidak ikut terpotong limit");
 
     // limit di atas batas default tetap di-clamp ke default (tidak bisa
     // dipakai untuk menarik tabel penuh).
@@ -532,6 +587,43 @@ test("getDetailTransaksiPenjualan: hasil selalu dibatasi LIMIT, tidak pernah men
       channel: sumber,
       limit: 100_000,
     });
-    assert.ok(dipaksaBesar.length <= DEFAULT_LIMIT_DETAIL_PENJUALAN);
+    const headerIdsBesar = new Set(dipaksaBesar.rows.map((r) => r.headerId));
+    assert.ok(headerIdsBesar.size <= DEFAULT_LIMIT_DETAIL_PENJUALAN);
+  });
+});
+
+test("getDetailTransaksiPenjualan: offset melompati N transaksi pertama, totalTransaksi tetap utuh", async () => {
+  await withRollback(async (client) => {
+    const outlet = await outletLocationId(client);
+    const tanggal = await tanggalRelatif(client, 0);
+    const sumber = channelTest("OFFSET");
+
+    const idAwal: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      idAwal.push(
+        await buatPenjualan(client, { locationId: outlet, sumber, tanggal, baris: [{ menuKode: "M-001", qty: 1 }] }),
+      );
+    }
+
+    const halamanPertama = await getDetailTransaksiPenjualan(client, fakeUser("owner"), {
+      channel: sumber,
+      limit: 1,
+      offset: 0,
+    });
+    const halamanKedua = await getDetailTransaksiPenjualan(client, fakeUser("owner"), {
+      channel: sumber,
+      limit: 1,
+      offset: 1,
+    });
+
+    assert.equal(halamanPertama.rows.length, 1);
+    assert.equal(halamanKedua.rows.length, 1);
+    assert.notEqual(
+      halamanPertama.rows[0].headerId,
+      halamanKedua.rows[0].headerId,
+      "offset harus menggeser ke transaksi berikutnya, bukan mengulang yang sama",
+    );
+    assert.equal(halamanPertama.totalTransaksi, 3);
+    assert.equal(halamanKedua.totalTransaksi, 3, "totalTransaksi konsisten di semua halaman, tidak ikut berkurang karena offset");
   });
 });

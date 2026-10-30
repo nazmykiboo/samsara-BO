@@ -1,0 +1,17 @@
+-- Role baru "sistem_otomatis" -- BUKAN untuk manusia, identitas internal
+-- PERTAMA di aplikasi ini: dipakai server MEMANGGIL DIRINYA SENDIRI untuk
+-- pemrosesan sinkronisasi penjualan otomatis (lihat
+-- modules/sales-sync/src/domain/otomatis.ts), lewat token JWT umur sangat
+-- pendek (~60 detik) yang di-mint saat dipakai -- BUKAN login interaktif
+-- (login untuk role ini diblok eksplisit di core/src/auth/users.ts,
+-- authenticate()).
+--
+-- Sengaja role TERPISAH dari "integrasi" (bukan reuse) -- role "integrasi"
+-- by design (lihat migrasi 0008) TIDAK PERNAH boleh muncul di roles[]
+-- action apa pun selain sales_sync.import; menambahkan penjualan.create ke
+-- situ akan melanggar jaminan itu. Satu-satunya permission yang
+-- mendaftarkan role ini: penjualan.create di modules/inventory/module.json
+-- (lihat perubahan modul itu).
+--
+-- Idempotent: ON CONFLICT (name) DO NOTHING, konsisten pola migrasi 0008.
+INSERT INTO core_roles (name) VALUES ('sistem_otomatis') ON CONFLICT (name) DO NOTHING;

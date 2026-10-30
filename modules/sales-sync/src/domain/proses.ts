@@ -45,9 +45,11 @@ interface BarisLog {
   orderId: string;
   menuId: string | null;
   quantity: number;
+  /** 'menu' | 'addon' | 'refund' -- dipakai loop utama untuk menyisihkan order ber-refund ke `perluDitinjau`, lihat `HasilProses.perluDitinjau`. */
+  itemType: string;
 }
 
-interface GrupOrder {
+export interface GrupOrder {
   platform: string;
   tanggal: string;
   orderId: string;
@@ -74,7 +76,7 @@ function kunciOutlet(platform: string, outletRef: string): string {
   return `${platform}|${outletRef}`;
 }
 
-interface IdentitasGrup {
+export interface IdentitasGrup {
   platform: string;
   orderId: string;
   tanggal: string;
@@ -87,13 +89,25 @@ export interface HasilProses {
   dilewatiSebelumTanggalMulai: IdentitasGrup[];
   /** Order yang punya minimal 1 item belum terpetakan (atau tanpa kode eksternal). */
   dilewatiBelumTerpetakan: IdentitasGrup[];
+  /**
+   * Order yang punya minimal 1 baris `item_type = 'refund'` -- TIDAK PERNAH
+   * memotong stok lewat jalur mana pun (tombol manual maupun pemrosesan
+   * otomatis), `processed_at` TIDAK ditandai. Sebelum 2026-10-30 baris
+   * refund yang kebetulan `inv_status='OK'` dan sudah terpetakan ikut
+   * terproses seperti penjualan biasa (keterbatasan yang sudah
+   * terdokumentasi) -- perilaku itu DIUBAH di sini, bukan lagi "dibiarkan
+   * apa adanya": modul Inventory tetap tidak punya konsep refund, tapi
+   * sekarang order seperti ini disisihkan untuk ditinjau manual alih-alih
+   * ikut memotong stok secara salah.
+   */
+  perluDitinjau: IdentitasGrup[];
   /** Order yang platform-nya belum ada di salessync_platform_channel_map. */
   channelTidakDikenal: IdentitasGrup[];
   /** Order yang ditolak modul Inventory (pesannya diteruskan apa adanya). */
   gagal: Array<IdentitasGrup & { pesan: string }>;
 }
 
-interface DataBaca {
+export interface DataBaca {
   defaultLocationId: number;
   /** Key: `${platform}|${kode_eksternal}` -> kode_menu internal. Hanya yang status 'dipetakan'. */
   pemetaan: Map<string, string>;
@@ -104,12 +118,12 @@ interface DataBaca {
   grup: GrupOrder[];
 }
 
-function kunciPemetaan(platform: string, kodeEksternal: string): string {
+export function kunciPemetaan(platform: string, kodeEksternal: string): string {
   return `${platform}|${kodeEksternal}`;
 }
 
 /** Fase BACA: satu transaksi read-only, semua data yang dibutuhkan loop diambil sekaligus. */
-async function bacaDataProses(client: PoolClient): Promise<DataBaca> {
+export async function bacaDataProses(client: PoolClient): Promise<DataBaca> {
   const defaultLocationId = await getDefaultLocationId(client);
 
   const { rows: pemetaanRows } = await client.query<{ platform: string; kode_eksternal: string; kode_menu: string }>(
@@ -152,9 +166,10 @@ async function bacaDataProses(client: PoolClient): Promise<DataBaca> {
     menu_id: string | null;
     quantity: number;
     outlet_ref: string | null;
+    item_type: string;
   }>(
     `SELECT id, platform, to_char(transaction_date, 'YYYY-MM-DD') AS transaction_date,
-            transaction_time, order_id, menu_id, quantity, outlet_ref
+            transaction_time, order_id, menu_id, quantity, outlet_ref, item_type
      FROM salessync_log_penjualan
      WHERE inv_status = 'OK' AND processed_at IS NULL
      ORDER BY transaction_date, platform, order_id, id`,
@@ -182,6 +197,7 @@ async function bacaDataProses(client: PoolClient): Promise<DataBaca> {
       orderId: row.order_id,
       menuId: row.menu_id,
       quantity: row.quantity,
+      itemType: row.item_type,
     });
   }
 
@@ -221,6 +237,7 @@ export async function prosesSinkronisasi(
     barisDiproses: 0,
     dilewatiSebelumTanggalMulai: [],
     dilewatiBelumTerpetakan: [],
+    perluDitinjau: [],
     channelTidakDikenal: [],
     gagal: [],
   };
@@ -249,7 +266,20 @@ export async function prosesSinkronisasi(
       continue;
     }
 
-    // (a) SEMUA baris order ini wajib punya kode eksternal DAN sudah terpetakan.
+    // (a) Order dengan minimal 1 baris item_type='refund' TIDAK PERNAH
+    // memotong stok -- modul Inventory tidak punya konsep refund/retur sama
+    // sekali (`createPenjualan` cuma pernah mengurangi stok, tidak pernah
+    // menambah), jadi memproses baris ini seperti penjualan biasa akan
+    // mengurangi stok yang SALAH ARAH. Dicek SEBELUM pemetaan (b) supaya
+    // order ber-refund konsisten masuk `perluDitinjau` terlepas status
+    // pemetaan item-nya -- ini kategori yang perlu ditinjau manusia, bukan
+    // "akan otomatis beres begitu dipetakan" seperti `dilewatiBelumTerpetakan`.
+    if (grup.baris.some((row) => row.itemType === "refund")) {
+      hasil.perluDitinjau.push(identitas);
+      continue;
+    }
+
+    // (b) SEMUA baris order ini wajib punya kode eksternal DAN sudah terpetakan.
     // Satu baris belum terpetakan -> SELURUH order dilewati, tidak ada baris
     // yang diproses dan tidak ada processed_at yang ditandai, supaya order itu
     // utuh lagi di proses berikutnya setelah itemnya dipetakan (memproses
@@ -263,16 +293,6 @@ export async function prosesSinkronisasi(
         adaYangBelumTerpetakan = true;
         break;
       }
-      // CATATAN KETERBATASAN YANG DIKETAHUI: kalau ada baris item_type =
-      // 'refund' yang kebetulan inv_status-nya 'OK' dan itemnya sudah
-      // terpetakan, baris itu ikut masuk ke sini dan akan MENGURANGI stok
-      // seperti penjualan biasa. Modul Inventory tidak punya konsep
-      // refund/retur sama sekali (`createPenjualan` cuma pernah mengurangi
-      // stok, tidak pernah menambah), jadi tidak ada cara memperlakukannya
-      // dengan benar tanpa menambah domain logic baru di Inventory -- di luar
-      // scope modul ini. SENGAJA dibiarkan apa adanya: membalik tanda qty atau
-      // menyaring baris refund diam-diam akan membuat angka stok maupun
-      // laporan penjualan jadi salah tanpa jejak.
       baris.push({ menuKode: kodeMenu, qty: row.quantity });
     }
     if (adaYangBelumTerpetakan) {
@@ -280,14 +300,14 @@ export async function prosesSinkronisasi(
       continue;
     }
 
-    // (b) Platform mentah wajib ada di salessync_platform_channel_map.
+    // (c) Platform mentah wajib ada di salessync_platform_channel_map.
     const channelInternal = data.channel.get(grup.platform);
     if (!channelInternal) {
       hasil.channelTidakDikenal.push(identitas);
       continue;
     }
 
-    // (c+d+e) Satu transaksi database per order, panggilan Inventory di dalamnya.
+    // (d+e+f) Satu transaksi database per order, panggilan Inventory di dalamnya.
     try {
       const idBaris = grup.baris.map((row) => row.id);
       // Transaksi database sales-sync dibuka SETELAH niat jelas, dan panggilan

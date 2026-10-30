@@ -1,5 +1,5 @@
 import { api } from "./client";
-import type { DetailTransaksiPenjualanBaris, DetailTransaksiPenjualanFilter, LaporanHarian } from "./types";
+import type { DetailTransaksiPenjualanFilter, HasilDetailTransaksiPenjualan, LaporanHarian } from "./types";
 
 /** GET /laporan/harian?lokasi=&tanggal= -- permission owner/manajer_ops/supervisor saja (staf
  * tidak bisa akses, lihat module.json). `perluDibeli` di hasil SELALU kondisi Central Kitchen
@@ -17,15 +17,17 @@ export function getLaporanHarian(input: { lokasi: number; tanggal: string }): Pr
  * otomatis untuk role yang terbatas lokasi. */
 export function listDetailTransaksiPenjualan(
   filter: DetailTransaksiPenjualanFilter = {},
-): Promise<DetailTransaksiPenjualanBaris[]> {
+): Promise<HasilDetailTransaksiPenjualan> {
   const params = new URLSearchParams();
   if (filter.tanggalMulai) params.set("tanggal_mulai", filter.tanggalMulai);
   if (filter.tanggalSelesai) params.set("tanggal_selesai", filter.tanggalSelesai);
   if (filter.channel) params.set("channel", filter.channel);
   if (filter.kodeMenu) params.set("kode_menu", filter.kodeMenu);
   if (filter.lokasiId !== undefined) params.set("lokasi", String(filter.lokasiId));
+  if (filter.limit !== undefined) params.set("limit", String(filter.limit));
+  if (filter.offset !== undefined) params.set("offset", String(filter.offset));
   const query = params.toString();
-  return api.get<DetailTransaksiPenjualanBaris[]>(
+  return api.get<HasilDetailTransaksiPenjualan>(
     `/api/inventory/transaksi/penjualan${query ? `?${query}` : ""}`,
   );
 }

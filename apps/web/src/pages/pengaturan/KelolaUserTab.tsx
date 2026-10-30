@@ -118,11 +118,17 @@ export function KelolaUserTab() {
     }
   }
 
-  async function handleReset(user: UserListItem) {
+  async function handleReset(user: UserListItem, manualValue: string | null) {
     setResetting(true);
     setResetError(null);
     try {
-      const result = await resetUserCredential(user.id);
+      const isPin = user.authMethod === "pin";
+      const input = manualValue
+        ? isPin
+          ? { pinManual: manualValue }
+          : { passwordManual: manualValue }
+        : undefined;
+      const result = await resetUserCredential(user.id, input);
       setResettingId(null);
       if (result.generatedPin) {
         setCredentialConfirmation({ name: user.name, label: "PIN baru", value: result.generatedPin });
@@ -168,12 +174,6 @@ export function KelolaUserTab() {
             <ErrorBox>{activateError}</ErrorBox>
           </div>
         ) : null}
-        {resetError ? (
-          <div className="mb-3">
-            <ErrorBox>{resetError}</ErrorBox>
-          </div>
-        ) : null}
-
         {loading ? <p className="py-6 text-center text-sm text-slate-500">Memuat...</p> : null}
 
         {!loading ? (
@@ -274,12 +274,11 @@ export function KelolaUserTab() {
       ) : null}
 
       {resettingUser ? (
-        <ConfirmDialog
-          title={`Reset ${resettingUser.authMethod === "pin" ? "PIN" : "password"}?`}
-          message={`${resettingUser.authMethod === "pin" ? "PIN" : "Password"} lama "${resettingUser.name}" akan langsung tidak bisa dipakai login lagi, diganti dengan yang baru.`}
-          danger
+        <ResetKredensialDialog
+          user={resettingUser}
           loading={resetting}
-          onConfirm={() => handleReset(resettingUser)}
+          error={resetError}
+          onConfirm={(manualValue) => handleReset(resettingUser, manualValue)}
           onCancel={() => setResettingId(null)}
         />
       ) : null}
@@ -605,6 +604,100 @@ function CredentialConfirmationDialog({
         <Button className="mt-4 w-full" onClick={onClose}>
           Sudah dicatat, tutup
         </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Reset kredensial (2026-10-30): toggle "Buat otomatis" (default, perilaku lama) vs "Ketik
+ * manual" (textbox PIN/password, validasi dasar client-side -- pesan pola-lemah/panjang dari
+ * backend kalau lolos client-side tapi ditolak server). Hasilnya (manual maupun otomatis)
+ * SELALU ditampilkan lewat `CredentialConfirmationDialog` yang sudah ada, dan SELALU memaksa
+ * user itu ganti sendiri di percobaan akses berikutnya (wajib_ganti_kredensial).
+ */
+function ResetKredensialDialog({
+  user,
+  loading,
+  error,
+  onConfirm,
+  onCancel,
+}: {
+  user: UserListItem;
+  loading: boolean;
+  error: string | null;
+  onConfirm: (manualValue: string | null) => void;
+  onCancel: () => void;
+}) {
+  const isPin = user.authMethod === "pin";
+  const label = isPin ? "PIN" : "password";
+  const [mode, setMode] = useState<"otomatis" | "manual">("otomatis");
+  const [manualValue, setManualValue] = useState("");
+
+  const manualValid = isPin ? /^\d{6}$/.test(manualValue) : manualValue.length >= 8;
+
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-900/40 px-4" onClick={onCancel}>
+      <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <h2 className="mb-2 text-base font-semibold text-slate-900">Reset {label}?</h2>
+        <p className="mb-3 text-sm text-slate-600">
+          {label.charAt(0).toUpperCase() + label.slice(1)} lama "{user.name}" akan langsung tidak bisa dipakai login
+          lagi. {user.name} WAJIB membuat {label} baru sendiri di percobaan akses berikutnya.
+        </p>
+
+        <div className="mb-3 flex gap-1 rounded-lg bg-slate-100 p-1">
+          <button
+            type="button"
+            onClick={() => setMode("otomatis")}
+            className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+              mode === "otomatis" ? "bg-white text-blue-700 shadow-sm" : "text-slate-600"
+            }`}
+          >
+            Buat otomatis
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("manual")}
+            className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+              mode === "manual" ? "bg-white text-blue-700 shadow-sm" : "text-slate-600"
+            }`}
+          >
+            Ketik manual
+          </button>
+        </div>
+
+        {mode === "manual" ? (
+          <Field label={`${label.charAt(0).toUpperCase()}${label.slice(1)} sementara`}>
+            <Input
+              type="text"
+              inputMode={isPin ? "numeric" : undefined}
+              maxLength={isPin ? 6 : undefined}
+              value={manualValue}
+              onChange={(e) => setManualValue(e.target.value)}
+              placeholder={isPin ? "6 digit angka" : "Minimal 8 karakter"}
+            />
+          </Field>
+        ) : null}
+
+        {error ? (
+          <div className="mt-2">
+            <ErrorBox>{error}</ErrorBox>
+          </div>
+        ) : null}
+
+        <div className="mt-4 flex gap-3">
+          <Button variant="secondary" className="flex-1" onClick={onCancel} disabled={loading}>
+            Batal
+          </Button>
+          <Button
+            variant="danger"
+            className="flex-1"
+            onClick={() => onConfirm(mode === "manual" ? manualValue : null)}
+            disabled={loading || (mode === "manual" && !manualValid)}
+          >
+            {loading ? "Memproses..." : "Ya, reset"}
+          </Button>
+        </div>
       </div>
     </div>
   );

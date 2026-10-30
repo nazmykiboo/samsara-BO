@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ApiError } from "../../api/client";
 import { listDetailTransaksiPenjualan } from "../../api/laporan";
+import { getPengaturanOtomatis } from "../../api/otomatis";
 import { listBelumDiproses } from "../../api/sales-sync";
 import type {
   BarisBelumDiproses,
@@ -9,23 +10,25 @@ import type {
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { usePermission } from "../../auth/usePermission";
+import { DateRangePicker, type RentangTanggal } from "../../components/DateRangePicker";
 import { useLokasiOptions } from "../../components/pickers/LokasiPicker";
 import { ErrorBox, WarningBox } from "../../components/ResultBox";
-import { HppSumberBadge, SumberPencatatanBadge } from "../../components/ui/Badge";
+import { HppSumberBadge, StatusArsipBadge, SumberPencatatanBadge, type StatusArsip } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
-import { Field, Input } from "../../components/ui/Input";
+import { Field } from "../../components/ui/Input";
 import { Select } from "../../components/ui/Select";
 import { Spinner } from "../../components/ui/Spinner";
 import { MOCK_CHANNEL } from "../../mock/referenceData";
 import { MenuKodeCombobox, useMenuOptions, type MenuOption } from "../sales-sync/MenuKodeCombobox";
 import { formatRupiah, formatTanggalSingkat } from "../../utils/format";
 
-/** Sama dengan LIMIT tetap di backend (DEFAULT_LIMIT_DETAIL_PENJUALAN di
- * modules/inventory/src/domain/laporan.ts). Dipakai HANYA untuk menjelaskan ke user kalau
- * daftarnya memang dipotong, bukan untuk membuat halaman berikutnya -- belum ada pola pagination
- * di repo ini dan itu bukan keputusan yang boleh diambil di sisi tampilan. */
-const BATAS_BARIS = 200;
+/** Jumlah transaksi/order dimuat per "halaman" -- ditambah PAGE_SIZE lagi tiap kali tombol "Muat
+ * lebih banyak" ditekan (limit server-side bertambah, request diulang dari awal; BUKAN cursor
+ * offset -- lebih sederhana & cukup untuk volume yang realistis di sini, lihat juga catatan
+ * paginasi di laporan.ts/belum-diproses.ts). Lebih kecil dari batas lama (200) karena sekarang
+ * ada ringkasan total asli dari server, jadi tidak perlu menarik banyak sekaligus di awal. */
+const PAGE_SIZE = 50;
 
 // ---------------------------------------------------------------------------
 // Bentuk data tampilan: SATU ENTRI = SATU ORDER/TRANSAKSI (bukan satu menu).
@@ -43,6 +46,7 @@ interface EntriOrderAsli {
   jenis: "asli";
   key: string;
   tanggal: string;
+  jam: string | null;
   lokasiNama: string;
   sumber: string;
   noReferensi: string | null;
@@ -61,9 +65,10 @@ interface EntriOrderBelumDiproses {
   jenis: "belum_diproses";
   key: string;
   tanggal: string;
+  jam: string;
   platform: string;
   orderId: string;
-  items: Array<{ itemName: string; menuId: string | null; quantity: number }>;
+  items: Array<{ itemName: string; menuId: string | null; quantity: number; itemType: string; sudahTerpetakan: boolean }>;
   totalQty: number;
 }
 
@@ -78,6 +83,7 @@ function kelompokkanAsli(rows: DetailTransaksiPenjualanBaris[]): EntriOrderAsli[
         jenis: "asli",
         key: `asli-${row.headerId}`,
         tanggal: row.tanggal,
+        jam: row.jam,
         lokasiNama: row.lokasiNama,
         sumber: row.sumber,
         noReferensi: row.noReferensi,
@@ -111,6 +117,7 @@ function kelompokkanBelumDiproses(rows: BarisBelumDiproses[]): EntriOrderBelumDi
         jenis: "belum_diproses",
         key: `belum-${key}`,
         tanggal: row.tanggal,
+        jam: row.jam,
         platform: row.platform,
         orderId: row.orderId,
         items: [],
@@ -118,10 +125,26 @@ function kelompokkanBelumDiproses(rows: BarisBelumDiproses[]): EntriOrderBelumDi
       };
       peta.set(key, entri);
     }
-    entri.items.push({ itemName: row.itemName, menuId: row.menuId, quantity: row.quantity });
+    entri.items.push({
+      itemName: row.itemName,
+      menuId: row.menuId,
+      quantity: row.quantity,
+      itemType: row.itemType,
+      sudahTerpetakan: row.sudahTerpetakan,
+    });
     entri.totalQty += row.quantity;
   }
   return [...peta.values()];
+}
+
+/** Status satu order arsip -- lihat `StatusArsip` di components/ui/Badge.tsx untuk arti tiap nilai.
+ * Urutan pengecekan SENGAJA refund dulu: order dengan refund dianggap "perlu ditinjau" terlepas
+ * status pemetaan/tanggalnya (konsisten dengan urutan kategorisasi di proses.ts/pratinjau.ts). */
+function statusArsipOrder(order: EntriOrderBelumDiproses, tanggalMulaiOtomatis: string | null): StatusArsip {
+  if (order.items.some((i) => i.itemType === "refund")) return "refund";
+  if (order.items.some((i) => !i.sudahTerpetakan)) return "tertahan";
+  if (tanggalMulaiOtomatis && order.tanggal < tanggalMulaiOtomatis) return "menunggu_tanggal_mulai";
+  return null;
 }
 
 /**
@@ -130,29 +153,44 @@ function kelompokkanBelumDiproses(rows: BarisBelumDiproses[]): EntriOrderBelumDi
  * 1. Transaksi Penjualan asli di modul Inventory -- SUDAH memotong stok. Bisa diketuk untuk melihat
  *    rincian menu.
  * 2. Baris arsip sinkronisasi yang BELUM diproses -- penjualannya sudah tercatat tapi BELUM
- *    memotong stok. Ditandai beda (garis putus-putus + label "Belum diproses ke stok") dan
- *    rinciannya langsung terlihat, tanpa bisa diketuk.
+ *    memotong stok. Ditandai beda (garis putus-putus) dan rinciannya langsung terlihat, tanpa bisa
+ *    diketuk. Statusnya bisa "normal" (menunggu dipicu otomatis/manual), "Perlu ditinjau" (ada
+ *    retur/refund, TIDAK PERNAH otomatis diproses), "Menunggu pemetaan item", atau "Menunggu
+ *    tanggal mulai otomatis".
  *
  * Read-only -- tab ini tidak pernah mengubah stok, termasuk untuk sumber kedua (endpoint
- * /belum-diproses murni baca; yang memotong stok cuma tombol di halaman Sinkronisasi Penjualan).
+ * /belum-diproses murni baca; yang memotong stok cuma tombol di halaman Sinkronisasi Penjualan,
+ * atau pemrosesan otomatis kalau dinyalakan owner).
  *
- * Rentang tanggal SENGAJA dibiarkan kosong saat dibuka: backend otomatis mengambil 30 hari
- * terakhir, jadi user langsung melihat data tanpa perlu mengisi apa pun dulu.
+ * Rentang tanggal default "Bulan ini" (tanggal 1 bulan berjalan s.d. hari ini) -- BEDA dari versi
+ * sebelumnya yang dibiarkan kosong (backend default 30 hari terakhir); sekarang dipilih eksplisit
+ * di sisi tampilan lewat `DateRangePicker` supaya presetnya konsisten dengan filter tanggal di
+ * tempat lain.
  */
 export function RiwayatTransaksiTab() {
   const { user } = useAuth();
   const lokasiOptions = useLokasiOptions();
   const menuOptions = useMenuOptions();
 
-  const [tanggalMulai, setTanggalMulai] = useState("");
-  const [tanggalSelesai, setTanggalSelesai] = useState("");
+  const [rentang, setRentang] = useState<RentangTanggal>(() => {
+    const sekarang = new Date();
+    const awalBulan = new Date(sekarang.getFullYear(), sekarang.getMonth(), 1);
+    const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    return { mulai: iso(awalBulan), selesai: iso(sekarang) };
+  });
   const [channel, setChannel] = useState("");
   const [menuTerpilih, setMenuTerpilih] = useState<MenuOption | null>(null);
   // "" = semua lokasi. Filter ini hanya ditampilkan untuk role yang boleh lihat semua lokasi;
   // untuk supervisor backend sudah memaksa lingkupnya ke lokasi sendiri, jadi tidak perlu dikirim.
   const [lokasiId, setLokasiId] = useState<number | "">("");
 
+  // Paginasi: limit bertambah PAGE_SIZE tiap "Muat lebih banyak" ditekan, masing-masing sumber
+  // independen (bisa saja sumber asli sudah habis tapi arsip belum, atau sebaliknya).
+  const [limitAsli, setLimitAsli] = useState(PAGE_SIZE);
+  const [limitBelum, setLimitBelum] = useState(PAGE_SIZE);
+
   const [rows, setRows] = useState<DetailTransaksiPenjualanBaris[]>([]);
+  const [totalAsli, setTotalAsli] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -160,8 +198,13 @@ export function RiwayatTransaksiTab() {
   // boleh menjatuhkan daftar utama -- karena itu state-nya terpisah dan error-nya ditampilkan
   // sebagai keterangan, bukan menggantikan isi halaman.
   const [barisBelum, setBarisBelum] = useState<BarisBelumDiproses[]>([]);
+  const [totalBelum, setTotalBelum] = useState(0);
   const [loadingBelum, setLoadingBelum] = useState(false);
   const [errorBelum, setErrorBelum] = useState<string | null>(null);
+
+  // Dipakai status "Menunggu tanggal mulai otomatis" -- gagal dimuat TIDAK masalah, badge itu
+  // sekadar tidak muncul (bukan kegagalan halaman).
+  const [tanggalMulaiOtomatis, setTanggalMulaiOtomatis] = useState<string | null>(null);
 
   const bisaPilihLokasi = user?.allLocations ?? false;
   const kodeMenu = menuTerpilih?.kode ?? "";
@@ -170,8 +213,20 @@ export function RiwayatTransaksiTab() {
   // sama sekali supaya tidak memunculkan error 403 untuk sesuatu yang bukan salah user --
   // halamannya tetap berfungsi, cuma menampilkan transaksi resmi saja.
   const bisaLihatBelumDiproses = usePermission("sales_sync.manage");
-  // Dicek di sisi tampilan supaya user dapat penjelasan, bukan daftar kosong tanpa sebab.
-  const rentangTerbalik = tanggalMulai !== "" && tanggalSelesai !== "" && tanggalMulai > tanggalSelesai;
+  const rentangTerbalik = rentang.mulai !== "" && rentang.selesai !== "" && rentang.mulai > rentang.selesai;
+
+  // Reset paginasi tiap kali filter (selain limit itu sendiri) berubah -- halaman "Muat lebih
+  // banyak" sebelumnya tidak relevan lagi untuk filter yang baru.
+  useEffect(() => {
+    setLimitAsli(PAGE_SIZE);
+    setLimitBelum(PAGE_SIZE);
+  }, [rentang.mulai, rentang.selesai, channel, kodeMenu, lokasiId]);
+
+  useEffect(() => {
+    getPengaturanOtomatis()
+      .then((p) => setTanggalMulaiOtomatis(p.tanggalMulai))
+      .catch(() => setTanggalMulaiOtomatis(null));
+  }, []);
 
   useEffect(() => {
     if (rentangTerbalik) {
@@ -182,18 +237,23 @@ export function RiwayatTransaksiTab() {
     setLoading(true);
     setError(null);
     listDetailTransaksiPenjualan({
-      tanggalMulai: tanggalMulai || undefined,
-      tanggalSelesai: tanggalSelesai || undefined,
+      tanggalMulai: rentang.mulai || undefined,
+      tanggalSelesai: rentang.selesai || undefined,
       channel: channel || undefined,
       kodeMenu: kodeMenu || undefined,
       lokasiId: lokasiId === "" ? undefined : lokasiId,
+      limit: limitAsli,
     })
       .then((res) => {
-        if (active) setRows(res);
+        if (active) {
+          setRows(res.rows);
+          setTotalAsli(res.total);
+        }
       })
       .catch((err) => {
         if (active) {
           setRows([]);
+          setTotalAsli(0);
           setError(err instanceof ApiError ? err.message : "Gagal memuat riwayat penjualan. Coba lagi.");
         }
       })
@@ -203,7 +263,7 @@ export function RiwayatTransaksiTab() {
     return () => {
       active = false;
     };
-  }, [tanggalMulai, tanggalSelesai, channel, kodeMenu, lokasiId, rentangTerbalik]);
+  }, [rentang.mulai, rentang.selesai, channel, kodeMenu, lokasiId, limitAsli, rentangTerbalik]);
 
   // Sumber kedua hanya bergantung ke rentang tanggal: endpoint-nya tidak punya parameter channel,
   // lokasi, maupun menu (lihat listBelumDiproses). Penyaringan tiga filter itu dikerjakan di bawah,
@@ -211,6 +271,7 @@ export function RiwayatTransaksiTab() {
   useEffect(() => {
     if (!bisaLihatBelumDiproses || rentangTerbalik) {
       setBarisBelum([]);
+      setTotalBelum(0);
       setLoadingBelum(false);
       setErrorBelum(null);
       return;
@@ -219,15 +280,20 @@ export function RiwayatTransaksiTab() {
     setLoadingBelum(true);
     setErrorBelum(null);
     listBelumDiproses({
-      tanggalMulai: tanggalMulai || undefined,
-      tanggalSelesai: tanggalSelesai || undefined,
+      tanggalMulai: rentang.mulai || undefined,
+      tanggalSelesai: rentang.selesai || undefined,
+      limit: limitBelum,
     })
       .then((res) => {
-        if (active) setBarisBelum(res);
+        if (active) {
+          setBarisBelum(res.rows);
+          setTotalBelum(res.total);
+        }
       })
       .catch((err) => {
         if (active) {
           setBarisBelum([]);
+          setTotalBelum(0);
           setErrorBelum(
             err instanceof ApiError
               ? err.message
@@ -241,19 +307,16 @@ export function RiwayatTransaksiTab() {
     return () => {
       active = false;
     };
-  }, [tanggalMulai, tanggalSelesai, rentangTerbalik, bisaLihatBelumDiproses]);
-
-  const adaFilterAktif =
-    tanggalMulai !== "" || tanggalSelesai !== "" || channel !== "" || kodeMenu !== "" || lokasiId !== "";
+  }, [rentang.mulai, rentang.selesai, limitBelum, rentangTerbalik, bisaLihatBelumDiproses]);
 
   // Filter menu tidak bisa diterapkan ke arsip yang belum diproses: baris arsip belum punya kode
   // menu Samsara (`menuId` di sana masih kode item dari aplikasi pesan-antar). Daripada menampilkan
   // baris yang mungkin bukan menu yang dicari, seluruh sumber itu disembunyikan selama filter menu
   // aktif -- dan user diberi tahu alasannya di dekat filternya.
   const belumDiprosesDisembunyikanMenu = kodeMenu !== "";
-  const { entri, jumlahBelumTotal, jumlahBelumDitampilkan } = useMemo(() => {
+  const { entri, jumlahBelumDitampilkan } = useMemo(() => {
     const asli = kelompokkanAsli(rows);
-    const belumSemua = belumDiprosesDisembunyikanMenu
+    const belum = belumDiprosesDisembunyikanMenu
       ? []
       : kelompokkanBelumDiproses(barisBelum).filter(
           // Filter channel untuk sumber ini dibandingkan APA ADANYA (exact match) dengan nama
@@ -262,27 +325,13 @@ export function RiwayatTransaksiTab() {
           // otomatis di sini, keputusan penyeragaman nama bukan urusan tampilan.
           (o) => channel === "" || o.platform === channel,
         );
-    // Dipotong di sisi tampilan: endpoint /belum-diproses TIDAK punya batas jumlah (tanpa rentang
-    // tanggal, arsipnya ribuan baris / seribuan order), dan merender semuanya sekaligus bikin
-    // halaman berat di HP. Jumlah seluruhnya tetap diberitahukan ke user, lengkap dengan cara
-    // melihat sisanya (persempit tanggal) -- bukan dipotong diam-diam.
-    const belum = belumSemua.slice(0, BATAS_BARIS);
-    // Filter LOKASI sengaja TIDAK diterapkan ke `belum`: arsip sinkronisasi belum punya lokasi
-    // (lokasi baru ditentukan saat diproses jadi transaksi). Menyembunyikannya hanya karena filter
-    // lokasi aktif akan membuat penjualan yang belum terhitung jadi tidak terlihat sama sekali.
-    // Tiap entri diberi keterangan "lokasi belum ditentukan" supaya tidak disalahartikan.
-    //
     // Array#sort di JS stabil, jadi untuk tanggal yang sama transaksi resmi tetap muncul lebih dulu
     // daripada baris arsip (urutan concat di bawah) -- dan urutan dalam tiap sumber tetap seperti
     // yang dikirim backend.
     const gabungan: EntriRiwayat[] = [...asli, ...belum].sort((a, b) =>
       a.tanggal < b.tanggal ? 1 : a.tanggal > b.tanggal ? -1 : 0,
     );
-    return {
-      entri: gabungan,
-      jumlahBelumTotal: belumSemua.length,
-      jumlahBelumDitampilkan: belum.length,
-    };
+    return { entri: gabungan, jumlahBelumDitampilkan: belum.length };
   }, [rows, barisBelum, channel, belumDiprosesDisembunyikanMenu]);
 
   // Dicek dari data MENTAH yang sudah di-fetch untuk filter saat ini (bukan request tambahan):
@@ -292,36 +341,32 @@ export function RiwayatTransaksiTab() {
   const adaEstimasiTampil = useMemo(() => rows.some((r) => r.hppSumber === "snapshot_estimasi"), [rows]);
 
   function resetFilter() {
-    setTanggalMulai("");
-    setTanggalSelesai("");
+    const sekarang = new Date();
+    const awalBulan = new Date(sekarang.getFullYear(), sekarang.getMonth(), 1);
+    const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    setRentang({ mulai: iso(awalBulan), selesai: iso(sekarang) });
     setChannel("");
     setMenuTerpilih(null);
     setLokasiId("");
   }
+
+  const adaFilterAktif = channel !== "" || kodeMenu !== "" || lokasiId !== "";
+  const bisaMuatLebihAsli = rows.length < totalAsli;
+  const bisaMuatLebihBelum = bisaLihatBelumDiproses && !belumDiprosesDisembunyikanMenu && barisBelum.length < totalBelum;
 
   return (
     <div className="space-y-4">
       <Card>
         <h2 className="mb-1 text-sm font-semibold text-slate-900">Filter</h2>
         <p className="mb-3 text-xs text-slate-500">
-          Kosongkan tanggal untuk melihat 30 hari terakhir. Isi hanya bagian yang perlu dipersempit.
           {bisaLihatBelumDiproses
-            ? " Penjualan yang belum diproses ke stok ikut tampil tanpa batas 30 hari, jadi isi rentang tanggal kalau daftarnya terasa terlalu panjang."
+            ? "Penjualan yang belum diproses ke stok ikut tampil tanpa dipengaruhi filter channel/lokasi/menu di bawah (kecuali rentang tanggal)."
             : ""}
         </p>
 
         <div className="space-y-3">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Field label="Tanggal mulai">
-              <Input type="date" value={tanggalMulai} onChange={(e) => setTanggalMulai(e.target.value)} max={tanggalSelesai || undefined} />
-            </Field>
-            <Field label="Tanggal selesai">
-              <Input type="date" value={tanggalSelesai} onChange={(e) => setTanggalSelesai(e.target.value)} min={tanggalMulai || undefined} />
-            </Field>
-          </div>
+          <DateRangePicker value={rentang} onChange={setRentang} />
 
-          {/* Keterangan tambahan ditaruh SEBAGAI SAUDARA <Field>, bukan di dalamnya: <Field>
-              merender <label>, dan paragraf di dalam label bikin struktur HTML-nya tidak valid. */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <Field label="Channel penjualan">
@@ -442,11 +487,17 @@ export function RiwayatTransaksiTab() {
       {!loading && !loadingBelum && !error && !rentangTerbalik ? (
         <HasilRiwayat
           entri={entri}
-          jumlahBarisAsli={rows.length}
-          jumlahBelumTotal={jumlahBelumTotal}
+          totalAsli={totalAsli}
+          jumlahAsliDitampilkan={rows.length > 0 ? new Set(rows.map((r) => r.headerId)).size : 0}
+          totalBelum={totalBelum}
           jumlahBelumDitampilkan={jumlahBelumDitampilkan}
           belumDiprosesIkut={bisaLihatBelumDiproses && !belumDiprosesDisembunyikanMenu && errorBelum === null}
           lokasiDifilter={lokasiId !== ""}
+          tanggalMulaiOtomatis={tanggalMulaiOtomatis}
+          bisaMuatLebihAsli={bisaMuatLebihAsli}
+          bisaMuatLebihBelum={bisaMuatLebihBelum}
+          onMuatLebihAsli={() => setLimitAsli((v) => v + PAGE_SIZE)}
+          onMuatLebihBelum={() => setLimitBelum((v) => v + PAGE_SIZE)}
         />
       ) : null}
     </div>
@@ -455,24 +506,33 @@ export function RiwayatTransaksiTab() {
 
 function HasilRiwayat({
   entri,
-  jumlahBarisAsli,
-  jumlahBelumTotal,
+  totalAsli,
+  jumlahAsliDitampilkan,
+  totalBelum,
   jumlahBelumDitampilkan,
   belumDiprosesIkut,
   lokasiDifilter,
+  tanggalMulaiOtomatis,
+  bisaMuatLebihAsli,
+  bisaMuatLebihBelum,
+  onMuatLebihAsli,
+  onMuatLebihBelum,
 }: {
   entri: EntriRiwayat[];
-  /** Jumlah BARIS menu mentah dari sumber "asli" -- dipakai hanya untuk mendeteksi batas 200 baris
-   * dari backend, bukan untuk ditampilkan sebagai jumlah transaksi. */
-  jumlahBarisAsli: number;
-  /** Jumlah order "belum diproses" setelah disaring, SEBELUM dipotong untuk ditampilkan. */
-  jumlahBelumTotal: number;
+  /** Jumlah TOTAL transaksi resmi yang cocok filter (dari server, lihat `total` di HasilDetailTransaksiPenjualan) -- bukan cuma yang sudah dimuat. */
+  totalAsli: number;
+  jumlahAsliDitampilkan: number;
+  /** Jumlah TOTAL order "belum diproses" yang cocok filter (dari server). */
+  totalBelum: number;
   jumlahBelumDitampilkan: number;
   belumDiprosesIkut: boolean;
   lokasiDifilter: boolean;
+  tanggalMulaiOtomatis: string | null;
+  bisaMuatLebihAsli: boolean;
+  bisaMuatLebihBelum: boolean;
+  onMuatLebihAsli: () => void;
+  onMuatLebihBelum: () => void;
 }) {
-  const jumlahAsli = entri.length - jumlahBelumDitampilkan;
-
   return (
     <Card>
       <h2 className="mb-1 text-sm font-semibold text-slate-900">Riwayat penjualan</h2>
@@ -485,7 +545,7 @@ function HasilRiwayat({
           Daftar ini menggabungkan dua hal: penjualan yang <strong>sudah</strong> mengurangi stok, dan
           penjualan hasil upload yang <strong>belum</strong> diproses ke stok (bergaris putus-putus, rinciannya
           sudah langsung terlihat jadi tidak perlu diketuk). Keduanya normal — yang belum diproses akan
-          mengurangi stok setelah dijalankan di halaman Sinkronisasi Penjualan.
+          mengurangi stok setelah diproses (otomatis atau lewat halaman Sinkronisasi Penjualan).
         </p>
       ) : (
         <p className="mb-3 text-xs text-slate-500">
@@ -506,28 +566,37 @@ function HasilRiwayat({
               e.jenis === "asli" ? (
                 <KartuTransaksiTercatat key={e.key} order={e} />
               ) : (
-                <KartuBelumDiproses key={e.key} order={e} lokasiDifilter={lokasiDifilter} />
+                <KartuBelumDiproses
+                  key={e.key}
+                  order={e}
+                  lokasiDifilter={lokasiDifilter}
+                  status={statusArsipOrder(e, tanggalMulaiOtomatis)}
+                />
               ),
             )}
           </div>
 
           <p className="mt-3 text-xs text-slate-400">
-            Menampilkan {jumlahAsli} transaksi yang sudah mengurangi stok
-            {belumDiprosesIkut ? ` dan ${jumlahBelumDitampilkan} penjualan yang belum diproses ke stok` : ""},
-            diurutkan dari yang terbaru.
+            Menampilkan {jumlahAsliDitampilkan} dari {totalAsli} transaksi yang sudah mengurangi stok
+            {belumDiprosesIkut
+              ? `, dan ${jumlahBelumDitampilkan} dari ${totalBelum} penjualan yang belum diproses ke stok`
+              : ""}
+            , diurutkan dari yang terbaru.
           </p>
-          {jumlahBarisAsli >= BATAS_BARIS ? (
-            <p className="mt-1 text-xs text-slate-400">
-              Transaksi yang sudah mengurangi stok sudah mencapai batas maksimal sekali tampil. Persempit
-              rentang tanggal, channel, atau menu kalau yang Anda cari belum kelihatan.
-            </p>
-          ) : null}
-          {jumlahBelumTotal > jumlahBelumDitampilkan ? (
-            <p className="mt-1 text-xs text-slate-400">
-              Penjualan yang belum diproses ke stok sebenarnya ada {jumlahBelumTotal} — yang tampil dibatasi{" "}
-              {jumlahBelumDitampilkan} teratas supaya halaman tetap ringan di HP. Persempit rentang tanggalnya
-              untuk melihat sisanya.
-            </p>
+
+          {bisaMuatLebihAsli || bisaMuatLebihBelum ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {bisaMuatLebihAsli ? (
+                <Button type="button" variant="secondary" onClick={onMuatLebihAsli} className="text-xs">
+                  Muat transaksi lebih banyak
+                </Button>
+              ) : null}
+              {bisaMuatLebihBelum ? (
+                <Button type="button" variant="secondary" onClick={onMuatLebihBelum} className="text-xs">
+                  Muat penjualan belum diproses lebih banyak
+                </Button>
+              ) : null}
+            </div>
           ) : null}
         </>
       )}
@@ -551,7 +620,8 @@ function KartuTransaksiTercatat({ order }: { order: EntriOrderAsli }) {
       >
         <div className="min-w-0">
           <p className="font-medium text-slate-900">
-            {formatTanggalSingkat(order.tanggal)} &middot; {order.sumber}
+            {formatTanggalSingkat(order.tanggal)}
+            {order.jam ? ` · ${order.jam.slice(0, 5)}` : ""} &middot; {order.sumber}
           </p>
           <p className="mt-0.5 text-xs text-slate-500">
             {order.lokasiNama} &middot; {order.items.length} menu &middot; {order.totalQty} porsi
@@ -596,21 +666,24 @@ function KartuTransaksiTercatat({ order }: { order: EntriOrderAsli }) {
  *
  * SENGAJA tidak bisa diketuk: tidak ada rincian tersembunyi di sini (isinya langsung terlihat) dan
  * tidak ada aksi apa pun yang boleh dijalankan dari halaman ini. Gayanya dibedakan lewat garis
- * putus-putus + latar pudar, dan WARNANYA NETRAL (kelabu, bukan merah/kuning): belum diproses
- * adalah kondisi normal, bukan kesalahan yang perlu ditakuti. */
+ * putus-putus + latar pudar. Badge status BERWARNA (amber) kalau order ini perlu perhatian (refund/
+ * tertahan), NETRAL (badge putus-putus generik) kalau sekadar menunggu giliran diproses -- itu
+ * kondisi normal, bukan kesalahan yang perlu ditakuti. */
 function KartuBelumDiproses({
   order,
   lokasiDifilter,
+  status,
 }: {
   order: EntriOrderBelumDiproses;
   lokasiDifilter: boolean;
+  status: StatusArsip;
 }) {
   return (
     <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-sm">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="font-medium text-slate-700">
-            {formatTanggalSingkat(order.tanggal)} &middot; {order.platform}
+            {formatTanggalSingkat(order.tanggal)} &middot; {order.jam.slice(0, 5)} &middot; {order.platform}
           </p>
           <p className="mt-0.5 text-xs text-slate-500">
             {order.items.length} menu &middot; {order.totalQty} porsi
@@ -618,11 +691,15 @@ function KartuBelumDiproses({
           </p>
           <p className="mt-1 break-all text-xs text-slate-400">No. pesanan: {order.orderId}</p>
         </div>
-        {/* Bukan <Badge>: bentuknya sengaja beda (garis putus-putus, tanpa latar penuh) supaya
-            sekilas lihat langsung kelihatan ini bukan transaksi resmi seperti kartu di atasnya. */}
-        <span className="inline-flex shrink-0 items-center rounded-full border border-dashed border-slate-400 bg-white px-2.5 py-0.5 text-xs font-medium text-slate-600">
-          Belum diproses ke stok
-        </span>
+        {status ? (
+          <StatusArsipBadge status={status} />
+        ) : (
+          // Bukan <Badge>: bentuknya sengaja beda (garis putus-putus, tanpa latar penuh) supaya
+          // sekilas lihat langsung kelihatan ini bukan transaksi resmi seperti kartu di atasnya.
+          <span className="inline-flex shrink-0 items-center rounded-full border border-dashed border-slate-400 bg-white px-2.5 py-0.5 text-xs font-medium text-slate-600">
+            Belum diproses ke stok
+          </span>
+        )}
       </div>
 
       {/* Rincian item TIDAK disembunyikan: satu order isinya sedikit, jadi lebih berguna langsung
@@ -633,15 +710,21 @@ function KartuBelumDiproses({
             <span className="min-w-0 text-slate-600">
               {item.itemName}
               {item.menuId ? <span className="text-slate-400"> &middot; {item.menuId}</span> : null}
+              {item.itemType === "refund" ? <span className="text-amber-600"> &middot; retur</span> : null}
             </span>
             <span className="shrink-0 text-slate-600">{item.quantity} porsi</span>
           </li>
         ))}
       </ul>
       <p className="mt-1.5 text-xs text-slate-500">
-        Penjualan ini sudah tercatat dari file yang diupload, tapi stoknya belum dikurangi.
+        {status === "refund"
+          ? "Order ini tidak akan pernah otomatis mengurangi stok karena ada retur/refund -- perlu ditinjau manual."
+          : status === "tertahan"
+            ? "Order ini akan otomatis diproses begitu semua itemnya dipetakan ke menu Samsara."
+            : status === "menunggu_tanggal_mulai"
+              ? "Order ini sebelum tanggal mulai pemrosesan otomatis, jadi tidak akan ikut terpotong otomatis."
+              : "Penjualan ini sudah tercatat dari file yang diupload, tapi stoknya belum dikurangi."}
       </p>
     </div>
   );
 }
-

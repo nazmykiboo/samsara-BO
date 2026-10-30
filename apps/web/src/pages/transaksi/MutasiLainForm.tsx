@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useAuth } from "../../auth/AuthContext";
 import { LokasiPicker, useLokasiOptions } from "../../components/pickers/LokasiPicker";
 import { ItemPicker } from "../../components/pickers/ItemPicker";
 import { Card } from "../../components/ui/Card";
@@ -35,7 +36,20 @@ const JENIS_MUTASI_LAIN: Array<{ value: JenisMutasiLain; label: string; arah: "t
   { value: "koreksi_tambah", label: "Koreksi / Tambah Stok (stok awal, temuan lebih opname, dll)", arah: "tambah" },
 ];
 
+/** Jenis yang boleh dipakai staf (2026-10-30) -- HARUS sama persis dengan
+ * JENIS_MUTASI_LAIN_IZIN_STAF di modules/inventory/src/domain/stok.ts.
+ * retur_supplier/koreksi_tambah disembunyikan total dari dropdown staf
+ * (bukan "muncul lalu 403 setelah submit") -- backend tetap menolak 403
+ * kalau somehow terkirim, ini cuma UX supaya staf tidak sempat pilih. */
+const JENIS_MUTASI_LAIN_IZIN_STAF: readonly JenisMutasiLain[] = [
+  "waste_rusak",
+  "hilang_tidak_diketahui",
+  "staff_meal",
+  "sampel",
+];
+
 export function MutasiLainForm() {
+  const { user } = useAuth();
   const options = useLokasiOptions();
   const [locationId, setLocationId] = useState<number | null>(null);
   // "" = belum dipilih. SENGAJA tidak ada kategori yang terpilih otomatis supaya staf
@@ -87,14 +101,17 @@ export function MutasiLainForm() {
   // kombinasi ini akan selalu ditolak backend apa pun jenis yang dipilih.
   const tandaCampur = tandaTerisi.size > 1;
 
-  // Opsi dropdown jenis yang ditampilkan: semua 6 kalau belum ada qty diisi,
-  // disempitkan ke 1 arah begitu tandanya jelas, kosong total kalau campur.
+  // Opsi dropdown jenis yang ditampilkan: dasarnya semua 6 (atau cuma 4 untuk
+  // staf, lihat JENIS_MUTASI_LAIN_IZIN_STAF), lalu disempitkan ke 1 arah
+  // begitu tanda qty jelas, kosong total kalau campur.
   const opsiJenis = useMemo(() => {
     if (tandaCampur) return [];
-    if (tandaTerisi.size === 0) return JENIS_MUTASI_LAIN;
+    const dasar =
+      user?.role === "staf" ? JENIS_MUTASI_LAIN.filter((j) => JENIS_MUTASI_LAIN_IZIN_STAF.includes(j.value)) : JENIS_MUTASI_LAIN;
+    if (tandaTerisi.size === 0) return dasar;
     const arah = tandaTerisi.has("tambah") ? "tambah" : "kurang";
-    return JENIS_MUTASI_LAIN.filter((j) => j.arah === arah);
-  }, [tandaTerisi, tandaCampur]);
+    return dasar.filter((j) => j.arah === arah);
+  }, [tandaTerisi, tandaCampur, user?.role]);
 
   // Kalau jenis yang sedang terpilih jadi tidak valid lagi (mis. staf ubah qty
   // dari negatif ke positif setelah sudah pilih "Rusak/Waste"), reset ke kosong

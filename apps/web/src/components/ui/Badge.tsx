@@ -46,6 +46,22 @@ export function SumberPencatatanBadge({ sumber }: { sumber: "manual" | "sinkroni
   return <Badge tone="neutral">Input manual</Badge>;
 }
 
+/** Status satu order ARSIP yang belum diproses ke stok (tab Riwayat Transaksi, 2026-10-30).
+ * `null` = kondisi normal (menunggu dipicu pemrosesan otomatis/manual, tidak perlu badge warna --
+ * dirender sebagai badge garis-putus-putus netral di luar fungsi ini, lihat KartuBelumDiproses).
+ * `'refund'` = ada baris retur, TIDAK PERNAH otomatis diproses (lihat proses.ts).
+ * `'tertahan'` = ada item yang kode eksternalnya belum dipetakan ke menu Samsara.
+ * `'menunggu_tanggal_mulai'` = tanggal order ini sebelum `tanggal_mulai_otomatis` tersimpan --
+ * otomatis TIDAK akan memprosesnya (beda dari tertahan: bukan soal pemetaan, murni soal tanggal). */
+export type StatusArsip = "refund" | "tertahan" | "menunggu_tanggal_mulai" | null;
+
+export function StatusArsipBadge({ status }: { status: StatusArsip }) {
+  if (status === "refund") return <Badge tone="warning">Perlu ditinjau</Badge>;
+  if (status === "tertahan") return <Badge tone="warning">Menunggu pemetaan item</Badge>;
+  if (status === "menunggu_tanggal_mulai") return <Badge tone="neutral">Menunggu tanggal mulai otomatis</Badge>;
+  return null;
+}
+
 /** Badge asal angka HPP historis satu baris penjualan (migrasi 0028, lihat `HppSumber` di
  * api/types.ts). Hanya ditampilkan untuk `'snapshot_estimasi'` -- menandai HPP baris itu bukan
  * harga historis asli, cuma perkiraan dari harga SAAT INI (backfill data transaksi lama). Netral

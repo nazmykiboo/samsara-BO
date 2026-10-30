@@ -136,10 +136,10 @@
       {
         "method": "POST",
         "path": "/transaksi/penjualan",
-        "description": "Catat penjualan; bahan dikurangi sesuai resep menu, paket dipecah ke komponen. Dikonfirmasi owner (2026-09-29): permission mengikuti pola pembelian/produksi. Body menerima field OPSIONAL 'jam' (string 'HH:MM' atau 'HH:MM:SS', kolom TIME dari migrasi 0026, untuk fitur heatmap jam ramai): kalau tidak dikirim disimpan NULL (bukan error, bukan default jam INSERT -- data historis juga NULL). Formatnya TIDAK divalidasi di domain layer, tipe TIME Postgres yang menolak nilai rusak.",
+        "description": "Catat penjualan; bahan dikurangi sesuai resep menu, paket dipecah ke komponen. Dikonfirmasi owner (2026-09-29): permission mengikuti pola pembelian/produksi. Body menerima field OPSIONAL 'jam' (string 'HH:MM' atau 'HH:MM:SS', kolom TIME dari migrasi 0026, untuk fitur heatmap jam ramai): kalau tidak dikirim disimpan NULL (bukan error, bukan default jam INSERT -- data historis juga NULL). Formatnya TIDAK divalidasi di domain layer, tipe TIME Postgres yang menolak nilai rusak. Role `sistem_otomatis` ditambahkan (2026-10-30) KHUSUS untuk pemrosesan sinkronisasi penjualan otomatis (modul sales-sync, lihat `modules/sales-sync/src/domain/otomatis.ts`) -- identitas internal, BUKAN manusia, dipakai lewat token JWT umur sangat pendek yang di-mint server sendiri, TANPA locationScope (default \"any\": transaksi dikirim ke lokasi hasil resolusi outlet per order, bukan lokasi milik identitas pemanggil). Satu-satunya permission yang mendaftarkan role ini di seluruh aplikasi.",
         "permission": {
           "action": "penjualan.create",
-          "roles": ["owner", "manajer_ops", "supervisor"],
+          "roles": ["owner", "manajer_ops", "supervisor", "sistem_otomatis"],
           "locationScope": { "supervisor": "own" }
         }
       },
@@ -212,7 +212,7 @@
       {
         "method": "GET",
         "path": "/transaksi/penjualan",
-        "description": "Daftar DETAIL transaksi penjualan per BARIS menu (satu transaksi 2 baris menu -> 2 objek), bukan ringkasan agregat seperti GET /laporan/harian. Query SEMUA opsional: ?tanggal_mulai=&tanggal_selesai= (YYYY-MM-DD, filter h.tanggal BETWEEN; default 30 hari terakhir -- tanggal_selesai kosong = hari ini (CURRENT_DATE), tanggal_mulai kosong = 30 hari sebelum tanggal_selesai), ?channel= (cocok PERSIS/case-sensitive ke kolom sumber, tidak divalidasi ke inventory_sales_channel karena kolom sumber tidak punya FK ke sana), ?kode_menu=, ?lokasi=. Field sumberPencatatan ('manual'|'sinkronisasi') DITURUNKAN dari core_audit_log (field_name 'created_via', new_value 'sales-sync' yang ditulis modul sales-sync) lewat subquery EXISTS, default 'manual' kalau tidak ada jejaknya. Maksimal 200 baris per request (LIMIT tetap, belum ada pola pagination di repo ini). Permission DIPAKAI ULANG dari GET /laporan/harian (laporan_harian.lihat, staf TIDAK boleh); supervisor selalu dibatasi ke lokasinya sendiri walau ?lokasi= tidak dikirim (dipaksa di domain layer, pola sama dengan listJadwalShift di modul hr).",
+        "description": "Daftar DETAIL transaksi penjualan per BARIS menu (satu transaksi 2 baris menu -> 2 objek), bukan ringkasan agregat seperti GET /laporan/harian. Query SEMUA opsional: ?tanggal_mulai=&tanggal_selesai= (YYYY-MM-DD, filter h.tanggal BETWEEN; default 30 hari terakhir -- tanggal_selesai kosong = hari ini (CURRENT_DATE), tanggal_mulai kosong = 30 hari sebelum tanggal_selesai), ?channel= (cocok PERSIS/case-sensitive ke kolom sumber, tidak divalidasi ke inventory_sales_channel karena kolom sumber tidak punya FK ke sana), ?kode_menu= (DEVIASI 2026-10-30: memilih TRANSAKSI yang punya minimal 1 baris menu itu, lalu SELURUH baris transaksi itu ikut dikembalikan -- bukan cuma baris yang cocok filter seperti versi sebelumnya; perubahan ini konsekuensi dari paginasi per-transaksi di bawah, dan sekaligus lebih benar untuk tampilan 'satu kartu = satu order' karena tidak lagi membuat order terlihat cuma berisi 1 menu padahal sebenarnya lebih), ?lokasi=, ?limit= & ?offset= (paginasi, 2026-10-30 -- lihat di bawah). Tiap baris juga membawa `jam` (string 'HH:MM:SS' atau null, kolom TIME migrasi 0026; null untuk baris lama/input tanpa jam, TIDAK PERNAH diperkirakan dari created_at). Field sumberPencatatan ('manual'|'sinkronisasi') DITURUNKAN dari core_audit_log (field_name 'created_via', new_value 'sales-sync' yang ditulis modul sales-sync) lewat subquery EXISTS, default 'manual' kalau tidak ada jejaknya. Response BUKAN array flat lagi (DEVIASI 2026-10-30 dari bentuk sebelumnya): {rows: [...], total}. `total` = jumlah TRANSAKSI (header) yang cocok filter TANPA memperhitungkan limit/offset, BUKAN jumlah baris menu -- dipakai ringkasan 'menampilkan X dari Y' di frontend. PAGINASI DI LEVEL TRANSAKSI, bukan baris menu: `limit`/`offset` membatasi jumlah HEADER yang diambil (default & maksimal `DEFAULT_LIMIT_DETAIL_PENJUALAN`=200 transaksi per halaman), lalu SELURUH baris menu milik transaksi-transaksi itu ikut dikirim tanpa batas -- satu transaksi tidak akan pernah terpotong di tengah hanya karena kebetulan jatuh di batas halaman. Ini pola pagination PERTAMA di repo ini (sebelumnya semua endpoint list cuma pakai LIMIT tetap tanpa offset/total) -- sengaja dibatasi ke endpoint ini dulu (dipicu kebutuhan Riwayat Transaksi menampilkan volume lebih besar setelah pemrosesan otomatis sales-sync), bukan retrofit ke semua endpoint list yang ada; lihat docs/architecture-decisions.md untuk catatan keputusan ini. Permission DIPAKAI ULANG dari GET /laporan/harian (laporan_harian.lihat, staf TIDAK boleh); supervisor selalu dibatasi ke lokasinya sendiri walau ?lokasi= tidak dikirim (dipaksa di domain layer, pola sama dengan listJadwalShift di modul hr).",
         "permission": {
           "action": "laporan_harian.lihat",
           "roles": ["owner", "manajer_ops", "supervisor"],
@@ -234,7 +234,7 @@
       {
         "method": "POST",
         "path": "/transaksi/mutasi-lain",
-        "description": "Catat penyesuaian stok non-standar (waste, staff meal, sampel, koreksi tambah, dll). Semua role boleh. DUA field header wajib: 'alasan' (TEXT bebas, catatan manusia) DAN 'jenis' (kategori terstruktur, kolom baru migrasi 0026) -- keduanya hidup berdampingan, 'jenis' TIDAK menggantikan 'alasan'. 'jenis' harus salah satu dari 6 nilai: waste_rusak, hilang_tidak_diketahui, staff_meal, sampel, retur_supplier, koreksi_tambah (nilai terakhir ditambahkan migrasi 0027 untuk stok yang BERTAMBAH di luar jalur Pembelian/Produksi/Transfer, mis. stok awal); kosong/di luar daftar dijawab 400 (divalidasi di router DAN di domain createMutasiLain). 'jenis' juga harus KONSISTEN dengan tanda (+/-) qty semua barisnya: 5 jenis pengurangan mewajibkan SEMUA baris qty negatif, 'koreksi_tambah' mewajibkan SEMUA baris qty positif -- kalau tidak cocok dijawab 400 (termasuk otomatis menolak submission dengan baris bertanda CAMPURAN dalam satu panggilan, karena tidak ada 'jenis' yang konsisten untuk campuran). Kolomnya NULLABLE di skema hanya untuk kompatibilitas 1 baris data uji lama -- entri BARU selalu wajib. Dipakai GET /analitik/operasional untuk memisahkan waste sungguhan (waste_rusak + hilang_tidak_diketahui) dari pemakaian lain; koreksi_tambah tidak pernah ikut hitungan waste.",
+        "description": "Catat penyesuaian stok non-standar (waste, staff meal, sampel, koreksi tambah, dll). Semua role boleh akses endpoint ini, TAPI 'jenis' yang boleh dipakai dibatasi per role (2026-10-30): staf cuma boleh waste_rusak/hilang_tidak_diketahui/staff_meal/sampel (JENIS_MUTASI_LAIN_IZIN_STAF) -- retur_supplier dan koreksi_tambah dijawab 403 untuk staf (dicek di router SEBELUM createMutasiLain dipanggil, bukan 400 dari domain). owner/manajer_ops/supervisor boleh keenam jenis. DUA field header wajib: 'alasan' (TEXT bebas, catatan manusia) DAN 'jenis' (kategori terstruktur, kolom baru migrasi 0026) -- keduanya hidup berdampingan, 'jenis' TIDAK menggantikan 'alasan'. 'jenis' harus salah satu dari 6 nilai: waste_rusak, hilang_tidak_diketahui, staff_meal, sampel, retur_supplier, koreksi_tambah (nilai terakhir ditambahkan migrasi 0027 untuk stok yang BERTAMBAH di luar jalur Pembelian/Produksi/Transfer, mis. stok awal); kosong/di luar daftar dijawab 400 (divalidasi di router DAN di domain createMutasiLain). 'jenis' juga harus KONSISTEN dengan tanda (+/-) qty semua barisnya: 5 jenis pengurangan mewajibkan SEMUA baris qty negatif, 'koreksi_tambah' mewajibkan SEMUA baris qty positif -- kalau tidak cocok dijawab 400 (termasuk otomatis menolak submission dengan baris bertanda CAMPURAN dalam satu panggilan, karena tidak ada 'jenis' yang konsisten untuk campuran). Kolomnya NULLABLE di skema hanya untuk kompatibilitas 1 baris data uji lama -- entri BARU selalu wajib. Dipakai GET /analitik/operasional untuk memisahkan waste sungguhan (waste_rusak + hilang_tidak_diketahui) dari pemakaian lain; koreksi_tambah tidak pernah ikut hitungan waste.",
         "permission": {
           "action": "mutasi_lain.create",
           "roles": ["owner", "manajer_ops", "supervisor", "staf"],
@@ -288,6 +288,12 @@
         "permission": { "action": "master_menu.edit", "roles": ["owner", "manajer_ops"] }
       },
       {
+        "method": "PATCH",
+        "path": "/menu/:kode",
+        "description": "Rename menu, KODE TETAP (ditambah 2026-10-30). Body {name} -- WAJIB, satu-satunya field yang diubah endpoint ini (bukan update-menu-umum; field lain punya jalur sendiri: PATCH /menu/:kode/resep untuk resep, PATCH /menu/:kode/nonaktifkan untuk nonaktifkan). Nama unik TANPA membedakan huruf besar/kecil dan TANPA terpengaruh spasi di ujung -- dicek PRE-CHECK aplikasi (fungsi namaSudahDipakai di referensi.ts, pesan Indonesia rapi: 'Nama \"...\" sudah dipakai menu lain -- pilih nama lain.'), BUKAN pesan Postgres mentah (ada index UNIQUE fungsional jaring-pengaman di migrasi 0032, lower(trim(name)), tapi itu bukan sumber pesan error). Riwayat transaksi lama & pemetaan sales-sync (salessync_item_mapping.kode_menu) tetap nyambung karena semuanya merujuk kode, bukan name. Dicatat ke core_audit_log (field 'name').",
+        "permission": { "action": "master_menu.edit", "roles": ["owner", "manajer_ops"] }
+      },
+      {
         "method": "POST",
         "path": "/menu/:kode/duplikat",
         "description": "Duplikat menu :kode jadi menu baru. Body {kodeBaru, nameBaru, kategoriId?, isActive?, lokasiIds?} -- field opsionalnya semantiknya PERSIS sama dengan POST /menu (fungsinya memang memanggil createMenu, bukan logika INSERT terpisah). Yang DISALIN cuma baris resep menu sumber (lewat updateMenuResep); yang TIDAK disalin: harga jual legacy & per-channel, visibilitas channel, komposisi paket, dan kategori/lokasi (diambil dari body, bukan dari menu sumber). Menu sumber yang belum punya baris resep tetap bisa diduplikat -- menu baru dibuat kosong, bukan error. 404 kalau :kode tidak ada ('Menu sumber ... tidak ditemukan'). Satu transaksi: kalau penyalinan resep gagal, menu baru ikut di-rollback.",
@@ -296,7 +302,7 @@
       {
         "method": "PATCH",
         "path": "/items/:kode",
-        "description": "Ubah master item (harga_master, purchase_to_recipe_factor, dll). Perubahan harga_master & purchase_to_recipe_factor dicatat ke core_audit_log.",
+        "description": "Ubah master item (harga_master, purchase_to_recipe_factor, dll). Perubahan harga_master, purchase_to_recipe_factor, DAN name dicatat ke core_audit_log (field 'name' ditambah 2026-10-30, lihat rencana rename). Body opsional 'name': rename item, KODE TETAP -- unik tanpa besar/kecil & spasi tepi (pre-check aplikasi di namaSudahDipakai, pesan Indonesia rapi, BUKAN pesan Postgres mentah), ditolak 400 kalau nama baru sudah dipakai item lain. Riwayat transaksi lama tetap nyambung karena semua referensi lewat kode, bukan name.",
         "permission": { "action": "master_item.edit", "roles": ["owner", "manajer_ops"] }
       },
       {
@@ -395,7 +401,7 @@
       {
         "method": "PATCH",
         "path": "/kategori/:id",
-        "description": "Ubah nama/is_active kategori. Body {name?, isActive?}.",
+        "description": "Ubah nama/is_active kategori. Body {name?, isActive?}. Rename (2026-10-30): nama unik TANPA membedakan huruf besar/kecil dan TANPA spasi tepi (pre-check aplikasi, pesan Indonesia rapi -- lihat namaSudahDipakai di referensi.ts). CASCADE: karena inventory_items.category menyimpan nama kategori sebagai TEKS BEBAS tanpa foreign key (migrasi 0019), rename di sini otomatis meng-UPDATE category semua item yang memakainya DALAM TRANSAKSI YANG SAMA -- item TIDAK PERNAH jadi orphan. Entri audit tambahan 'item_terdampak' dicatat kalau ada item yang ikut ter-cascade, mencatat jumlahnya.",
         "permission": { "action": "master_item.edit", "roles": ["owner", "manajer_ops"] }
       },
       {
@@ -431,7 +437,7 @@
       {
         "method": "PATCH",
         "path": "/kategori-menu/:id",
-        "description": "Ubah kategori menu. Body {kode?, nama?, urutanTampil?, aktif?} -- field yang tidak dikirim tidak berubah. 404 kalau id tidak ada. Perubahan per field dicatat ke core_audit_log. Kategori yang aktif=false ditolak dipakai di POST /menu/POST /menu/:kode/duplikat (menu lama yang sudah memakainya TIDAK ikut berubah, pola sama seperti kategori item).",
+        "description": "Ubah kategori menu. Body {kode?, nama?, urutanTampil?, aktif?} -- field yang tidak dikirim tidak berubah. 404 kalau id tidak ada. Perubahan per field dicatat ke core_audit_log. Kategori yang aktif=false ditolak dipakai di POST /menu/POST /menu/:kode/duplikat (menu lama yang sudah memakainya TIDAK ikut berubah, pola sama seperti kategori item). Rename (2026-10-30): 'nama' unik TANPA membedakan huruf besar/kecil dan TANPA spasi tepi (pre-check aplikasi, pesan Indonesia rapi). TIDAK perlu cascade seperti kategori item -- inventory_menu.kategori_id SUDAH foreign key proper ke tabel ini, rename aman otomatis.",
         "permission": { "action": "master_menu.edit", "roles": ["owner", "manajer_ops"] }
       },
       {

@@ -42,6 +42,7 @@ interface InputLog {
   invStatus?: string;
   processedAt?: string | null;
   platform?: string;
+  itemType?: string;
 }
 
 /** Satu baris arsip log penjualan sintetis dengan inv_status & processed_at terkendali. */
@@ -51,7 +52,7 @@ async function insertLog(client: PoolClient, input: InputLog): Promise<void> {
     `INSERT INTO salessync_log_penjualan
        (transaction_date, transaction_time, platform, order_id, item_name, menu_id, quantity,
         item_type, parent_item, unique_key, inv_status, processed_at)
-     VALUES ($1, '12:00:00', $2, $3, $4, $5, $6, 'menu', NULL, $7, $8, $9)`,
+     VALUES ($1, '12:00:00', $2, $3, $4, $5, $6, $7, NULL, $8, $9, $10)`,
     [
       input.tanggal,
       input.platform ?? PLATFORM,
@@ -59,6 +60,7 @@ async function insertLog(client: PoolClient, input: InputLog): Promise<void> {
       input.itemName,
       input.menuId === undefined ? `TEST-BD-EXT-${nomorKey}` : input.menuId,
       input.quantity ?? 1,
+      input.itemType ?? "menu",
       `TEST-BD-KEY-${nomorKey}`,
       input.invStatus ?? "OK",
       input.processedAt ?? null,
@@ -78,10 +80,10 @@ function milikFixture<T extends { platform: string }>(rows: T[]): T[] {
 test("listBelumDiproses: HANYA baris inv_status='OK' DAN processed_at IS NULL yang muncul", async () => {
   await withRollback(async (client) => {
     // (1) Yang HARUS muncul.
-    await insertLog(client, { tanggal: "2026-07-01", orderId: "TEST-BD-ORD-MUNCUL", itemName: "Harus Muncul" });
+    await insertLog(client, { tanggal: "2099-07-01", orderId: "TEST-BD-ORD-MUNCUL", itemName: "Harus Muncul" });
     // (2) inv_status SKIP-HISTORIS, processed_at masih NULL -> TIDAK muncul.
     await insertLog(client, {
-      tanggal: "2026-07-01",
+      tanggal: "2099-07-01",
       orderId: "TEST-BD-ORD-SKIP",
       itemName: "Historis",
       invStatus: "SKIP-HISTORIS",
@@ -89,21 +91,21 @@ test("listBelumDiproses: HANYA baris inv_status='OK' DAN processed_at IS NULL ya
     // (3) inv_status OK tapi processed_at SUDAH terisi -> TIDAK muncul
     //     (sudah jadi transaksi Penjualan, sudah pengaruh stok).
     await insertLog(client, {
-      tanggal: "2026-07-01",
+      tanggal: "2099-07-01",
       orderId: "TEST-BD-ORD-SUDAH",
       itemName: "Sudah Diproses",
-      processedAt: "2026-07-02T03:00:00Z",
+      processedAt: "2099-07-02T03:00:00Z",
     });
     // (4) Dua-duanya tidak memenuhi -> TIDAK muncul.
     await insertLog(client, {
-      tanggal: "2026-07-01",
+      tanggal: "2099-07-01",
       orderId: "TEST-BD-ORD-SKIP-SUDAH",
       itemName: "Historis & Diproses",
       invStatus: "SKIP-HISTORIS",
-      processedAt: "2026-07-02T03:00:00Z",
+      processedAt: "2099-07-02T03:00:00Z",
     });
 
-    const hasil = milikFixture(await listBelumDiproses(client, {}));
+    const hasil = milikFixture((await listBelumDiproses(client, {})).rows);
 
     assert.deepEqual(
       hasil.map((r) => r.orderId),
@@ -116,7 +118,7 @@ test("listBelumDiproses: HANYA baris inv_status='OK' DAN processed_at IS NULL ya
 test("listBelumDiproses: isi tiap objek response sesuai kolom log (termasuk menuId NULL dibiarkan null)", async () => {
   await withRollback(async (client) => {
     await insertLog(client, {
-      tanggal: "2026-07-05",
+      tanggal: "2099-07-05",
       orderId: "TEST-BD-ORD-ISI",
       itemName: "Bubur Ayam Komplit",
       menuId: "TEST-BD-EXT-ISI",
@@ -125,14 +127,14 @@ test("listBelumDiproses: isi tiap objek response sesuai kolom log (termasuk menu
     // Baris tanpa kode eksternal TETAP muncul (ini daftar arsip, bukan antrian
     // pemetaan) -- menuId-nya null.
     await insertLog(client, {
-      tanggal: "2026-07-05",
+      tanggal: "2099-07-05",
       orderId: "TEST-BD-ORD-NOKODE",
       itemName: "Item Tanpa Kode",
       menuId: null,
       quantity: 2,
     });
 
-    const hasil = milikFixture(await listBelumDiproses(client, {}));
+    const hasil = milikFixture((await listBelumDiproses(client, {})).rows);
     assert.equal(hasil.length, 2);
 
     const isi = hasil.find((r) => r.orderId === "TEST-BD-ORD-ISI");
@@ -140,10 +142,15 @@ test("listBelumDiproses: isi tiap objek response sesuai kolom log (termasuk menu
     assert.deepEqual(isi, {
       platform: PLATFORM,
       orderId: "TEST-BD-ORD-ISI",
-      tanggal: "2026-07-05",
+      tanggal: "2099-07-05",
+      jam: "12:00:00",
       menuId: "TEST-BD-EXT-ISI",
       itemName: "Bubur Ayam Komplit",
       quantity: 3,
+      itemType: "menu",
+      // Belum ada baris salessync_item_mapping untuk kode eksternal fixture
+      // ini sama sekali -- LEFT JOIN menghasilkan NULL, bukan 'dipetakan'.
+      sudahTerpetakan: false,
     });
     // Tanggal kalender dikembalikan sebagai STRING (to_char), bukan objek Date.
     assert.equal(typeof isi.tanggal, "string");
@@ -161,10 +168,10 @@ test("listBelumDiproses: isi tiap objek response sesuai kolom log (termasuk menu
 
 /** Fixture 4 tanggal berbeda, satu baris per tanggal, semuanya belum diproses. */
 async function siapkanFixtureTanggal(client: PoolClient): Promise<void> {
-  await insertLog(client, { tanggal: "2026-05-10", orderId: "TEST-BD-ORD-0510", itemName: "Mei" });
-  await insertLog(client, { tanggal: "2026-06-15", orderId: "TEST-BD-ORD-0615", itemName: "Juni" });
-  await insertLog(client, { tanggal: "2026-07-20", orderId: "TEST-BD-ORD-0720", itemName: "Juli" });
-  await insertLog(client, { tanggal: "2026-08-25", orderId: "TEST-BD-ORD-0825", itemName: "Agustus" });
+  await insertLog(client, { tanggal: "2099-05-10", orderId: "TEST-BD-ORD-0510", itemName: "Mei" });
+  await insertLog(client, { tanggal: "2099-06-15", orderId: "TEST-BD-ORD-0615", itemName: "Juni" });
+  await insertLog(client, { tanggal: "2099-07-20", orderId: "TEST-BD-ORD-0720", itemName: "Juli" });
+  await insertLog(client, { tanggal: "2099-08-25", orderId: "TEST-BD-ORD-0825", itemName: "Agustus" });
 }
 
 test("listBelumDiproses tanpa filter: SEMUA baris belum-diproses dikembalikan, tanpa batas tanggal", async () => {
@@ -172,13 +179,13 @@ test("listBelumDiproses tanpa filter: SEMUA baris belum-diproses dikembalikan, t
     await siapkanFixtureTanggal(client);
     // Baris yang sangat tua -- pembuktian bahwa TIDAK ada default jendela
     // waktu (beda dari GET /transaksi/penjualan Inventory yang default 30 hari).
-    await insertLog(client, { tanggal: "2023-01-02", orderId: "TEST-BD-ORD-TUA", itemName: "Sangat Tua" });
+    await insertLog(client, { tanggal: "2096-01-02", orderId: "TEST-BD-ORD-TUA", itemName: "Sangat Tua" });
 
-    const hasil = milikFixture(await listBelumDiproses(client, {}));
+    const hasil = milikFixture((await listBelumDiproses(client, {})).rows);
 
     assert.deepEqual(
       hasil.map((r) => r.tanggal),
-      ["2026-08-25", "2026-07-20", "2026-06-15", "2026-05-10", "2023-01-02"],
+      ["2099-08-25", "2099-07-20", "2099-06-15", "2099-05-10", "2096-01-02"],
       "5 baris, urut transaction_date DESC, baris 2023 pun tetap ikut",
     );
   });
@@ -188,12 +195,12 @@ test("listBelumDiproses: tanggalMulai menyaring baris SEBELUMNYA (inklusif di ta
   await withRollback(async (client) => {
     await siapkanFixtureTanggal(client);
 
-    const hasil = milikFixture(await listBelumDiproses(client, { tanggalMulai: "2026-06-15" }));
+    const hasil = milikFixture((await listBelumDiproses(client, { tanggalMulai: "2099-06-15" })).rows);
 
     assert.deepEqual(
       hasil.map((r) => r.tanggal),
-      ["2026-08-25", "2026-07-20", "2026-06-15"],
-      "tanggal batas IKUT (>=), baris 2026-05-10 tersaring keluar",
+      ["2099-08-25", "2099-07-20", "2099-06-15"],
+      "tanggal batas IKUT (>=), baris 2099-05-10 tersaring keluar",
     );
   });
 });
@@ -202,12 +209,12 @@ test("listBelumDiproses: tanggalSelesai menyaring baris SESUDAHNYA (inklusif di 
   await withRollback(async (client) => {
     await siapkanFixtureTanggal(client);
 
-    const hasil = milikFixture(await listBelumDiproses(client, { tanggalSelesai: "2026-07-20" }));
+    const hasil = milikFixture((await listBelumDiproses(client, { tanggalSelesai: "2099-07-20" })).rows);
 
     assert.deepEqual(
       hasil.map((r) => r.tanggal),
-      ["2026-07-20", "2026-06-15", "2026-05-10"],
-      "tanggal batas IKUT (<=), baris 2026-08-25 tersaring keluar",
+      ["2099-07-20", "2099-06-15", "2099-05-10"],
+      "tanggal batas IKUT (<=), baris 2099-08-25 tersaring keluar",
     );
   });
 });
@@ -217,18 +224,18 @@ test("listBelumDiproses: tanggalMulai + tanggalSelesai bersamaan = rentang tertu
     await siapkanFixtureTanggal(client);
 
     const hasil = milikFixture(
-      await listBelumDiproses(client, { tanggalMulai: "2026-06-15", tanggalSelesai: "2026-07-20" }),
+      (await listBelumDiproses(client, { tanggalMulai: "2099-06-15", tanggalSelesai: "2099-07-20" })).rows,
     );
 
     assert.deepEqual(
       hasil.map((r) => r.tanggal),
-      ["2026-07-20", "2026-06-15"],
+      ["2099-07-20", "2099-06-15"],
       "hanya baris di dalam rentang, kedua ujungnya ikut",
     );
 
     // Rentang yang tidak memuat satu baris fixture pun -> daftar kosong, bukan error.
     const kosong = milikFixture(
-      await listBelumDiproses(client, { tanggalMulai: "2026-09-01", tanggalSelesai: "2026-09-30" }),
+      (await listBelumDiproses(client, { tanggalMulai: "2099-09-01", tanggalSelesai: "2099-09-30" })).rows,
     );
     assert.deepEqual(kosong, []);
   });
@@ -236,22 +243,22 @@ test("listBelumDiproses: tanggalMulai + tanggalSelesai bersamaan = rentang tertu
 
 test("listBelumDiproses: filter tanggal TIDAK melonggarkan kriteria inv_status/processed_at", async () => {
   await withRollback(async (client) => {
-    await insertLog(client, { tanggal: "2026-07-10", orderId: "TEST-BD-ORD-RANGE-OK", itemName: "Belum Diproses" });
+    await insertLog(client, { tanggal: "2099-07-10", orderId: "TEST-BD-ORD-RANGE-OK", itemName: "Belum Diproses" });
     await insertLog(client, {
-      tanggal: "2026-07-10",
+      tanggal: "2099-07-10",
       orderId: "TEST-BD-ORD-RANGE-SKIP",
       itemName: "Historis",
       invStatus: "SKIP-HISTORIS",
     });
     await insertLog(client, {
-      tanggal: "2026-07-10",
+      tanggal: "2099-07-10",
       orderId: "TEST-BD-ORD-RANGE-SUDAH",
       itemName: "Sudah Diproses",
-      processedAt: "2026-07-11T03:00:00Z",
+      processedAt: "2099-07-11T03:00:00Z",
     });
 
     const hasil = milikFixture(
-      await listBelumDiproses(client, { tanggalMulai: "2026-07-01", tanggalSelesai: "2026-07-31" }),
+      (await listBelumDiproses(client, { tanggalMulai: "2099-07-01", tanggalSelesai: "2099-07-31" })).rows,
     );
 
     assert.deepEqual(
@@ -270,25 +277,25 @@ test("listBelumDiproses: response PER BARIS, bukan per order -- satu order denga
   await withRollback(async (client) => {
     const ORDER = "TEST-BD-ORD-DUABARIS";
     await insertLog(client, {
-      tanggal: "2026-07-12",
+      tanggal: "2099-07-12",
       orderId: ORDER,
       itemName: "Bubur Ayam Original",
       menuId: "TEST-BD-EXT-BUBUR",
       quantity: 2,
     });
     await insertLog(client, {
-      tanggal: "2026-07-12",
+      tanggal: "2099-07-12",
       orderId: ORDER,
       itemName: "Es Teler",
       menuId: "TEST-BD-EXT-TELER",
       quantity: 1,
     });
 
-    const hasil = milikFixture(await listBelumDiproses(client, {}));
+    const hasil = milikFixture((await listBelumDiproses(client, {})).rows);
 
     assert.equal(hasil.length, 2, "satu order 2 baris menu -> 2 objek response (TIDAK dikelompokkan per order)");
     assert.equal(
-      hasil.every((r) => r.orderId === ORDER && r.tanggal === "2026-07-12"),
+      hasil.every((r) => r.orderId === ORDER && r.tanggal === "2099-07-12"),
       true,
       "kedua objek membawa identitas order yang sama",
     );
@@ -303,7 +310,7 @@ test("listBelumDiproses: urutan ORDER BY transaction_date DESC, platform, order_
     // Tanggal lebih baru untuk PLATFORM_B -> harus di ATAS walau nama
     // platform-nya lebih besar secara alfabet (tanggal adalah kunci PERTAMA).
     await insertLog(client, {
-      tanggal: "2026-07-20",
+      tanggal: "2099-07-20",
       orderId: "TEST-BD-ORD-B1",
       itemName: "B Baru",
       platform: PLATFORM_B,
@@ -311,35 +318,124 @@ test("listBelumDiproses: urutan ORDER BY transaction_date DESC, platform, order_
     // Satu tanggal, dua platform, order_id sengaja dibuat urutannya terbalik
     // dari urutan insert supaya bukan sekadar urutan fisik tabel.
     await insertLog(client, {
-      tanggal: "2026-07-15",
+      tanggal: "2099-07-15",
       orderId: "TEST-BD-ORD-Z",
       itemName: "A Z",
       platform: PLATFORM,
     });
     await insertLog(client, {
-      tanggal: "2026-07-15",
+      tanggal: "2099-07-15",
       orderId: "TEST-BD-ORD-A",
       itemName: "A A",
       platform: PLATFORM,
     });
     await insertLog(client, {
-      tanggal: "2026-07-15",
+      tanggal: "2099-07-15",
       orderId: "TEST-BD-ORD-B0",
       itemName: "B pada tanggal sama",
       platform: PLATFORM_B,
     });
 
-    const hasil = milikFixture(await listBelumDiproses(client, {}));
+    const hasil = milikFixture((await listBelumDiproses(client, {})).rows);
 
     assert.deepEqual(
       hasil.map((r) => `${r.tanggal}|${r.platform}|${r.orderId}`),
       [
-        `2026-07-20|${PLATFORM_B}|TEST-BD-ORD-B1`,
-        `2026-07-15|${PLATFORM}|TEST-BD-ORD-A`,
-        `2026-07-15|${PLATFORM}|TEST-BD-ORD-Z`,
-        `2026-07-15|${PLATFORM_B}|TEST-BD-ORD-B0`,
+        `2099-07-20|${PLATFORM_B}|TEST-BD-ORD-B1`,
+        `2099-07-15|${PLATFORM}|TEST-BD-ORD-A`,
+        `2099-07-15|${PLATFORM}|TEST-BD-ORD-Z`,
+        `2099-07-15|${PLATFORM_B}|TEST-BD-ORD-B0`,
       ],
       "tanggal DESC dulu, lalu platform ASC, lalu order_id ASC",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Paginasi (2026-10-30): per ORDER, bukan per baris -- satu order dengan
+// banyak baris menu tidak boleh terpotong di tengah antar halaman.
+// ---------------------------------------------------------------------------
+
+test("listBelumDiproses: limit membatasi jumlah ORDER, satu order dengan banyak baris tidak terpotong", async () => {
+  await withRollback(async (client) => {
+    const ORDER = "TEST-BD-ORD-PAGINASI-BANYAK-BARIS";
+    await insertLog(client, { tanggal: "2099-07-01", orderId: ORDER, itemName: "Item 1" });
+    await insertLog(client, { tanggal: "2099-07-01", orderId: ORDER, itemName: "Item 2" });
+    await insertLog(client, { tanggal: "2099-07-01", orderId: ORDER, itemName: "Item 3" });
+
+    const hasil = await listBelumDiproses(client, { limit: 1 });
+    const milik = milikFixture(hasil.rows);
+
+    assert.equal(milik.length, 3, "1 order dengan 3 baris harus utuh 3 baris walau limit: 1 (artinya 1 ORDER)");
+    assert.ok(hasil.totalOrder >= 1, "totalOrder menghitung order, bukan baris");
+  });
+});
+
+test("listBelumDiproses: offset melompati N order pertama, totalOrder konsisten di semua halaman", async () => {
+  await withRollback(async (client) => {
+    await insertLog(client, { tanggal: "2099-07-01", orderId: "TEST-BD-ORD-OFFSET-1", itemName: "Satu" });
+    await insertLog(client, { tanggal: "2099-07-01", orderId: "TEST-BD-ORD-OFFSET-2", itemName: "Dua" });
+    await insertLog(client, { tanggal: "2099-07-01", orderId: "TEST-BD-ORD-OFFSET-3", itemName: "Tiga" });
+
+    const semua = milikFixture((await listBelumDiproses(client, {})).rows);
+    assert.equal(semua.length, 3);
+
+    const halamanPertama = await listBelumDiproses(client, { limit: 1, offset: 0 });
+    const halamanKedua = await listBelumDiproses(client, { limit: 1, offset: 1 });
+    const orderPertama = milikFixture(halamanPertama.rows)[0]?.orderId;
+    const orderKedua = milikFixture(halamanKedua.rows)[0]?.orderId;
+
+    assert.notEqual(orderPertama, orderKedua, "offset harus menggeser ke order berikutnya");
+    assert.equal(halamanPertama.totalOrder, halamanKedua.totalOrder, "totalOrder tidak ikut berkurang karena offset");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// itemType & sudahTerpetakan (2026-10-30): dipakai frontend menandai status
+// "Perlu ditinjau" (refund) / "Tertahan" (belum terpetakan) per order.
+// ---------------------------------------------------------------------------
+
+test("listBelumDiproses: itemType dibawa apa adanya (menu/addon/refund)", async () => {
+  await withRollback(async (client) => {
+    await insertLog(client, {
+      tanggal: "2099-07-01",
+      orderId: "TEST-BD-ORD-REFUND",
+      itemName: "Barang Direfund",
+      itemType: "refund",
+    });
+
+    const hasil = milikFixture((await listBelumDiproses(client, {})).rows);
+    assert.equal(hasil[0]?.itemType, "refund");
+  });
+});
+
+test("listBelumDiproses: sudahTerpetakan true HANYA kalau ada baris salessync_item_mapping berstatus 'dipetakan' untuk (platform, menuId) yang sama", async () => {
+  await withRollback(async (client) => {
+    const KODE_TERPETAKAN = "TEST-BD-EXT-SUDAH-PETA";
+    await client.query(
+      `INSERT INTO salessync_item_mapping (platform, kode_eksternal, nama_eksternal, kode_menu, status)
+       VALUES ($1, $2, 'Nama Lama', 'M-001', 'dipetakan')`,
+      [PLATFORM, KODE_TERPETAKAN],
+    );
+
+    await insertLog(client, {
+      tanggal: "2099-07-01",
+      orderId: "TEST-BD-ORD-SUDAH-PETA",
+      itemName: "Item Terpetakan",
+      menuId: KODE_TERPETAKAN,
+    });
+    await insertLog(client, {
+      tanggal: "2099-07-01",
+      orderId: "TEST-BD-ORD-BELUM-PETA",
+      itemName: "Item Belum Terpetakan",
+      menuId: "TEST-BD-EXT-BELUM-PETA-SAMA-SEKALI",
+    });
+
+    const hasil = milikFixture((await listBelumDiproses(client, {})).rows);
+    const sudah = hasil.find((r) => r.orderId === "TEST-BD-ORD-SUDAH-PETA");
+    const belum = hasil.find((r) => r.orderId === "TEST-BD-ORD-BELUM-PETA");
+
+    assert.equal(sudah?.sudahTerpetakan, true);
+    assert.equal(belum?.sudahTerpetakan, false);
   });
 });

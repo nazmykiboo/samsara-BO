@@ -4,6 +4,7 @@ import {
   authenticate,
   authenticateByPin,
   createUser,
+  gantiKredensialSendiri,
   listActiveStafByLocation,
   listUsers,
   resetCredential,
@@ -11,8 +12,8 @@ import {
 } from "./users.js";
 import { isLockedOut, recordLoginAttempt } from "./rate-limit.js";
 import { signAuthToken } from "./jwt.js";
-import { getAuthUser, requireAuth, requirePermission } from "./permissions.js";
-import { ROLES } from "./types.js";
+import { getAuthUser, requireAuth, requireGantiKredensialDulu, requirePermission } from "./permissions.js";
+import { ROLES, type AuthUser } from "./types.js";
 
 function asyncHandler(fn: (req: Request, res: Response) => Promise<void>) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -131,6 +132,7 @@ export function createAuthRouter(): Router {
   router.post(
     "/users",
     requireAuth,
+    requireGantiKredensialDulu,
     requirePermission("user.manage"),
     asyncHandler(async (req, res) => {
       const { name, role, locationIds, username, password, pin } = req.body ?? {};
@@ -160,6 +162,7 @@ export function createAuthRouter(): Router {
   router.get(
     "/users",
     requireAuth,
+    requireGantiKredensialDulu,
     requirePermission("user.manage"),
     asyncHandler(async (req, res) => {
       const client = await pool.connect();
@@ -174,6 +177,7 @@ export function createAuthRouter(): Router {
   router.patch(
     "/users/:id",
     requireAuth,
+    requireGantiKredensialDulu,
     requirePermission("user.manage"),
     asyncHandler(async (req, res) => {
       const { name, isActive, locationIds, role, nomorWhatsapp } = req.body ?? {};
@@ -209,18 +213,90 @@ export function createAuthRouter(): Router {
   router.post(
     "/users/:id/reset",
     requireAuth,
+    requireGantiKredensialDulu,
     requirePermission("user.manage"),
     asyncHandler(async (req, res) => {
       const userId = Number(req.params.id);
+      const owner = getAuthUser(req);
+      // Body opsional {pinManual?, passwordManual?} (2026-10-30) -- owner boleh ketik
+      // kredensial sementara sendiri, atau biarkan kosong untuk auto-generate seperti
+      // sebelumnya. Validasi pola lemah/panjang dilakukan di resetCredential.
+      const input = {
+        pinManual: typeof req.body?.pinManual === "string" ? req.body.pinManual : undefined,
+        passwordManual: typeof req.body?.passwordManual === "string" ? req.body.passwordManual : undefined,
+      };
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const result = await resetCredential(client, userId);
+        const result = await resetCredential(client, userId, input, owner.id);
         await client.query("COMMIT");
         res.json(result);
       } catch (err) {
         await client.query("ROLLBACK");
         throw err;
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  // Ganti kredensial MILIK SENDIRI (2026-10-30) -- satu-satunya endpoint yang tetap
+  // diizinkan selama `wajib_ganti_kredensial` aktif (lihat requireGantiKredensialDulu,
+  // core/src/server/build-server.ts), tapi juga bisa dipakai kapan saja secara sukarela.
+  // Rate-limit: method rate-limit DIGABUNG ke "password"/"pin" yang sudah ada (bukan nilai
+  // method baru) -- isLockedOut() memang sudah menggabungkan kedua metode per user, jadi
+  // menambah value baru ke CHECK constraint core_login_attempts tidak perlu.
+  router.post(
+    "/ganti-kredensial",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getAuthUser(req);
+      const kredensialLama = req.body?.kredensialLama;
+      const kredensialBaru = req.body?.kredensialBaru;
+      if (!kredensialLama || !kredensialBaru) {
+        res.status(400).json({ error: "kredensialLama dan kredensialBaru wajib diisi" });
+        return;
+      }
+
+      const method: "password" | "pin" = user.role === "staf" ? "pin" : "password";
+
+      const client = await pool.connect();
+      try {
+        if (await isLockedOut(client, user.id)) {
+          res.status(429).json({ error: LOCKOUT_MESSAGE });
+          return;
+        }
+
+        let result: Awaited<ReturnType<typeof gantiKredensialSendiri>>;
+        try {
+          await client.query("BEGIN");
+          result = await gantiKredensialSendiri(client, user.id, kredensialLama, kredensialBaru);
+          await client.query("COMMIT");
+        } catch (err) {
+          await client.query("ROLLBACK");
+          // Percobaan gagal TETAP dicatat (statement sendiri, di luar transaksi yang
+          // baru di-rollback) supaya ikut terhitung ke rate-limit 5x/15menit.
+          await recordLoginAttempt(client, { userId: user.id, username: user.username, method, success: false });
+          res.status(401).json({ error: err instanceof Error ? err.message : "Gagal ganti kredensial." });
+          return;
+        }
+        await recordLoginAttempt(client, { userId: user.id, username: user.username, method, success: true });
+
+        // Dibangun ULANG dari field AuthUser yang eksplisit (BUKAN `{...user, ...}`) --
+        // `user` di sini adalah payload JWT yang sudah di-decode, yang juga membawa
+        // `iat`/`exp` bawaan jsonwebtoken. Spread langsung akan membuat `signAuthToken`
+        // menolak ("payload already has an exp property") karena `jwt.sign` menganggap
+        // `exp` yang sudah ada sebagai konflik dengan opsi `expiresIn`.
+        const updated: AuthUser = {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          allLocations: user.allLocations,
+          locationIds: user.locationIds,
+          tokenVersion: result.newTokenVersion,
+          wajibGantiKredensial: false,
+        };
+        res.json({ token: signAuthToken(updated), user: updated });
       } finally {
         client.release();
       }

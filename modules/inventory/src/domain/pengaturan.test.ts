@@ -22,6 +22,7 @@ function fakeUser(role: AuthUser["role"]): AuthUser {
     allLocations: role === "owner" || role === "manajer_ops",
     locationIds: [],
     tokenVersion: 0,
+    wajibGantiKredensial: false,
   };
 }
 

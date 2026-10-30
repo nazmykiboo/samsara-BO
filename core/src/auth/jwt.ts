@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import type { StringValue } from "ms";
 import type { AuthUser } from "./types.js";
 
 function getJwtSecret(): string {
@@ -11,10 +12,17 @@ function getJwtSecret(): string {
   return secret;
 }
 
-const TOKEN_TTL = "12h";
+const TOKEN_TTL: StringValue = "12h";
 
-export function signAuthToken(user: AuthUser): string {
-  return jwt.sign(user, getJwtSecret(), { expiresIn: TOKEN_TTL });
+/**
+ * @param ttlOverride Dipakai HANYA oleh pemanggil internal (identitas
+ *   `sistem_otomatis`, lihat `core/src/auth/types.ts` dan
+ *   `modules/sales-sync/src/domain/otomatis.ts`) untuk token umur sangat
+ *   pendek (~60 detik) -- token login manusia biasa SELALU pakai
+ *   `TOKEN_TTL` default, jangan diubah di pemanggil lain.
+ */
+export function signAuthToken(user: AuthUser, ttlOverride?: StringValue): string {
+  return jwt.sign(user, getJwtSecret(), { expiresIn: ttlOverride ?? TOKEN_TTL });
 }
 
 export function verifyAuthToken(token: string): AuthUser {

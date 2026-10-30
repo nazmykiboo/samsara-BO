@@ -173,6 +173,7 @@ export function ProsesSinkronisasiSection({
             {hasil.transaksiDibuat === 0 &&
             hasil.dilewatiSebelumTanggalMulai.length === 0 &&
             hasil.dilewatiBelumTerpetakan.length === 0 &&
+            hasil.perluDitinjau.length === 0 &&
             hasil.channelTidakDikenal.length === 0 &&
             hasil.gagal.length === 0 ? (
               <p className="mt-1 text-sm text-emerald-800">
@@ -203,6 +204,15 @@ export function ProsesSinkronisasiSection({
                   Buka daftar item belum dipetakan
                 </Button>
               }
+            />
+          ) : null}
+
+          {hasil.perluDitinjau.length > 0 ? (
+            <DaftarOrder
+              nada="amber"
+              judul={`${hasil.perluDitinjau.length} order perlu ditinjau manual (ada retur/refund)`}
+              catatan="Order ini TIDAK dipotong dari stok sama sekali, dan tidak akan otomatis terpotong di proses berikutnya -- sistem belum bisa menghitung retur/refund secara otomatis. Periksa manual dan sesuaikan stoknya lewat halaman Stok kalau memang perlu."
+              orders={hasil.perluDitinjau}
             />
           ) : null}
 

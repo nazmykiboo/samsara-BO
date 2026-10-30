@@ -11,6 +11,10 @@ interface AuthContextValue {
   login: (username: string, password: string) => Promise<void>;
   loginPin: (userId: string, pin: string) => Promise<void>;
   logout: () => void;
+  /** Simpan sesi BARU tanpa panggilan login/loginPin (2026-10-30) -- dipakai setelah
+   * `gantiKredensialSendiri` berhasil (endpoint itu sudah balas token+user baru
+   * langsung, tidak perlu login ulang). */
+  setSession: (result: LoginResponse) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -53,9 +57,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
+  const setSession = useCallback((result: LoginResponse) => {
+    persistSession(result);
+    setUser(result.user);
+  }, []);
+
   const value = useMemo<AuthContextValue>(
-    () => ({ user, isAuthenticated: user !== null, login, loginPin, logout }),
-    [user, login, loginPin, logout],
+    () => ({ user, isAuthenticated: user !== null, login, loginPin, logout, setSession }),
+    [user, login, loginPin, logout, setSession],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

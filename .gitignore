@@ -17,3 +17,8 @@ akun-integrasi
 akun-owner
 *credential*
 *kredensial*
+# Pengecualian (2026-10-30): dua file KODE SUMBER yang namanya kebetulan
+# memuat kata itu karena memang mengimplementasikan fitur ganti/reset
+# kredensial -- bukan file dump nilai kredensial, aman di-commit.
+!apps/api/src/kredensial.test.ts
+!apps/web/src/pages/GantiKredensialPage.tsx

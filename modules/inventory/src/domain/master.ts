@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 import { logFieldChanges, writeAuditLog } from "@samsara/core";
-import { kategoriExists, kategoriMenuAktifExists, satuanExists } from "./referensi.js";
+import { kategoriExists, kategoriMenuAktifExists, namaSudahDipakai, satuanExists } from "./referensi.js";
 import { computeBaseMenuHppById, computePaketHppById, isPaketMenu } from "./hpp.js";
 
 /**
@@ -143,6 +143,8 @@ export async function listItems(client: PoolClient): Promise<ItemListRow[]> {
 }
 
 export interface UpdateItemInput {
+  /** Rename item, kode TETAP (2026-10-30). Unik tanpa besar/kecil & spasi tepi -- lihat `namaSudahDipakai`. */
+  name?: string;
   category?: string;
   recipeUnit?: string;
   purchaseUnit?: string;
@@ -154,7 +156,7 @@ export interface UpdateItemInput {
   status?: "active" | "pending_data";
 }
 
-const ITEM_AUDITED_FIELDS = ["harga_master", "purchase_to_recipe_factor"];
+const ITEM_AUDITED_FIELDS = ["name", "harga_master", "purchase_to_recipe_factor"];
 
 export async function updateItem(client: PoolClient, kode: string, input: UpdateItemInput, userId?: number): Promise<void> {
   if (input.category !== undefined && !(await kategoriExists(client, input.category))) {
@@ -167,14 +169,25 @@ export async function updateItem(client: PoolClient, kode: string, input: Update
     throw new Error(`Satuan "${input.purchaseUnit}" tidak ada di master satuan. Tambahkan dulu lewat Master Satuan.`);
   }
 
-  const { rows } = await client.query<Record<string, unknown> & { id: number }>(
+  const { rows } = await client.query<Record<string, unknown> & { id: number; name: string }>(
     `SELECT * FROM inventory_items WHERE kode = $1`,
     [kode],
   );
   const old = rows[0];
   if (!old) throw new Error(`Item dengan kode "${kode}" tidak ditemukan`);
 
+  const namaBaru = input.name !== undefined ? input.name.trim() : old.name;
+  if (input.name !== undefined) {
+    if (!namaBaru) throw new Error("Nama item tidak boleh kosong");
+    if (namaBaru.toLowerCase() !== old.name.trim().toLowerCase()) {
+      if (await namaSudahDipakai(client, "inventory_items", "name", namaBaru, old.id)) {
+        throw new Error(`Nama "${namaBaru}" sudah dipakai item lain -- pilih nama lain.`);
+      }
+    }
+  }
+
   const newRow = {
+    name: namaBaru,
     category: input.category ?? old.category,
     recipe_unit: input.recipeUnit ?? old.recipe_unit,
     purchase_unit: input.purchaseUnit ?? old.purchase_unit,
@@ -188,10 +201,11 @@ export async function updateItem(client: PoolClient, kode: string, input: Update
 
   await client.query(
     `UPDATE inventory_items
-     SET category = $1, recipe_unit = $2, purchase_unit = $3, purchase_to_recipe_factor = $4, harga_master = $5,
-         min_stok = $6, shelf_life_hari = $7, catatan = $8, status = $9, updated_at = now()
-     WHERE id = $10`,
+     SET name = $1, category = $2, recipe_unit = $3, purchase_unit = $4, purchase_to_recipe_factor = $5, harga_master = $6,
+         min_stok = $7, shelf_life_hari = $8, catatan = $9, status = $10, updated_at = now()
+     WHERE id = $11`,
     [
+      newRow.name,
       newRow.category,
       newRow.recipe_unit,
       newRow.purchase_unit,
@@ -578,6 +592,46 @@ export async function createMenu(client: PoolClient, input: CreateMenuInput, use
     newValue: input,
   });
   return { id };
+}
+
+export interface UpdateMenuInput {
+  /** Rename menu, kode TETAP (2026-10-30). Unik tanpa besar/kecil & spasi tepi. */
+  name: string;
+}
+
+/**
+ * Rename menu -- SENGAJA cuma `name` (owner minta rename, bukan endpoint
+ * update-menu-umum; field lain menu sudah punya jalur sendiri:
+ * `updateMenuResep` untuk resep, `deactivateMenu` untuk nonaktifkan).
+ * Riwayat transaksi & pemetaan sales-sync lama tetap nyambung karena semua
+ * itu merujuk `kode`, bukan `name`.
+ */
+export async function updateMenu(client: PoolClient, kode: string, input: UpdateMenuInput, userId?: number): Promise<void> {
+  const { rows } = await client.query<{ id: number; name: string }>(
+    `SELECT id, name FROM inventory_menu WHERE kode = $1`,
+    [kode],
+  );
+  const old = rows[0];
+  if (!old) throw new Error(`Menu dengan kode "${kode}" tidak ditemukan`);
+
+  const namaBaru = input.name.trim();
+  if (!namaBaru) throw new Error("Nama menu tidak boleh kosong");
+  if (namaBaru.toLowerCase() !== old.name.trim().toLowerCase()) {
+    if (await namaSudahDipakai(client, "inventory_menu", "name", namaBaru, old.id)) {
+      throw new Error(`Nama "${namaBaru}" sudah dipakai menu lain -- pilih nama lain.`);
+    }
+  }
+
+  const newRow = { name: namaBaru };
+  await client.query(`UPDATE inventory_menu SET name = $1, updated_at = now() WHERE id = $2`, [namaBaru, old.id]);
+  await logFieldChanges(client, {
+    userId: userId ?? null,
+    tableName: "inventory_menu",
+    recordId: old.id,
+    oldRow: old,
+    newRow,
+    fields: ["name"],
+  });
 }
 
 export interface DuplicateMenuInput {

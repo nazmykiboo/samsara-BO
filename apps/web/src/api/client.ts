@@ -62,6 +62,22 @@ function handleUnauthorized(path: string, message: string): void {
   if (window.location.pathname !== "/login") window.location.href = "/login";
 }
 
+/**
+ * Redirect paksa ke layar "Buat kredensial baru" (2026-10-30) -- dipicu 403
+ * `code: "WAJIB_GANTI_KREDENSIAL"` dari endpoint APA PUN selain
+ * `/auth/ganti-kredensial` itu sendiri (yang memang SATU-SATUNYA endpoint
+ * yang tetap diizinkan selama penanda ini aktif -- lihat
+ * `requireGantiKredensialDulu` di backend). BEDA dari `handleUnauthorized`:
+ * token & data user TIDAK dibuang (sesi tetap sah, cuma dibatasi endpoint),
+ * jadi layar barunya bisa langsung pakai token yang sama untuk memanggil
+ * `gantiKredensialSendiri`.
+ */
+function handleWajibGantiKredensial(path: string, body: ApiErrorBody | null): void {
+  if (!body || body.code !== "WAJIB_GANTI_KREDENSIAL") return;
+  if (path.includes("/auth/ganti-kredensial")) return;
+  if (window.location.pathname !== "/ganti-kredensial") window.location.href = "/ganti-kredensial";
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const token = getToken();
   const res = await fetch(path, {
@@ -77,8 +93,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const data = isJson ? await res.json() : null;
 
   if (!res.ok) {
-    const message = (data as ApiErrorBody | null)?.error ?? `Permintaan gagal (${res.status})`;
+    const errBody = data as ApiErrorBody | null;
+    const message = errBody?.error ?? `Permintaan gagal (${res.status})`;
     if (res.status === 401) handleUnauthorized(path, message);
+    if (res.status === 403) handleWajibGantiKredensial(path, errBody);
     throw new ApiError(res.status, message, data);
   }
 
@@ -113,8 +131,10 @@ export async function postCsv<T>(path: string, csvText: string): Promise<T> {
   const data = isJson ? await res.json() : null;
 
   if (!res.ok) {
-    const message = (data as ApiErrorBody | null)?.error ?? `Permintaan gagal (${res.status})`;
+    const errBody = data as ApiErrorBody | null;
+    const message = errBody?.error ?? `Permintaan gagal (${res.status})`;
     if (res.status === 401) handleUnauthorized(path, message);
+    if (res.status === 403) handleWajibGantiKredensial(path, errBody);
     throw new ApiError(res.status, message, data);
   }
 
@@ -143,8 +163,10 @@ export async function putFile<T>(path: string, file: File): Promise<T> {
   const data = isJson ? await res.json() : null;
 
   if (!res.ok) {
-    const message = (data as ApiErrorBody | null)?.error ?? `Permintaan gagal (${res.status})`;
+    const errBody = data as ApiErrorBody | null;
+    const message = errBody?.error ?? `Permintaan gagal (${res.status})`;
     if (res.status === 401) handleUnauthorized(path, message);
+    if (res.status === 403) handleWajibGantiKredensial(path, errBody);
     throw new ApiError(res.status, message, data);
   }
 

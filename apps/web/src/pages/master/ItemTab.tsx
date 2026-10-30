@@ -10,7 +10,7 @@ import { Spinner } from "../../components/ui/Spinner";
 import { RefSelect } from "../../components/RefSelect";
 import { usePermission } from "../../auth/usePermission";
 import { createItem, updateItem, deactivateItem, listItems, type CreateItemInput } from "../../api/master";
-import { createKategori, createSatuan, listKategori, listSatuan } from "../../api/referensi";
+import { createKategori, createSatuan, listKategori, listSatuan, updateKategori } from "../../api/referensi";
 import { ApiError } from "../../api/client";
 import type { ItemListItem, ItemType, RefItem } from "../../api/types";
 
@@ -25,6 +25,8 @@ interface RefListProps {
   satuanList: RefItem[];
   onCreateKategori: (name: string) => Promise<RefItem>;
   onCreateSatuan: (name: string) => Promise<RefItem>;
+  /** Rename kategori item (2026-10-30) -- SENGAJA tidak ada setara untuk satuan, di luar cakupan. */
+  onRenameKategori: (id: string | number, newName: string) => Promise<void>;
 }
 
 export function ItemTab() {
@@ -98,7 +100,21 @@ export function ItemTab() {
     return item;
   }
 
-  const refProps: RefListProps = { kategoriList, satuanList, onCreateKategori: handleCreateKategori, onCreateSatuan: handleCreateSatuan };
+  async function handleRenameKategori(id: string | number, newName: string): Promise<void> {
+    await updateKategori(String(id), { name: newName });
+    setKategoriList((prev) => prev.map((k) => (k.id === id ? { ...k, name: newName } : k)));
+    // Rename kategori bisa cascade ke `category` item lain (lihat updateKategori di backend) --
+    // daftar item disegarkan supaya kartu/baris yang menampilkan kategori ikut sinkron.
+    reload();
+  }
+
+  const refProps: RefListProps = {
+    kategoriList,
+    satuanList,
+    onCreateKategori: handleCreateKategori,
+    onCreateSatuan: handleCreateSatuan,
+    onRenameKategori: handleRenameKategori,
+  };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -168,6 +184,7 @@ function ItemDetailSheet({
   kategoriList,
   satuanList,
   onCreateKategori,
+  onRenameKategori,
   onCreateSatuan,
 }: {
   item: ItemListItem;
@@ -251,7 +268,7 @@ function ItemDetailSheet({
           <Field label="Nama">
             <Input value={name} onChange={(e) => setName(e.target.value)} required />
           </Field>
-          <RefSelect label="Kategori" options={kategoriList} value={category} onChange={setCategory} onCreate={onCreateKategori} />
+          <RefSelect label="Kategori" options={kategoriList} value={category} onChange={setCategory} onCreate={onCreateKategori} onRename={onRenameKategori} />
           <div className="grid grid-cols-2 gap-2">
             <RefSelect label="Satuan resep" options={satuanList} value={recipeUnit} onChange={setRecipeUnit} onCreate={onCreateSatuan} required />
             <RefSelect label="Satuan beli" options={satuanList} value={purchaseUnit} onChange={setPurchaseUnit} onCreate={onCreateSatuan} />
@@ -315,6 +332,7 @@ function ItemCreateSheet({
   kategoriList,
   satuanList,
   onCreateKategori,
+  onRenameKategori,
   onCreateSatuan,
 }: {
   onClose: () => void;
@@ -390,7 +408,7 @@ function ItemCreateSheet({
           <Field label="Nama (harus unik)">
             <Input value={name} onChange={(e) => setName(e.target.value)} required />
           </Field>
-          <RefSelect label="Kategori" options={kategoriList} value={category} onChange={setCategory} onCreate={onCreateKategori} />
+          <RefSelect label="Kategori" options={kategoriList} value={category} onChange={setCategory} onCreate={onCreateKategori} onRename={onRenameKategori} />
           <div className="grid grid-cols-2 gap-2">
             <RefSelect label="Satuan resep" options={satuanList} value={recipeUnit} onChange={setRecipeUnit} onCreate={onCreateSatuan} required />
             <RefSelect label="Satuan beli (opsional)" options={satuanList} value={purchaseUnit} onChange={setPurchaseUnit} onCreate={onCreateSatuan} />

@@ -11,6 +11,10 @@ import {
 import { listBelumDiproses } from "../domain/belum-diproses.js";
 import { listItemMapping, setItemMapping, syncItemMappingFromLog } from "../domain/item-mapping.js";
 import { prosesSinkronisasi } from "../domain/proses.js";
+import { jalankanOtomatisJikaAktif } from "../domain/otomatis.js";
+import { pratinjauProses } from "../domain/pratinjau.js";
+import { getPengaturanOtomatis, setPengaturanOtomatis } from "../domain/settings.js";
+import { getImporLogTerakhirPerJenis, getOtomatisLogTerakhir } from "../domain/status.js";
 
 async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
@@ -64,9 +68,25 @@ function ambilCsv(req: Request, res: Response): string | null {
   return body;
 }
 
+const JENIS_IMPOR = ["log-penjualan", "transaksi", "raw-majoo", "biaya-platform"] as const;
+type JenisImpor = (typeof JENIS_IMPOR)[number];
+
+async function tulisLogImpor(jenis: JenisImpor, hasil: HasilImport): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `INSERT INTO salessync_import_log (jenis_impor, dibuat, diperbarui, dilewati, jumlah_error, contoh_pesan_error)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [jenis, hasil.dibuat, hasil.diperbarui, hasil.dilewati, hasil.errors.length, hasil.errors[0]?.pesan ?? null],
+    );
+  } finally {
+    client.release();
+  }
+}
+
 function endpointImport(
   router: Router,
-  path: string,
+  jenis: JenisImpor,
   importer: (client: PoolClient, text: string) => Promise<HasilImport>,
 ): void {
   // Urutan middleware: body parser CSV DULU, baru requirePermission.
@@ -83,13 +103,25 @@ function endpointImport(
   // Inventory. owner & manajer_ops tetap ada di dua-duanya, jadi akses
   // mereka tidak berubah sama sekali.
   router.post(
-    path,
+    `/import/${jenis}`,
     csvBody(),
     requirePermission("sales_sync.import"),
     asyncHandler(async (req, res) => {
       const text = ambilCsv(req, res);
       if (text === null) return;
       const hasil = await withTransaction((client) => importer(client, text));
+      // TIDAK di-`await`: riwayat impor dan pemicu otomatis di bawah ini
+      // SENGAJA tidak menunda response ke pemanggil (n8n/browser) -- lihat
+      // catatan lengkap di domain/otomatis.ts. Kegagalan di sini (mis. tulis
+      // log gagal) tidak pernah mengubah response endpoint ini.
+      void tulisLogImpor(jenis, hasil).catch((err) => console.error("[sales-sync] gagal tulis import log:", err));
+      // Pemrosesan otomatis CUMA relevan untuk log-penjualan -- 3 jenis
+      // impor lain (transaksi/raw-majoo/biaya-platform) tidak mengisi
+      // salessync_log_penjualan, jadi tidak ada apa pun untuk diproses
+      // `prosesSinkronisasi` walau dipicu.
+      if (jenis === "log-penjualan") {
+        void jalankanOtomatisJikaAktif("impor");
+      }
       res.json(hasil);
     }),
   );
@@ -100,10 +132,10 @@ export function createRouter(): Router {
 
   // --- Import CSV arsip mentah (4 sumber) ----------------------------------
 
-  endpointImport(router, "/import/log-penjualan", importLogPenjualan);
-  endpointImport(router, "/import/transaksi", importTransaksi);
-  endpointImport(router, "/import/raw-majoo", importRawMajoo);
-  endpointImport(router, "/import/biaya-platform", importBiayaPlatform);
+  endpointImport(router, "log-penjualan", importLogPenjualan);
+  endpointImport(router, "transaksi", importTransaksi);
+  endpointImport(router, "raw-majoo", importRawMajoo);
+  endpointImport(router, "biaya-platform", importBiayaPlatform);
 
   // --- Pemetaan item eksternal -> menu internal ---------------------------
 
@@ -138,6 +170,8 @@ export function createRouter(): Router {
       const hasil = await withTransaction((client) =>
         setItemMapping(client, Number(req.params.id), kodeMenu.trim(), Number(user.id)),
       );
+      // Latar belakang, tidak di-`await` -- lihat catatan di endpointImport.
+      void jalankanOtomatisJikaAktif("pemetaan");
       res.json(hasil);
     }),
   );
@@ -153,11 +187,17 @@ export function createRouter(): Router {
     asyncHandler(async (req, res) => {
       const client = await pool.connect();
       try {
-        const rows = await listBelumDiproses(client, {
+        const limit = Number(req.query.limit);
+        const offset = Number(req.query.offset);
+        const hasil = await listBelumDiproses(client, {
           tanggalMulai: typeof req.query.tanggal_mulai === "string" ? req.query.tanggal_mulai : undefined,
           tanggalSelesai: typeof req.query.tanggal_selesai === "string" ? req.query.tanggal_selesai : undefined,
+          limit: Number.isFinite(limit) ? limit : undefined,
+          offset: Number.isFinite(offset) ? offset : undefined,
         });
-        res.json(rows);
+        // {rows, total} -- BUKAN array flat lagi, lihat catatan paginasi di
+        // belum-diproses.ts. `total` = jumlah ORDER, bukan baris.
+        res.json({ rows: hasil.rows, total: hasil.totalOrder });
       } finally {
         client.release();
       }
@@ -185,6 +225,78 @@ export function createRouter(): Router {
       // ../domain/proses.ts.
       const hasil = await prosesSinkronisasi(authHeader, Number(user.id), tanggalMulai);
       res.json(hasil);
+    }),
+  );
+
+  // --- Pemrosesan otomatis: pengaturan, pratinjau, status -----------------
+
+  router.get(
+    "/otomatis/pengaturan",
+    requirePermission("sales_sync.manage"),
+    asyncHandler(async (req, res) => {
+      const client = await pool.connect();
+      try {
+        res.json(await getPengaturanOtomatis(client));
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  router.put(
+    "/otomatis/pengaturan",
+    requirePermission("sales_sync.manage"),
+    asyncHandler(async (req, res) => {
+      const user = getAuthUser(req);
+      const body = req.body ?? {};
+      const aktif = typeof body.aktif === "boolean" ? body.aktif : undefined;
+      // `tanggalMulai: null` SENGAJA diterima (beda dari `undefined`) untuk
+      // mengosongkan pengaturan -- lihat setPengaturanOtomatis.
+      const tanggalMulai =
+        typeof body.tanggalMulai === "string" || body.tanggalMulai === null ? body.tanggalMulai : undefined;
+      const hasil = await withTransaction((client) =>
+        setPengaturanOtomatis(client, Number(user.id), { aktif, tanggalMulai }),
+      );
+      res.json(hasil);
+    }),
+  );
+
+  router.get(
+    "/otomatis/pratinjau",
+    requirePermission("sales_sync.manage"),
+    asyncHandler(async (req, res) => {
+      const tanggalMulai = typeof req.query.tanggal_mulai === "string" ? req.query.tanggal_mulai : undefined;
+      res.json(await pratinjauProses(tanggalMulai));
+    }),
+  );
+
+  router.get(
+    "/otomatis/status",
+    requirePermission("sales_sync.manage"),
+    asyncHandler(async (req, res) => {
+      const pengaturan = await (async () => {
+        const client = await pool.connect();
+        try {
+          return await getPengaturanOtomatis(client);
+        } finally {
+          client.release();
+        }
+      })();
+      const [otomatisTerakhir, imporTerakhir, pratinjau] = await Promise.all([
+        getOtomatisLogTerakhir(),
+        getImporLogTerakhirPerJenis(),
+        // Tanpa tanggal_mulai_otomatis, pratinjau tidak bisa dihitung (sama
+        // seperti /proses yang mewajibkan tanggal) -- kirim null, bukan error,
+        // supaya dashboard tetap tampil sebelum owner mengisi pengaturan.
+        pengaturan.tanggalMulai ? pratinjauProses(pengaturan.tanggalMulai) : Promise.resolve(null),
+      ]);
+      res.json({
+        pengaturan,
+        otomatisTerakhir,
+        imporTerakhir,
+        tertahan: pratinjau?.dilewatiBelumTerpetakan.length ?? null,
+        perluDitinjau: pratinjau?.perluDitinjau.length ?? null,
+      });
     }),
   );
 

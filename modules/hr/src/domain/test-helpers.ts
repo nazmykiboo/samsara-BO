@@ -28,6 +28,7 @@ export function fakeUser(partial: Partial<AuthUser> & Pick<AuthUser, "id" | "rol
     // Tidak relevan di domain layer (cuma dibandingkan middleware requireAuth
     // saat request HTTP masuk) -- 0 = baseline user baru.
     tokenVersion: 0,
+    wajibGantiKredensial: false,
     ...partial,
   };
 }

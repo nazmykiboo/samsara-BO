@@ -11,6 +11,7 @@ import {
   upsertHargaChannel,
 } from "../domain/harga-channel.js";
 import {
+  JENIS_MUTASI_LAIN_IZIN_STAF,
   JENIS_MUTASI_LAIN_VALID,
   createMutasiLain,
   createOpname,
@@ -38,6 +39,7 @@ import {
   listMenu,
   listResepProduksi,
   updateItem,
+  updateMenu,
   updateMenuResep,
   updateResepProduksi,
 } from "../domain/master.js";
@@ -692,17 +694,24 @@ export function createRouter(): Router {
         return;
       }
       const lokasiId = Number(req.query.lokasi);
+      const limit = Number(req.query.limit);
+      const offset = Number(req.query.offset);
       const client = await pool.connect();
       try {
         const user = getAuthUser(req);
-        const rows = await getDetailTransaksiPenjualan(client, user, {
+        const hasil = await getDetailTransaksiPenjualan(client, user, {
           tanggalMulai,
           tanggalSelesai,
           channel: optionalString(req.query.channel),
           kodeMenu: optionalString(req.query.kode_menu),
           lokasiId: Number.isFinite(lokasiId) ? lokasiId : undefined,
+          limit: Number.isFinite(limit) ? limit : undefined,
+          offset: Number.isFinite(offset) ? offset : undefined,
         });
-        res.json(rows);
+        // Bentuk response {rows, total} (BUKAN array flat seperti sebelumnya)
+        // -- paginasi per-transaksi, lihat getDetailTransaksiPenjualan. `total`
+        // = jumlah TRANSAKSI yang cocok filter, bukan jumlah baris menu.
+        res.json({ rows: hasil.rows, total: hasil.totalTransaksi });
       } finally {
         client.release();
       }
@@ -784,6 +793,18 @@ export function createRouter(): Router {
       if (!req.body?.jenis || !JENIS_MUTASI_LAIN_VALID.includes(req.body.jenis)) {
         res.status(400).json({
           error: `Body 'jenis' wajib diisi dan harus salah satu dari: ${JENIS_MUTASI_LAIN_VALID.join(", ")}`,
+        });
+        return;
+      }
+      // Staf hanya boleh jenis pengurangan sehari-hari (2026-10-30) --
+      // retur_supplier/koreksi_tambah perlu supervisor ke atas. Dicek di
+      // router (bukan domain/permission registry) karena ini pembatasan
+      // NILAI body, bukan akses endpoint itu sendiri -- staf tetap boleh
+      // POST ke endpoint ini, cuma jenis-nya yang dibatasi.
+      if (user.role === "staf" && !JENIS_MUTASI_LAIN_IZIN_STAF.includes(req.body.jenis)) {
+        res.status(403).json({
+          error:
+            "Staf hanya boleh mencatat mutasi jenis pengurangan standar (waste, hilang, makan staf, sampel) -- jenis ini perlu supervisor ke atas",
         });
         return;
       }
@@ -912,6 +933,18 @@ export function createRouter(): Router {
       const user = getAuthUser(req);
       const result = await withTransaction((client) => createMenu(client, req.body, user.id));
       res.status(201).json(result);
+    }),
+  );
+
+  // Rename menu, kode TETAP (2026-10-30) -- permission sama dengan POST /menu
+  // (master_menu.edit). Scope SENGAJA cuma `name` (lihat UpdateMenuInput).
+  router.patch(
+    "/menu/:kode",
+    requirePermission("master_menu.edit"),
+    asyncHandler(async (req, res) => {
+      const user = getAuthUser(req);
+      await withTransaction((client) => updateMenu(client, req.params.kode, req.body, user.id));
+      res.json({ kode: req.params.kode });
     }),
   );
 

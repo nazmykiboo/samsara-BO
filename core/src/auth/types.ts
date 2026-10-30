@@ -6,10 +6,24 @@
  * "integrasi" TIDAK PERNAH muncul di roles[] action lain sudah cukup untuk
  * menolaknya di seluruh endpoint lain. Lihat migrasi
  * `core/src/db/migrations/0008_add_integrasi_role.sql`.
+ *
+ * `sistem_otomatis` JUGA bukan role manusia: identitas internal pertama di
+ * aplikasi ini, dipakai server MEMANGGIL DIRINYA SENDIRI (pemrosesan
+ * sinkronisasi penjualan otomatis, lihat `modules/sales-sync/src/domain/otomatis.ts`)
+ * lewat token JWT umur sangat pendek (~60 detik) yang di-mint saat dipakai,
+ * BUKAN login interaktif -- login untuk role ini DIBLOK eksplisit di
+ * `authenticate()` (`core/src/auth/users.ts`) sebagai pengaman kedua di luar
+ * whitelist permission. Sengaja role TERPISAH dari `integrasi` (bukan
+ * reuse): `integrasi` by design TIDAK PERNAH boleh muncul di roles[] action
+ * manapun selain `sales_sync.import` (lihat komentar di atas) -- menambahkan
+ * `penjualan.create` ke situ akan melanggar jaminan itu. Satu-satunya
+ * permission yang didaftarkan role ini: `penjualan.create` di
+ * `modules/inventory/module.json`. Lihat migrasi
+ * `core/src/db/migrations/0011_add_sistem_otomatis_role.sql`.
  */
-export type Role = "owner" | "manajer_ops" | "supervisor" | "staf" | "integrasi";
+export type Role = "owner" | "manajer_ops" | "supervisor" | "staf" | "integrasi" | "sistem_otomatis";
 
-export const ROLES: Role[] = ["owner", "manajer_ops", "supervisor", "staf", "integrasi"];
+export const ROLES: Role[] = ["owner", "manajer_ops", "supervisor", "staf", "integrasi", "sistem_otomatis"];
 
 /** Lingkup lokasi untuk satu role pada satu aksi. */
 export type LocationScope = "any" | "own";
@@ -68,4 +82,18 @@ export interface AuthUser {
    * `!==` langsung, tanpa `String(...)`/`Number(...)` dulu.
    */
   tokenVersion: number;
+  /**
+   * Kredensial user ini baru saja di-reset owner (lihat `resetCredential`)
+   * dan BELUM diganti sendiri -- selama `true`, middleware global
+   * `requireGantiKredensialDulu` (`core/src/server/build-server.ts`)
+   * menolak 403 semua endpoint SELAIN `POST /api/auth/ganti-kredensial`.
+   * Dibawa di payload JWT (ikut otomatis karena `jwt.sign(user, ...)`
+   * men-sign SELURUH object `AuthUser`) -- SELALU segar begitu user login
+   * ulang, karena reset SELALU menaikkan `token_version` duluan (token lama
+   * mati lebih dulu lewat mekanisme revoke yang sudah ada, lihat
+   * `tokenVersion` di atas), jadi tidak ada window token lama yang belum
+   * tahu penanda ini aktif. Lihat
+   * `core/src/db/migrations/0012_add_wajib_ganti_kredensial.sql`.
+   */
+  wajibGantiKredensial: boolean;
 }

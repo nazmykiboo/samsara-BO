@@ -15,6 +15,7 @@ import {
   listMenu,
   listResepProduksi,
   updateItem,
+  updateMenu,
   updateMenuResep,
   updateResepProduksi,
 } from "./master.js";
@@ -163,6 +164,69 @@ test("updateItem: recipeUnit bisa diubah (sebelumnya tidak didukung) dan tetap d
     assert.equal(rows[0].recipe_unit, "kg");
 
     await assert.rejects(() => updateItem(client, "TEST-014", { recipeUnit: "satuan-tidak-ada" }), /tidak ada di master satuan/i);
+  });
+});
+
+test("updateItem: name bisa diubah (rename, kode TETAP), unik tanpa besar/kecil & spasi tepi, dicatat ke audit log (2026-10-30)", async () => {
+  await withRollback(async (client) => {
+    await createItem(client, { kode: "TEST-015", name: "Nama Lama Rename", type: "bahan_baku", recipeUnit: "gr" });
+    await createItem(client, { kode: "TEST-016", name: "Item Lain Rename", type: "bahan_baku", recipeUnit: "gr" });
+
+    await updateItem(client, "TEST-015", { name: "Nama Baru Rename" });
+    const { rows } = await client.query<{ name: string; kode: string }>(
+      `SELECT name, kode FROM inventory_items WHERE kode = 'TEST-015'`,
+    );
+    assert.equal(rows[0].name, "Nama Baru Rename");
+    assert.equal(rows[0].kode, "TEST-015", "kode TIDAK berubah");
+
+    const { rows: auditRows } = await client.query<{ field_name: string; old_value: string; new_value: string }>(
+      `SELECT field_name, old_value, new_value FROM core_audit_log WHERE table_name = 'inventory_items' AND field_name = 'name' ORDER BY id DESC LIMIT 1`,
+    );
+    assert.equal(auditRows[0].old_value, "Nama Lama Rename");
+    assert.equal(auditRows[0].new_value, "Nama Baru Rename");
+
+    // Case-insensitive + spasi tepi dianggap SAMA sebagai nama sendiri -- rename ke variasi
+    // kapitalisasi/spasi dari nama SENDIRI tidak boleh ditolak (bukan "bentrok dengan item lain").
+    await updateItem(client, "TEST-015", { name: "  nama baru rename  " });
+
+    // Tapi bentrok dengan nama item LAIN (case/spasi apa pun) tetap ditolak, pesan jelas.
+    await assert.rejects(
+      () => updateItem(client, "TEST-015", { name: "  ITEM lain RENAME  " }),
+      /sudah dipakai item lain/i,
+    );
+
+    await assert.rejects(() => updateItem(client, "TEST-015", { name: "   " }), /tidak boleh kosong/i);
+  });
+});
+
+test("updateMenu: rename menu, kode TETAP, unik tanpa besar/kecil & spasi tepi, dicatat ke audit log (2026-10-30)", async () => {
+  await withRollback(async (client) => {
+    await createMenu(client, { kode: "TEST-MENU-RENAME-1", name: "Menu Lama Rename" });
+    await createMenu(client, { kode: "TEST-MENU-RENAME-2", name: "Menu Lain Rename" });
+
+    await updateMenu(client, "TEST-MENU-RENAME-1", { name: "Menu Baru Rename" });
+    const { rows } = await client.query<{ name: string; kode: string }>(
+      `SELECT name, kode FROM inventory_menu WHERE kode = 'TEST-MENU-RENAME-1'`,
+    );
+    assert.equal(rows[0].name, "Menu Baru Rename");
+    assert.equal(rows[0].kode, "TEST-MENU-RENAME-1");
+
+    const { rows: auditRows } = await client.query<{ old_value: string; new_value: string }>(
+      `SELECT old_value, new_value FROM core_audit_log WHERE table_name = 'inventory_menu' AND field_name = 'name' ORDER BY id DESC LIMIT 1`,
+    );
+    assert.equal(auditRows[0].old_value, "Menu Lama Rename");
+    assert.equal(auditRows[0].new_value, "Menu Baru Rename");
+
+    await assert.rejects(
+      () => updateMenu(client, "TEST-MENU-RENAME-1", { name: "  menu LAIN rename  " }),
+      /sudah dipakai menu lain/i,
+    );
+
+    await assert.rejects(() => updateMenu(client, "TEST-MENU-RENAME-1", { name: "" }), /tidak boleh kosong/i);
+    await assert.rejects(
+      () => updateMenu(client, "TEST-MENU-TIDAK-ADA", { name: "apa saja" }),
+      /tidak ditemukan/i,
+    );
   });
 });
 

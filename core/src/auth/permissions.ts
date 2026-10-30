@@ -125,6 +125,33 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 }
 
 /**
+ * Dipasang SETELAH `requireAuth` (butuh `req.auth` sudah terisi) di SETIAP
+ * endpoint yang bukan `POST /api/auth/ganti-kredensial` itu sendiri --
+ * baik secara global (`app.use` di `build-server.ts`, untuk semua endpoint
+ * modul bisnis) maupun eksplisit di tiap route lain dalam `auth/router.ts`
+ * (`/users`, `/users/:id/reset`, dst -- route-route itu TIDAK lewat
+ * middleware global karena `/api/auth` di-mount SEBELUM `app.use(requireAuth)`
+ * global, lihat komentar di `build-server.ts`).
+ *
+ * Kredensial yang baru di-reset owner (`resetCredential`) SELALU menyalakan
+ * `wajib_ganti_kredensial` -- selama itu aktif, user WAJIB ganti kredensial
+ * sendiri dulu (`POST /api/auth/ganti-kredensial`) sebelum bisa memakai
+ * endpoint lain mana pun. `code: "WAJIB_GANTI_KREDENSIAL"` dikenali
+ * frontend untuk redirect otomatis ke layar "Buat PIN/password baru".
+ */
+export function requireGantiKredensialDulu(req: Request, res: Response, next: NextFunction): void {
+  const user = getAuthUser(req);
+  if (user.wajibGantiKredensial) {
+    res.status(403).json({
+      error: "Kredensial Anda baru direset -- ganti dulu sebelum bisa memakai menu lain.",
+      code: "WAJIB_GANTI_KREDENSIAL",
+    });
+    return;
+  }
+  next();
+}
+
+/**
  * Cek non-blocking apakah user boleh melakukan `action` -- dipakai untuk
  * FILTER FIELD di response (mis. sembunyikan HPP/margin), bukan untuk
  * menolak akses ke endpoint. Lihat `requirePermission` untuk gate akses.

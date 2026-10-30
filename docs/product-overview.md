@@ -108,17 +108,19 @@ data master ke depan, bukan dev.
 
 ## 2. Pengguna & Role
 
-Lima role terdaftar di tabel `core_roles` (diverifikasi ke
+Enam role terdaftar di tabel `core_roles` (diverifikasi ke
 `core/src/db/migrations/0001_create_auth_tables.sql` +
-`0008_add_integrasi_role.sql`, dan ke `core/src/auth/types.ts`):
+`0008_add_integrasi_role.sql` + `0011_add_sistem_otomatis_role.sql`, dan ke
+`core/src/auth/types.ts`):
 
 | Role | Jenis | Gambaran akses |
 |---|---|---|
 | `owner` | Manusia | Akses paling luas. Satu-satunya yang boleh: ubah harga jual & visibilitas menu per channel, atur metode HPP & target food cost global, kelola lokasi/channel, kelola identitas bisnis (nama+logo), kelola user (buat/edit nama-lokasi-WhatsApp/**ubah role**/nonaktifkan/reset kredensial). Juga ikut di semua permission `manajer_ops`. |
-| `manajer_ops` | Manusia | Operasional harian lintas lokasi: approve opname & pengajuan libur, kelola jadwal shift, lihat laporan harian & analitik (penjualan + operasional), kelola sinkronisasi penjualan (`sales-sync`), transaksi apa pun di lokasi mana pun. **Tidak** bisa ubah harga jual, visibilitas channel, pengaturan global, atau kelola user. |
+| `manajer_ops` | Manusia | Operasional harian lintas lokasi: approve opname & pengajuan libur, kelola jadwal shift, lihat laporan harian & analitik (penjualan + operasional), kelola sinkronisasi penjualan (`sales-sync`, termasuk nyala/mati pemrosesan otomatis), transaksi apa pun di lokasi mana pun. **Tidak** bisa ubah harga jual, visibilitas channel, pengaturan global, atau kelola user. |
 | `supervisor` | Manusia | Operasional harian **di lokasi yang ditugaskan saja** (`locationScope: own`): catat pembelian/produksi/penjualan, kirim transfer, lihat laporan harian lokasinya. **Tidak** bisa approve opname/cuti, tidak bisa lihat analitik. |
-| `staf` | Manusia | Paling terbatas, dibatasi lokasi sendiri: input opname (draft saja), mutasi lain, terima transfer, ajukan permintaan transfer, ajukan cuti sendiri. **Tidak** bisa lihat laporan harian/analitik, tidak bisa approve apa pun. Login pakai **PIN** (pilih nama dari daftar staf aktif di satu lokasi, lalu input PIN), bukan username+password seperti 3 role manusia lainnya. |
-| `integrasi` | **Bot, bukan manusia** | Akun otomatis untuk workflow n8n. Akses **sangat sempit — cuma 4 endpoint**: `POST /sales-sync/import/{log-penjualan,transaksi,raw-majoo,biaya-platform}` (action `sales_sync.import`). **Ditolak 403 di endpoint lain apa pun**, termasuk `POST /sales-sync/proses` yang mengurangi stok sungguhan — ini pengaman sengaja, bukan keterbatasan sementara. Lihat [`docs/integrasi-n8n.md`](./integrasi-n8n.md). |
+| `staf` | Manusia | Paling terbatas, dibatasi lokasi sendiri: input opname (draft saja), mutasi lain **jenis pengurangan standar saja** (waste_rusak/hilang_tidak_diketahui/staff_meal/sampel — `retur_supplier`/`koreksi_tambah` naik ke supervisor+, 2026-10-30), terima transfer, ajukan permintaan transfer, ajukan cuti sendiri. **Tidak** bisa lihat laporan harian/analitik, tidak bisa approve apa pun, tidak bisa Pembelian/Produksi/Penjualan manual/kirim Transfer/lihat Riwayat Transaksi. Login pakai **PIN** (pilih nama dari daftar staf aktif di satu lokasi, lalu input PIN), bukan username+password seperti 3 role manusia lainnya. |
+| `integrasi` | **Bot, bukan manusia** | Akun otomatis untuk workflow n8n. Akses **sangat sempit — cuma 4 endpoint**: `POST /sales-sync/import/{log-penjualan,transaksi,raw-majoo,biaya-platform}` (action `sales_sync.import`). **Ditolak 403 di endpoint lain apa pun**, termasuk `POST /sales-sync/proses` dan seluruh `/sales-sync/otomatis/*` yang mengurangi stok sungguhan — ini pengaman sengaja, bukan keterbatasan sementara. Lihat [`docs/integrasi-n8n.md`](./integrasi-n8n.md). |
+| `sistem_otomatis` | **Internal, bukan akun yang dipakai siapa pun** | Identitas untuk pemrosesan sinkronisasi penjualan OTOMATIS (2026-10-30, lihat § 4 Sales-Sync). **Login interaktif diblok eksplisit** di `core/src/auth/users.ts` (dua lapis: whitelist permission yang sangat sempit — cuma `penjualan.create` di Inventory — dan blok eksplisit di fungsi `authenticate()`). Server mint token JWT umur ~60 detik on-demand tiap kali trigger otomatis jalan (`signAuthToken(user, "60s")`), tidak pernah ada password yang dipakai manusia. Satu baris `core_users` dibuat sekali lewat `npm run seed:sistem-otomatis -w @samsara/api`. |
 
 Sistem permission ini **murni whitelist di kode** (bukan tabel database
 yang bisa diedit lewat UI): setiap endpoint di `module.json` tiap modul
@@ -131,8 +133,26 @@ disalin satu-satu di sini supaya dokumen ini tetap terbaca.
 
 Kondisi user nyata di database dev saat ini (bukan target produksi, sekadar
 konteks): 1 `owner`, 1 `manajer_ops`, 0 `supervisor`, 5 `staf`, 1
-`integrasi`. Per `devops/README.md`, akun production **tidak** akan
-dimigrasikan dari dev — dibuat ulang dari nol saat deploy sungguhan.
+`integrasi`, 1 `sistem_otomatis`. Per `devops/README.md`, akun production
+**tidak** akan dimigrasikan dari dev — dibuat ulang dari nol saat deploy
+sungguhan (termasuk `sistem_otomatis`, lewat seed script yang sama).
+
+**Keamanan kredensial (2026-10-30)** — ✅: owner mereset PIN/password siapa
+pun lewat Kelola User, boleh **ketik manual** (PIN tepat 6 digit, ditolak
+kalau pola lemah — semua digit sama atau berurutan penuh naik/turun;
+password minimal 8 karakter) atau biarkan **digenerate otomatis** seperti
+sebelumnya. Reset manapun langsung menyalakan penanda
+`wajib_ganti_kredensial` di baris user itu — selama aktif, backend menolak
+403 (`code: "WAJIB_GANTI_KREDENSIAL"`) SEMUA endpoint selain
+`POST /api/auth/ganti-kredensial` (endpoint baru, self-service, wajib tahu
+kredensial LAMA, rate-limit 5x/15menit sama seperti `/login`), dan frontend
+otomatis mengarahkan ke layar "Buat kredensial baru" begitu endpoint
+manapun balas kode itu. Kredensial **tidak pernah** masuk `core_audit_log`
+atau log aplikasi — cuma penanda `fieldName: "kredensial_direset"` (nilai
+`"manual"`/`"otomatis"`, bukan nilai kredensialnya). Aturan lama "PIN unik
+per lokasi" **dicabut** — PIN sekarang boleh sama persis dengan staf lain
+di lokasi yang sama (login PIN selalu lewat pilih-nama-dulu, jadi aturan
+unik itu tidak pernah benar-benar dibutuhkan untuk korektnes login).
 
 ---
 
@@ -195,7 +215,16 @@ Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
 ### Inventory (v0.10.0) — modul paling matang
 
 - Master data (item, kategori item, satuan, resep produksi 1 level, menu,
-  kategori menu, paket menu) — ✅
+  kategori menu, paket menu) — ✅. **Rename nama item/menu/kategori item/
+  kategori menu, KODE TETAP** (2026-10-30) — nama unik tanpa membedakan
+  besar/kecil & spasi tepi (pre-check aplikasi, pesan Indonesia rapi,
+  index UNIQUE fungsional di DB cuma jaring pengaman race-condition).
+  Rename kategori **item** otomatis cascade ke semua item yang
+  memakainya (kolom `category` teks bebas, bukan FK — keputusan desain
+  lama); rename kategori **menu** TIDAK perlu cascade (`kategori_id` sudah
+  FK proper). Riwayat transaksi lama & pemetaan sales-sync tetap nyambung
+  (semua merujuk kode, bukan nama). Satuan **tidak** termasuk cakupan
+  rename ini.
 - HPP dengan **2 metode kalkulasi** (Harga Master vs Harga Beli Terakhir,
   bisa dipilih global oleh owner, dengan override per-request untuk
   owner/manajer_ops) — ✅ teruji
@@ -205,9 +234,12 @@ Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
   (hasil aktual, bukan yield teoretis) ✅, Penjualan (dengan jam opsional
   untuk heatmap) ✅, Transfer 2 tahap kirim→terima dengan susut tercatat ✅,
   Mutasi Lain dengan 6 jenis terstruktur (waste_rusak, hilang_tidak_diketahui,
-  staff_meal, sampel, retur_supplier, koreksi_tambah) ✅, Opname 2 tahap
-  draft→keputusan ✅ — **semuanya teruji** (166 test domain + test regresi
-  permission di `apps/api`).
+  staff_meal, sampel, retur_supplier, koreksi_tambah) ✅ — **jenis yang
+  boleh dipakai staf dibatasi** (2026-10-30, 4 jenis pengurangan standar;
+  `retur_supplier`/`koreksi_tambah` ditolak 403 untuk staf, lihat § 2),
+  Opname 2 tahap draft→keputusan ✅ (staf SELALU draft, finalisasi
+  terpisah total ke `opname.approve`) — **semuanya teruji** (172 test
+  domain + test regresi permission di `apps/api`).
 - Channel penjualan & harga per channel (termasuk komisi channel, saran
   harga otomatis berdasar target food cost, export/import CSV harga massal)
   — ✅
@@ -316,32 +348,53 @@ Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
   gaya), termasuk perbaikan bug nyata `angkaWajib` yang dulu diam-diam
   salah parse angka berkoma (`parseFloat("-1,000")` -> `-1`, bukan error).
   Spesifikasi kolom lengkap: `docs/integrasi-n8n.md` § 8.
-- **4 workflow n8n siap-impor** (`devops/n8n/*.json`, non-aktif saat
-  diimpor, belum pernah dicoba jalan sungguhan di instance n8n owner) —
-  mengambil data dari spreadsheet `BURNAS_DASHBOARD_V1` yang sudah dipakai
-  3 workflow n8n LAMA (bukan query Postgres — Postgres cuma punya mirror
-  parsial 1 platform untuk 1 dari 4 jenis data, lihat
-  `docs/architecture-decisions.md` § 25), lalu POST ke 4 endpoint import
-  di atas lewat akun `integrasi`. Fitur: jendela rolling 2 hari
-  (`log_penjualan`/`transaksi`/`raw_majoo`) atau penanda `synced_at` di
-  static data workflow (`biaya_platform`, menghindari dobel baris tanpa
-  `id_platform`), mode dry-run otomatis saat dijalankan manual (tidak
-  pernah mengirim apa pun), notifikasi gagal lewat node error n8n bawaan
-  (belum ada notifikasi Telegram/WhatsApp — sengaja, belum diminta).
-  **Belum aktif** — owner masih perlu mengimpor, membuat 2 credential di
-  UI n8n, dan mengaktifkan manual. Langkah lengkap: `devops/n8n/README.md`.
+- **4 workflow n8n langsung-API** (`devops/n8n/*-direct.json`) — **✅ live
+  di production** sejak 2026-10-28/29 (Fase 1 Majoo + Fase 2 Shopee/
+  GrabFood/GoFood, lihat `docs/architecture-decisions.md` § 32-33), ambil
+  data langsung dari API tiap platform (bukan Google Sheets lagi) lalu
+  POST ke 4 endpoint import lewat akun `integrasi`, jadwal cron di n8n.
+  GoFood (dalam workflow Log Penjualan) dan Majoo level-transaksi
+  **berhenti menghasilkan baris baru sejak ±28 Okt** walau eksekusi n8n
+  tetap "success" — silent-failure yang belum didiagnosis, **di luar
+  scope perbaikan sejauh ini**, perlu dicek langsung di n8n UI. (4
+  workflow LAMA berbasis Google Sheets, `devops/n8n/*.json` tanpa akhiran
+  `-direct`, masih ada di repo tapi sudah digantikan, tidak diimpor lagi.)
 - Item mapping: pemetaan kode eksternal platform → kode menu internal
   Samsara, antrian disegarkan otomatis dari arsip log — ✅
 - Proses sinkronisasi (`POST /proses`): ubah arsip log jadi transaksi
   Penjualan sungguhan di modul Inventory (memanggil HTTP ke Inventory, ikut
-  mengurangi stok) — **🟡 parsial**: sengaja selalu manual (perlu klik
-  tombol "Proses Sinkronisasi" oleh owner/manajer_ops, tidak bisa dipicu
-  akun bot) sebagai titik review manusia, dan ada keterbatasan diketahui
-  yang didokumentasikan eksplisit di `module.json`: baris `item_type =
-  'refund'` yang kebetulan lolos validasi akan **tetap mengurangi stok**
-  seperti penjualan biasa, karena modul Inventory belum punya konsep
-  refund/retur.
-- `GET /belum-diproses` (visibilitas arsip yang belum pernah diproses) — ✅
+  mengurangi stok) — ✅, manual lewat tombol "Proses Sinkronisasi"
+  (Alat Manual, owner/manajer_ops) **atau otomatis** (lihat poin
+  berikutnya). Baris `item_type = 'refund'` **tidak pernah** memotong
+  stok lewat jalur mana pun sejak 2026-10-30 — disisihkan ke kategori
+  "perlu ditinjau" (manusia yang putuskan manual), bukan lagi ikut
+  terproses seperti penjualan biasa seperti sebelumnya. Baris
+  `inv_status = 'EXCEPTION'` sudah dari awal tidak pernah ikut terproses.
+- **Pemrosesan otomatis (2026-10-30)** — ✅ dibangun & teruji di dev,
+  **mati secara default** (termasuk di production setelah deploy, owner
+  yang harus menyalakan sendiri lewat UI). Saat dinyalakan (toggle +
+  `tanggal_mulai_otomatis` di halaman Sinkronisasi, owner/manajer_ops):
+  server memicu `POST /proses` di latar belakang (tanpa menunda respons
+  import/pemetaan yang memicunya) setiap kali impor `log-penjualan`
+  sukses atau pemetaan item disimpan, dijaga `pg_advisory_lock` supaya
+  dua pemicu bersamaan tidak memproses dobel. Memakai identitas internal
+  BARU `sistem_otomatis` (lihat § 2) — token umur ~60 detik di-mint
+  server, bukan kredensial manusia yang dipakai ulang. Riwayat tiap
+  jalannya (transaksi dibuat, tertahan, perlu ditinjau, gagal) tersimpan
+  di `salessync_otomatis_log`; riwayat tiap impor di `salessync_import_log`
+  — keduanya tampil di kartu "Ringkasan" halaman Sinkronisasi.
+- `GET /belum-diproses` (visibilitas arsip yang belum pernah diproses) — ✅,
+  mendukung paginasi server-side (`{rows, total}`, per-ORDER bukan
+  per-baris) sejak 2026-10-30 — pola pagination PERTAMA di repo ini,
+  lihat juga `GET /transaksi/penjualan` di Inventory (§ Inventory di
+  atas) yang dapat perlakuan sama.
+- **Riwayat Transaksi** (`apps/web/src/pages/transaksi/RiwayatTransaksiTab.tsx`)
+  dirombak 2026-10-30: kolom jam per transaksi, preset rentang tanggal
+  (Hari ini/Minggu ini/Bulan ini — default/Bulan lalu, via komponen baru
+  `DateRangePicker` yang reusable), paginasi "muat lebih banyak" dengan
+  ringkasan total, dan badge status per baris arsip yang belum diproses
+  ("Perlu ditinjau" untuk refund, "Menunggu tanggal mulai otomatis" untuk
+  order sebelum `tanggal_mulai_otomatis`).
 
 ---
 
@@ -364,15 +417,15 @@ Daftar murni fakta ketiadaan di kode saat ini, bukan roadmap:
   banyak bisnis" di `CLAUDE.md` § 1 adalah konteks operasional Claude Code
   di luar repo ini (data Bubur Ayam Ajiep memang disimpan di tempat lain
   sama sekali) — bukan fitur arsitektur multi-tenant di dalam aplikasi ini.
-- **Layer agent/AI otomatis di dalam aplikasi** — tidak ada. Satu-satunya
-  "otomasi" yang menyentuh sistem ini dari luar adalah workflow n8n untuk
-  import CSV terjadwal (file JSON siap-impor ada di `devops/n8n/`, lihat
-  `devops/n8n/README.md` dan `docs/integrasi-n8n.md`), yang scope-nya
-  sempit (4 endpoint import saja, murni kirim data, tidak memproses
-  keputusan apa pun) — **dan per penulisan ini belum diaktifkan** oleh
-  owner di instance n8n sungguhan. Tidak ada agent/AI yang berjalan
-  sebagai bagian dari aplikasi itu sendiri — beda dari Claude Code yang
-  membangun sistem ini.
+- **Layer agent/AI otomatis di dalam aplikasi** — tidak ada. n8n (workflow
+  langsung-API, lihat § 4 Sales-Sync) mengimpor data terjadwal dan **sudah
+  live di production**, scope-nya tetap sempit (4 endpoint import saja,
+  murni kirim data). Sejak 2026-10-30 ada **pemrosesan otomatis** di
+  modul Sales-Sync (arsip → transaksi Penjualan, lihat § 4) tapi itu pun
+  cuma aturan if-else sederhana dengan feature flag mati-default, bukan
+  agent/AI — tidak ada model/LLM yang mengambil keputusan di dalam
+  aplikasi ini sama sekali, beda dari Claude Code yang membangun sistem
+  ini.
 - **PWA / mobile app native** — tidak ada. Frontend adalah SPA React biasa
   via browser.
 - **Modul Marketing/Finance/Ekspansi** — tidak ada di repo ini sama sekali.
@@ -386,15 +439,20 @@ Daftar murni fakta ketiadaan di kode saat ini, bukan roadmap:
   (frontend & backend disajikan dari domain yang sama lewat Nginx Proxy
   Manager), bukan API yang didesain untuk diakses cross-origin.
 - **Test otomatis untuk frontend (`apps/web`)** — tidak ada. `npm test`
-  menjalankan 276 test yang semuanya lulus (core 7, hr 46, inventory 151,
-  sales-sync 41, integrasi lintas-modul di `apps/api` 31) — **tapi nol test
+  menjalankan 332 test yang semuanya lulus (core 7, hr 46, inventory 172,
+  sales-sync 51, integrasi lintas-modul di `apps/api` 56) — **tapi nol test
   otomatis untuk kode React di `apps/web`**. `npm run typecheck` lulus
   bersih untuk semua workspace termasuk `web`, tapi typecheck ≠ test
   perilaku.
 - **Payroll/rekrutmen** di modul HR — tidak ada, HR hanya menangani jadwal
   shift & pengajuan libur.
-- **Refund/retur** — tidak ada konsep ini di modul Inventory (lihat
-  keterbatasan `sales-sync` § 4 di atas).
+- **Refund/retur** — modul Inventory sendiri masih tidak punya konsep ini
+  (tidak ada transaksi yang MENAMBAH stok balik). Sejak 2026-10-30,
+  sales-sync tidak lagi mencoba memproses baris refund seperti penjualan
+  biasa (lihat § 4) — tapi itu cuma "jangan diproses otomatis", bukan
+  alur refund/retur sungguhan (tidak ada pengembalian stok, pencatatan
+  dana kembali, dsb). Order ber-refund disisihkan untuk ditinjau manusia,
+  bukan ditangani otomatis.
 
 ---
 

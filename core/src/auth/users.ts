@@ -36,18 +36,26 @@ function generatePassword(): string {
  * Role yang aksesnya tidak pernah dibatasi lokasi. `integrasi` ikut di sini
  * karena akun bot (n8n) bukan akun outlet: dia mengimpor arsip CSV lintas
  * platform/lokasi, tidak terikat satu lokasi fisik -- jadi `createUser()`
- * tidak mewajibkan `locationIds` untuknya.
+ * tidak mewajibkan `locationIds` untuknya. `sistem_otomatis` ikut dengan
+ * alasan sama: transaksi Penjualan yang dibuatnya mengikuti lokasi hasil
+ * resolusi outlet per order (lihat `resolveLocationId` di
+ * `modules/sales-sync/src/domain/proses.ts`), bukan lokasi milik identitas
+ * pemanggil.
  */
 function isAllLocationsRole(role: Role): boolean {
-  return role === "owner" || role === "manajer_ops" || role === "integrasi";
+  return role === "owner" || role === "manajer_ops" || role === "integrasi" || role === "sistem_otomatis";
 }
 
 /**
  * Role yang login pakai username+password. Role di luar ini (staf) login pakai
  * PIN. `integrasi` ikut jalur password karena n8n memanggil
  * `POST /auth/login` dengan username+password, bukan layar pilih-nama + PIN.
+ * `sistem_otomatis` JUGA ikut jalur ini supaya `createUser()` (dipakai script
+ * seed) bisa membuatnya dengan pola yang sama persis -- TAPI login
+ * interaktifnya diblok eksplisit di `authenticate()` di bawah, jadi
+ * password yang di-generate script seed tidak pernah benar-benar dipakai.
  */
-const PASSWORD_ROLES: Role[] = ["owner", "manajer_ops", "supervisor", "integrasi"];
+const PASSWORD_ROLES: Role[] = ["owner", "manajer_ops", "supervisor", "integrasi", "sistem_otomatis"];
 
 async function getUserLocationIds(client: PoolClient, userId: number | string): Promise<number[]> {
   const { rows } = await client.query<{ location_id: string }>(
@@ -131,8 +139,9 @@ export async function authenticate(client: PoolClient, username: string, passwor
     is_active: boolean;
     role: Role;
     token_version: number;
+    wajib_ganti_kredensial: boolean;
   }>(
-    `SELECT u.id, u.username, u.password_hash, u.is_active, u.token_version, r.name AS role
+    `SELECT u.id, u.username, u.password_hash, u.is_active, u.token_version, u.wajib_ganti_kredensial, r.name AS role
      FROM core_users u
      JOIN core_roles r ON r.id = u.role_id
      WHERE u.username = $1`,
@@ -140,6 +149,13 @@ export async function authenticate(client: PoolClient, username: string, passwor
   );
   const row = rows[0];
   if (!row || !row.is_active) return null;
+  // Login interaktif untuk "sistem_otomatis" DIBLOK PERMANEN di sini --
+  // identitas ini cuma boleh dipakai lewat token internal yang di-mint
+  // server sendiri (`signInternalServiceToken`), tidak pernah lewat
+  // POST /auth/login walau password-nya (digenerate script seed, tidak
+  // pernah ditampilkan/dipakai) kebetulan benar. Pengaman kedua di luar
+  // whitelist permission -- lihat catatan di core/src/auth/types.ts.
+  if (row.role === "sistem_otomatis") return null;
   // Staf tidak punya password_hash sama sekali -- wajib pakai /login-pin.
   if (!PASSWORD_ROLES.includes(row.role) || !row.password_hash) return null;
 
@@ -156,6 +172,7 @@ export async function authenticate(client: PoolClient, username: string, passwor
     allLocations,
     locationIds,
     tokenVersion: row.token_version,
+    wajibGantiKredensial: row.wajib_ganti_kredensial,
   };
 }
 
@@ -168,8 +185,9 @@ export async function authenticateByPin(client: PoolClient, userId: number, pin:
     is_active: boolean;
     role: Role;
     token_version: number;
+    wajib_ganti_kredensial: boolean;
   }>(
-    `SELECT u.id, u.username, u.pin_hash, u.is_active, u.token_version, r.name AS role
+    `SELECT u.id, u.username, u.pin_hash, u.is_active, u.token_version, u.wajib_ganti_kredensial, r.name AS role
      FROM core_users u
      JOIN core_roles r ON r.id = u.role_id
      WHERE u.id = $1`,
@@ -191,6 +209,7 @@ export async function authenticateByPin(client: PoolClient, userId: number, pin:
     allLocations: false,
     locationIds,
     tokenVersion: row.token_version,
+    wajibGantiKredensial: row.wajib_ganti_kredensial,
   };
 }
 
@@ -281,9 +300,13 @@ export async function createUser(client: PoolClient, input: CreateUserInput): Pr
     if (!/^\d{4,8}$/.test(pin)) {
       throw new Error("PIN harus angka 4-8 digit");
     }
-    if (await isPinTakenAtLocations(client, pin, locationIds)) {
-      throw new Error("PIN ini sudah dipakai staf/supervisor lain di salah satu lokasi yang sama -- pilih PIN lain");
-    }
+    // Aturan "PIN unik per lokasi" DICABUT (2026-10-30) -- login PIN selalu
+    // lewat pilih-nama-dulu (POST /login-pin mengirim {userId, pin}
+    // eksplisit), PIN cuma pernah diverifikasi ke SATU user yang sudah
+    // diketahui id-nya, tidak pernah dicari lintas user. Aturan unik ini
+    // tidak pernah benar-benar dibutuhkan untuk korektnes login, cuma
+    // pengaman berlebih yang bikin PIN gampang ditebak dicoba sendiri
+    // (lihat docs/architecture-decisions.md, audit Tahap 0 fitur ini).
     pinHash = await hashPin(pin);
     if (!input.pin?.trim()) generatedPin = pin;
     username = await generateUniqueUsername(client, input.name);
@@ -406,13 +429,9 @@ export async function updateUser(
         if (locationIdsUntukPin.length === 0) {
           throw new Error("Staf wajib ditetapkan ke minimal satu lokasi -- isi 'locationIds' sekaligus saat mengubah role ke staf.");
         }
-        let pin = "";
-        let attempts = 0;
-        do {
-          pin = generatePin();
-          attempts += 1;
-          if (attempts > 20) throw new Error("Gagal membuat PIN unik setelah beberapa percobaan -- coba lagi.");
-        } while (await isPinTakenAtLocations(client, pin, locationIdsUntukPin, userId));
+        // Aturan "PIN unik per lokasi" DICABUT (2026-10-30, lihat catatan
+        // di createUser) -- generate sekali, tidak perlu loop-sampai-unik lagi.
+        const pin = generatePin();
         const pinHash = await hashPin(pin);
         await client.query(
           `UPDATE core_users SET role_id = $1, pin_hash = $2, password_hash = NULL, updated_at = now() WHERE id = $3`,
@@ -549,18 +568,73 @@ export interface ResetCredentialResult {
   generatedPassword?: string;
 }
 
+export interface ResetCredentialInput {
+  /** Owner ketik PIN manual (role staf). Kalau tidak diisi, PIN digenerate CSPRNG seperti sebelumnya. */
+  pinManual?: string;
+  /** Owner ketik password manual (role password). Kalau tidak diisi, password digenerate CSPRNG. */
+  passwordManual?: string;
+}
+
+/**
+ * Tolak pola PIN 6-digit yang gampang ditebak (2026-10-30, dipakai HANYA
+ * untuk PIN yang DIKETIK MANUAL owner -- PIN hasil generate CSPRNG tidak
+ * pernah perlu dicek ini, peluangnya microscopic). Dua pola: (1) enam digit
+ * SAMA SEMUA (111111, dst), (2) enam digit BERURUTAN NAIK atau TURUN penuh
+ * (123456, 654321, dst). Aturan sengaja sederhana (bukan blocklist luas
+ * tanggal/pola umum lain) -- keputusan eksplisit saat perencanaan fitur ini.
+ */
+function pinPolaLemah(pin: string): boolean {
+  if (/^(\d)\1{5}$/.test(pin)) return true;
+  let naikPenuh = true;
+  let turunPenuh = true;
+  for (let i = 1; i < pin.length; i++) {
+    const diff = pin.charCodeAt(i) - pin.charCodeAt(i - 1);
+    if (diff !== 1) naikPenuh = false;
+    if (diff !== -1) turunPenuh = false;
+  }
+  return naikPenuh || turunPenuh;
+}
+
+/** PIN manual (reset oleh owner) WAJIB 6 digit tepat & bukan pola lemah -- beda dari PIN
+ * generate-otomatis createUser yang masih longgar 4-8 digit (jalur lama, tidak diubah). */
+function validasiPinManual(pin: string): void {
+  if (!/^\d{6}$/.test(pin)) throw new Error("PIN manual harus tepat 6 digit angka.");
+  if (pinPolaLemah(pin)) {
+    throw new Error("PIN terlalu mudah ditebak (semua digit sama atau berurutan) -- pilih PIN lain.");
+  }
+}
+
+/** Password manual (reset oleh owner) minimal 8 karakter -- tidak ada aturan kekuatan password
+ * lain di repo ini untuk ditiru, ini lantai minimum yang wajar (bukan angka yang diminta owner
+ * secara spesifik, dicatat sebagai keputusan default kecil). */
+function validasiPasswordManual(password: string): void {
+  if (password.length < 8) throw new Error("Password manual minimal 8 karakter.");
+}
+
 /**
  * Reset kredensial user -- tidak ada mekanisme "lupa PIN/password" sama
- * sekali di sistem ini, jadi ini satu-satunya jalan pemulihan: owner
- * generate kredensial baru, kredensial LAMA langsung tidak berlaku (diganti
- * total, bukan ditambah) begitu baris ini di-UPDATE.
+ * sekali di sistem ini, jadi ini salah satu jalan pemulihan (yang lain:
+ * `gantiKredensialSendiri`, kalau user masih ingat kredensial lamanya):
+ * owner generate kredensial baru ATAU ketik sendiri (2026-10-30, `input`),
+ * kredensial LAMA langsung tidak berlaku (diganti total, bukan ditambah)
+ * begitu baris ini di-UPDATE.
  *
  * `token_version` ikut dinaikkan di statement UPDATE yang sama: tanpa itu,
  * kredensial lama memang mati tapi SESI lama (token yang sudah dipegang) tetap
  * hidup sampai 12 jam -- padahal alasan utama owner me-reset kredensial justru
  * "akunnya dipakai orang lain / HP-nya hilang".
+ *
+ * `wajib_ganti_kredensial` SELALU diset `true` di sini (manual maupun
+ * otomatis) -- user yang kredensialnya baru di-reset wajib menggantinya
+ * sendiri lewat `gantiKredensialSendiri` sebelum bisa memakai menu lain
+ * (ditegakkan middleware `requireGantiKredensialDulu`).
  */
-export async function resetCredential(client: PoolClient, userId: number): Promise<ResetCredentialResult> {
+export async function resetCredential(
+  client: PoolClient,
+  userId: number,
+  input?: ResetCredentialInput,
+  requestingUserId?: number,
+): Promise<ResetCredentialResult> {
   const { rows } = await client.query<{ id: number; role: Role }>(
     `SELECT u.id, r.name AS role FROM core_users u JOIN core_roles r ON r.id = u.role_id WHERE u.id = $1`,
     [userId],
@@ -568,31 +642,130 @@ export async function resetCredential(client: PoolClient, userId: number): Promi
   const row = rows[0];
   if (!row) throw new Error(`User id ${userId} tidak ditemukan`);
 
+  async function catatAuditReset(cara: "manual" | "otomatis"): Promise<void> {
+    // Penanda SAJA -- TIDAK PERNAH nilai kredensial itu sendiri (F6: kredensial
+    // tidak pernah masuk audit log atau log aplikasi).
+    await writeAuditLog(client, {
+      userId: requestingUserId ?? null,
+      tableName: "core_users",
+      recordId: userId,
+      fieldName: "kredensial_direset",
+      oldValue: null,
+      newValue: cara,
+    });
+  }
+
   if (PASSWORD_ROLES.includes(row.role)) {
-    const password = generatePassword();
+    let password: string;
+    if (input?.passwordManual) {
+      validasiPasswordManual(input.passwordManual);
+      password = input.passwordManual;
+    } else {
+      password = generatePassword();
+    }
     const passwordHash = await hashPassword(password);
     await client.query(
-      `UPDATE core_users SET password_hash = $1, token_version = token_version + 1, updated_at = now() WHERE id = $2`,
+      `UPDATE core_users SET password_hash = $1, token_version = token_version + 1, wajib_ganti_kredensial = true, updated_at = now() WHERE id = $2`,
       [passwordHash, userId],
     );
+    await catatAuditReset(input?.passwordManual ? "manual" : "otomatis");
     return { role: row.role, generatedPassword: password };
   }
 
-  const locationIds = await getUserLocationIds(client, row.id);
-  let pin = "";
-  let attempts = 0;
-  do {
+  let pin: string;
+  if (input?.pinManual) {
+    validasiPinManual(input.pinManual);
+    pin = input.pinManual;
+  } else {
     pin = generatePin();
-    attempts += 1;
-    if (attempts > 20) {
-      throw new Error("Gagal membuat PIN unik setelah beberapa percobaan -- coba lagi.");
-    }
-  } while (await isPinTakenAtLocations(client, pin, locationIds, row.id));
+  }
 
   const pinHash = await hashPin(pin);
   await client.query(
-    `UPDATE core_users SET pin_hash = $1, token_version = token_version + 1, updated_at = now() WHERE id = $2`,
+    `UPDATE core_users SET pin_hash = $1, token_version = token_version + 1, wajib_ganti_kredensial = true, updated_at = now() WHERE id = $2`,
     [pinHash, userId],
   );
+  await catatAuditReset(input?.pinManual ? "manual" : "otomatis");
   return { role: row.role, generatedPin: pin };
+}
+
+export interface GantiKredensialSendiriResult {
+  /** `token_version` SETELAH dinaikkan -- router menandatangani token baru dengan nilai ini. */
+  newTokenVersion: number;
+}
+
+/**
+ * Ganti kredensial MILIK SENDIRI (2026-10-30) -- satu-satunya endpoint yang
+ * tetap diizinkan selama `wajib_ganti_kredensial` aktif (lihat middleware
+ * `requireGantiKredensialDulu`), TAPI juga bisa dipanggil kapan saja (user
+ * yang tidak sedang dipaksa ganti pun boleh mengganti kredensialnya sendiri
+ * secara sukarela). WAJIB tahu kredensial LAMA (beda dari `resetCredential`
+ * yang dipanggil OWNER tanpa perlu tahu kredensial lama korban).
+ *
+ * Rate-limit percobaan gagal ditegakkan oleh PEMANGGIL (router), lewat
+ * `core/src/auth/rate-limit.ts` yang sudah ada (pola sama seperti
+ * `/login`/`/login-pin`) -- fungsi ini sendiri cuma verifikasi+update,
+ * tidak tahu apa-apa soal rate-limit.
+ */
+export async function gantiKredensialSendiri(
+  client: PoolClient,
+  userId: number,
+  kredensialLama: string,
+  kredensialBaru: string,
+): Promise<GantiKredensialSendiriResult> {
+  const { rows } = await client.query<{
+    id: number;
+    role: Role;
+    password_hash: string | null;
+    pin_hash: string | null;
+    token_version: number;
+  }>(
+    `SELECT u.id, r.name AS role, u.password_hash, u.pin_hash, u.token_version
+     FROM core_users u JOIN core_roles r ON r.id = u.role_id WHERE u.id = $1`,
+    [userId],
+  );
+  const row = rows[0];
+  if (!row) throw new Error(`User id ${userId} tidak ditemukan`);
+
+  if (PASSWORD_ROLES.includes(row.role)) {
+    if (!row.password_hash || !(await verifyPassword(kredensialLama, row.password_hash))) {
+      throw new Error("Password lama salah.");
+    }
+    validasiPasswordManual(kredensialBaru);
+    const hash = await hashPassword(kredensialBaru);
+    const { rows: updated } = await client.query<{ token_version: number }>(
+      `UPDATE core_users SET password_hash = $1, token_version = token_version + 1, wajib_ganti_kredensial = false, updated_at = now()
+       WHERE id = $2 RETURNING token_version`,
+      [hash, userId],
+    );
+    await writeAuditLog(client, {
+      userId,
+      tableName: "core_users",
+      recordId: userId,
+      fieldName: "kredensial_diganti_sendiri",
+      oldValue: null,
+      newValue: true,
+    });
+    return { newTokenVersion: updated[0].token_version };
+  }
+
+  if (!row.pin_hash || !(await verifyPin(kredensialLama, row.pin_hash))) {
+    throw new Error("PIN lama salah.");
+  }
+  validasiPinManual(kredensialBaru);
+  const hash = await hashPin(kredensialBaru);
+  const { rows: updated } = await client.query<{ token_version: number }>(
+    `UPDATE core_users SET pin_hash = $1, token_version = token_version + 1, wajib_ganti_kredensial = false, updated_at = now()
+     WHERE id = $2 RETURNING token_version`,
+    [hash, userId],
+  );
+  await writeAuditLog(client, {
+    userId,
+    tableName: "core_users",
+    recordId: userId,
+    fieldName: "kredensial_diganti_sendiri",
+    oldValue: null,
+    newValue: true,
+  });
+  return { newTokenVersion: updated[0].token_version };
 }

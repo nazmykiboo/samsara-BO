@@ -6,6 +6,7 @@ import { RequireAuth } from "./auth/RequireAuth";
 import { bisaLihatLaporanHarian } from "./auth/permissions";
 import { AppLayout } from "./layout/AppLayout";
 import { LoginPage } from "./pages/LoginPage";
+import { GantiKredensialPage } from "./pages/GantiKredensialPage";
 import { MenuHppPage } from "./pages/MenuHppPage";
 import { StokPage } from "./pages/StokPage";
 import { LaporanHarianPage } from "./pages/LaporanHarianPage";
@@ -45,6 +46,18 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      {/* SENGAJA di luar <AppLayout> (tanpa nav/sidebar) -- halaman ini dipaksa
+          tampil justru karena endpoint lain ditolak 403 WAJIB_GANTI_KREDENSIAL,
+          jadi nav yang memanggil endpoint lain di latar belakang cuma akan
+          memicu redirect balik ke sini berulang-ulang kalau dibungkus AppLayout. */}
+      <Route
+        path="/ganti-kredensial"
+        element={
+          <RequireAuth>
+            <GantiKredensialPage />
+          </RequireAuth>
+        }
+      />
 
       <Route
         element={

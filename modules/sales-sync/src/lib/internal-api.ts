@@ -9,10 +9,12 @@
  * jadi penandaan `processed_at` di sini baru dilakukan setelah Inventory
  * membalas sukses.
  *
- * Token: dipakai ulang Authorization header dari request yang memicu proses --
- * tidak ada service account/token internal di sistem ini, dan memang tidak
- * perlu: yang memicu sinkronisasi adalah owner/manajer_ops yang juga punya
- * permission `penjualan.create` di Inventory.
+ * Token: dipakai ulang Authorization header dari request yang memicu proses
+ * (owner/manajer_ops yang juga punya permission `penjualan.create` di
+ * Inventory) kalau dipicu lewat tombol manual -- TAPI (2026-10-30) sejak ada
+ * pemrosesan otomatis, pemanggilnya bisa juga `jalankanOtomatisJikaAktif`
+ * yang mengirim token internal super-pendek-umur milik role `sistem_otomatis`
+ * (lihat `domain/otomatis.ts`), bukan lagi selalu header milik manusia.
  */
 
 /**

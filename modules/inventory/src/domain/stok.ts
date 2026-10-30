@@ -676,6 +676,23 @@ const JENIS_MUTASI_LAIN_PENGURANGAN: readonly JenisMutasiLain[] = [
   "retur_supplier",
 ];
 
+/**
+ * Subset `JENIS_MUTASI_LAIN_VALID` yang boleh dipakai role `staf`
+ * (2026-10-30) -- empat jenis pengurangan "sehari-hari" yang staf lapangan
+ * wajar temui sendiri. `retur_supplier` (butuh koordinasi ke supplier) dan
+ * `koreksi_tambah` (penambahan stok di luar jalur Pembelian/Produksi/Transfer,
+ * berisiko disalahgunakan untuk menutupi kehilangan) SENGAJA dinaikkan ke
+ * supervisor ke atas -- dicek di router (`POST /transaksi/mutasi-lain`),
+ * bukan di sini, supaya konsisten dengan pola `locationScope` yang juga
+ * dicek di router untuk endpoint lain.
+ */
+export const JENIS_MUTASI_LAIN_IZIN_STAF: readonly JenisMutasiLain[] = [
+  "waste_rusak",
+  "hilang_tidak_diketahui",
+  "staff_meal",
+  "sampel",
+];
+
 export interface MutasiLainInput {
   locationId: number;
   /** WAJIB. Kategori terstruktur, lihat `JENIS_MUTASI_LAIN_VALID`. */

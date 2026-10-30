@@ -19,6 +19,9 @@ export interface AuthUser {
   role: Role;
   allLocations: boolean;
   locationIds: number[];
+  /** Kredensial baru saja di-reset owner, belum diganti sendiri (2026-10-30) --
+   * selama true, backend menolak semua endpoint selain ganti-kredensial sendiri. */
+  wajibGantiKredensial: boolean;
 }
 
 export interface LoginResponse {
@@ -569,14 +572,13 @@ export type HppSumber = "snapshot_asli" | "snapshot_estimasi" | null;
 
 /** GET /transaksi/penjualan -- SATU objek per BARIS menu, bukan per transaksi: satu transaksi
  * dengan 2 menu muncul sebagai 2 objek dengan `headerId` yang sama. Info header (tanggal, lokasi,
- * channel, no referensi) diulang di setiap baris supaya bisa ditampilkan datar tanpa request lain.
- *
- * Backend memotong hasil di 200 baris (tidak ada pagination di repo ini) -- kalau hasilnya pas 200,
- * jelaskan ke user bahwa daftarnya dibatasi dan minta dia mempersempit filter, JANGAN dianggap bug. */
+ * channel, no referensi) diulang di setiap baris supaya bisa ditampilkan datar tanpa request lain. */
 export interface DetailTransaksiPenjualanBaris {
   headerId: number;
   /** "YYYY-MM-DD" (tanggal kalender transaksi, bukan timestamp input). */
   tanggal: string;
+  /** "HH:MM:SS" atau `null` -- kolom TIME (migrasi 0026), null untuk transaksi lama/input tanpa jam. TIDAK PERNAH diperkirakan dari waktu input. */
+  jam: string | null;
   lokasiId: number;
   lokasiNama: string;
   /** Channel penjualan apa adanya dari kolom `sumber` (mis. "Offline", "GrabFood"). */
@@ -593,6 +595,15 @@ export interface DetailTransaksiPenjualanBaris {
   hppSumber: HppSumber;
 }
 
+/** Response GET /transaksi/penjualan (2026-10-30: bukan array flat lagi). `total` = jumlah
+ * TRANSAKSI (bukan baris menu) yang cocok filter, TANPA memperhitungkan limit/offset -- dipakai
+ * ringkasan "menampilkan X dari Y" dan tombol "muat lebih banyak". Paginasi di level TRANSAKSI:
+ * satu transaksi dengan banyak baris menu tidak pernah terpotong di tengah antar halaman. */
+export interface HasilDetailTransaksiPenjualan {
+  rows: DetailTransaksiPenjualanBaris[];
+  total: number;
+}
+
 /** Filter GET /transaksi/penjualan -- SEMUA opsional. Yang tidak dikirim diisi backend:
  * rentang tanggal kosong = 30 hari terakhir sampai hari ini (dihitung di database).
  *
@@ -605,6 +616,10 @@ export interface DetailTransaksiPenjualanFilter {
   channel?: string;
   kodeMenu?: string;
   lokasiId?: number;
+  /** Jumlah TRANSAKSI per halaman (bukan baris menu). Kosong = default backend (200). */
+  limit?: number;
+  /** Jumlah TRANSAKSI yang dilewati dari awal (paginasi). Kosong = halaman pertama. */
+  offset?: number;
 }
 
 export interface OpnameBarisInput {
@@ -991,6 +1006,8 @@ export interface HasilProsesSinkronisasi {
   barisDiproses: number;
   dilewatiSebelumTanggalMulai: OrderSinkronisasi[];
   dilewatiBelumTerpetakan: OrderSinkronisasi[];
+  /** Order dengan minimal 1 baris item_type='refund' -- TIDAK PERNAH memotong stok (2026-10-30), lihat proses.ts. */
+  perluDitinjau: OrderSinkronisasi[];
   channelTidakDikenal: OrderSinkronisasi[];
   gagal: Array<OrderSinkronisasi & { pesan: string }>;
 }
@@ -1013,9 +1030,23 @@ export interface BarisBelumDiproses {
   orderId: string;
   /** "YYYY-MM-DD" (tanggal kalender transaksi di platform). */
   tanggal: string;
+  /** "HH:MM:SS" -- selalu terisi untuk arsip sales-sync (beda dari `jam` transaksi Inventory yang bisa null). */
+  jam: string;
   menuId: string | null;
   itemName: string;
   quantity: number;
+  /** 'menu' | 'addon' | 'refund' -- order dengan baris 'refund' TIDAK PERNAH diproses otomatis maupun manual (lihat proses.ts), tandai "Perlu ditinjau" di layar. */
+  itemType: string;
+  /** `true` kalau `menuId` sudah dipetakan ke menu Samsara -- order dengan SALAH SATU baris `false` akan tertahan ("Tertahan") sampai dipetakan. */
+  sudahTerpetakan: boolean;
+}
+
+/** Response GET /sales-sync/belum-diproses (2026-10-30: bukan array flat lagi). `total` = jumlah
+ * ORDER (bukan baris) yang cocok filter. Paginasi di level ORDER: satu order tidak pernah terpotong
+ * di tengah antar halaman. */
+export interface HasilBelumDiproses {
+  rows: BarisBelumDiproses[];
+  total: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1150,4 +1181,6 @@ export interface AnalitikFilter {
 
 export interface ApiErrorBody {
   error: string;
+  /** Cuma ada untuk 403 "wajib ganti kredensial" (2026-10-30) -- lihat requireGantiKredensialDulu. */
+  code?: string;
 }

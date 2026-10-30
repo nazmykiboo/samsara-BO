@@ -3510,3 +3510,186 @@ menghapus suatu field/lookup dengan asumsi "app punya mekanisme
 pengganti", baca dulu kode mekanisme pengganti itu sampai ke detail
 (field mana yang jadi kunci, bukan cuma nama fungsinya) -- bukan cuma
 percaya nama fungsi/komentar levelnya saja.
+
+## 34. Pemrosesan otomatis sales-sync + perombakan Riwayat Transaksi & halaman Sinkronisasi (2026-10-30)
+
+Owner melaporkan dua masalah dari pemakaian sungguhan setelah workflow
+n8n langsung-API (§ 32-33) jalan: jam transaksi tidak tampil di Riwayat
+Transaksi (ternyata datanya ADA, § ini hanya soal tampilan), dan arsip
+yang terus bertambah tiap jam tidak kelihatan progresnya di halaman
+Sinkronisasi sementara proses ke stok masih manual sepenuhnya. Owner
+minta pemrosesan OTOMATIS plus perombakan dua halaman, dengan batasan
+keras: tidak boleh ada downtime n8n/Postgres/VNC/nginx, dan fitur
+otomatis harus TETAP MATI di production sampai teruji penuh.
+
+**Identitas internal `sistem_otomatis`** (keputusan lewat `AskUserQuestion`,
+dipilih atas alternatif "header rahasia internal"): repo ini sebelumnya
+tidak punya mekanisme service-account sama sekali -- `/sales-sync/proses`
+selalu meneruskan token milik manusia yang memicunya. Role baru ini
+TIDAK BISA login interaktif (diblok eksplisit di `authenticate()`,
+lapis kedua di luar whitelist permission), permission-nya cuma satu
+(`penjualan.create` di Inventory), dan server mint token JWT umur ~60
+detik on-demand tiap kali trigger jalan (`signAuthToken(user, "60s")` --
+parameter TTL baru, ditambahkan khusus untuk ini). Dibuat sekali lewat
+`npm run seed:sistem-otomatis`, password acak yang tidak pernah
+ditampilkan/dipakai (tidak relevan karena login password tetap diblok).
+
+**Refund & EXCEPTION** (keputusan lewat `AskUserQuestion` kedua: aturan
+berlaku ke tombol manual MAUPUN jalur otomatis, bukan cuma yang baru):
+`prosesSinkronisasi` sekarang menyisihkan order ber-refund ke bucket
+`perluDitinjau` SEBELUM pengecekan pemetaan, tidak pernah lagi ikut
+memotong stok seperti penjualan biasa -- mengubah keterbatasan lama
+yang sebelumnya cuma didokumentasikan sebagai "diketahui, diterima"
+(lihat § sebelumnya soal `item_type='refund'`) jadi benar-benar
+ditangani. EXCEPTION sudah dari awal terfilter di `bacaDataProses`
+(`WHERE inv_status='OK'`), tidak berubah -- yang baru cuma ikut
+dihitung di kartu dashboard "perlu ditinjau".
+
+**Trigger latar belakang + advisory lock**: `jalankanOtomatisJikaAktif`
+dipanggil TANPA `await` persis sebelum response dikirim, di dua titik
+(`endpointImport` untuk `log-penjualan`, dan `PATCH /item-mapping/:id`).
+`pg_try_advisory_lock(hashtext('sales_sync_otomatis'))` mencegah dua
+pemicu bersamaan jalan paralel -- dibuktikan EMPIRIS (bukan cuma baca
+kode) lewat `Promise.all` dua panggilan bersamaan terhadap dev API yang
+benar-benar jalan, hasilnya tepat 1 transaksi bukan 2. State
+"tertahan/perlu ditinjau" (`pratinjauProses`) selalu dihitung ULANG
+on-the-fly dari arsip, tidak pernah disimpan -- konsisten dengan pola
+`listItemMapping` yang sudah ada. Riwayat JALANNYA (beda dari state
+saat-ini) disimpan append-only di `salessync_otomatis_log` dan
+`salessync_import_log` (migrasi baru `0003_otomatis_dan_riwayat_impor.sql`,
+digabung satu file sesuai batasan "satu migrasi sekali jalan").
+
+**Pola pagination PERTAMA di repo ini**: baik `GET /transaksi/penjualan`
+(Inventory) maupun `GET /sales-sync/belum-diproses` mengembalikan baris
+FLAT yang dikelompokkan jadi satu-kartu-satu-order di frontend -- limit
+naif di level baris akan memotong satu order jadi dua halaman. Keduanya
+diubah ke pola dua-tahap: Tahap 1 pilih halaman ID header/order (dengan
+`count(*) OVER()` untuk total), Tahap 2 ambil SEMUA baris untuk
+header/order itu tanpa limit. Sengaja dibatasi ke 2 endpoint ini dulu,
+bukan retrofit ke semua endpoint list yang ada di repo.
+
+**Insiden kecil selama verifikasi** (dev saja, tidak pernah menyentuh
+production): salah mengatur `tanggalMulai` tes ke tanggal yang TERLALU
+JAUH di masa lalu (bukan terlalu jauh di masa depan) membuat trigger
+otomatis memproses SELURUH arsip dev yang belum pernah diproses
+(~3.275 transaksi sungguhan, bukan cuma data tes) alih-alih cuma baris
+tes. Diketahui cepat (header `inventory_transaksi_penjualan` yang
+dibuat identitas `sistem_otomatis` gampang dipisahkan dari transaksi
+asli lewat `dibuat_oleh` + rentang waktu), di-rollback bersih dalam satu
+transaksi SQL dengan persetujuan eksplisit sebelum dieksekusi (hapus
+ledger + header + audit log terkait, `processed_at` dikembalikan NULL).
+Pelajaran: tanggal batas untuk tes yang memanggil `prosesSinkronisasi`
+tanpa prefix/filter ketat HARUS lebih baru dari seluruh data real yang
+mungkin ada di dev (bukan "jauh di masa lalu" seperti intuisi lazim),
+pola yang sama dengan alasan fixture test `belum-diproses.test.ts`
+digeser ke tahun 2099 (lihat dua paragraf di atas § yang relevan di
+riwayat kerja sesi ini).
+
+Status di production setelah deploy: migrasi jalan (role + 2 tabel log
+baru), tapi **`otomatis_aktif` tetap `false`** -- owner yang harus
+menyalakannya sendiri lewat UI kapan pun siap, tidak otomatis menyala
+sebagai bagian dari deploy ini.
+
+## 35. Izin staf granular (Mutasi Lain), rename item/menu/kategori, keamanan kredensial (2026-10-30)
+
+Lanjutan sesi yang sama dengan § 34 (setelah Tahap 2 pemrosesan otomatis
+selesai & bersih). Owner menambah tiga permintaan sebelum lanjut deploy:
+staf bisa pakai jenis Mutasi Lain yang seharusnya hak supervisor+,
+tidak ada cara ganti nama item/menu tanpa mengubah kode (kode dipakai di
+resep & pemetaan sales-sync), dan tidak ada mekanisme "lupa PIN/password"
+yang aman.
+
+**Audit Tahap 0 (read-only) menemukan lebih sedikit kerja daripada
+dikira**: staf SUDAH 403 di Pembelian/Produksi/Penjualan-manual/Riwayat/
+Transfer-kirim (backend DAN frontend, sejak awal) -- satu-satunya celah
+nyata adalah `mutasi_lain.create` yang TIDAK membedakan `jenis` per role
+sama sekali. Risiko terbesar untuk rename BUKAN di item/menu itu sendiri,
+tapi di kategori ITEM: `inventory_items.category`/`recipe_unit`/
+`purchase_unit` menyimpan nama sebagai teks bebas TANPA foreign key
+(migrasi 0019) -- rename tanpa cascade akan meng-orphan item diam-diam.
+`inventory_menu.kategori_id` SUDAH FK proper, jadi kategori MENU aman
+otomatis. Tidak ada satu pun pola di repo ini yang menerjemahkan error
+Postgres `23505 unique_violation` ke pesan Indonesia rapi -- diputuskan
+pre-check aplikasi (`namaSudahDipakai`, meniru pola validasi PIN unik yang
+sudah ada), BUKAN mengandalkan pesan constraint mentah.
+
+**D -- Mutasi Lain per role**: `JENIS_MUTASI_LAIN_IZIN_STAF` (4 jenis
+pengurangan standar: waste_rusak, hilang_tidak_diketahui, staff_meal,
+sampel) dicek di ROUTER (bukan domain/permission registry) karena ini
+pembatasan NILAI body, bukan akses endpoint -- staf tetap boleh POST ke
+endpoint ini, cuma `jenis`-nya dibatasi, 403 eksplisit kalau melanggar.
+Frontend memfilter dropdown dengan array yang sama (duplikasi kecil, bukan
+shared-package untuk 4 string).
+
+**E -- Rename item/menu/kategori**: migrasi `0032_unique_index_nama_case_insensitive.sql`
+menambah index UNIQUE fungsional (`lower(trim(name))`) di 4 tabel sebagai
+jaring pengaman race-condition -- index LAMA (`UNIQUE` mentah) TIDAK
+di-drop. Migrasi mengecek dulu lewat `DO $$ ... RAISE EXCEPTION ... $$`
+kalau ada data lama yang bentrok di bawah aturan baru (case-insensitive +
+trim) sebelum menambah index -- di dev, nol konflik ditemukan. Fungsi
+`namaSudahDipakai(client, table, column, name, excludeId?)` jadi pre-check
+seragam, dipakai `updateItem` (field `name` BARU ditambahkan --
+`UpdateItemInput` sebelumnya tidak punya field ini sama sekali, padahal
+form frontend-nya SUDAH mengirim `name` sejak lama -- jadi sebenarnya bug
+laten "field nama di form edit item tidak pernah benar-benar tersimpan"
+ikut diperbaiki, bukan cuma fitur baru), `updateMenu` (fungsi BARU, scope
+sengaja cuma `name`), `updateKategori` (+ cascade `inventory_items.category`
+dalam transaksi yang sama, plus entri audit penanda `item_terdampak`
+terpisah supaya riwayat menjelaskan skala dampaknya), `updateKategoriMenu`
+(tanpa cascade). `updateSatuan` TIDAK disentuh -- di luar cakupan sesi ini
+(dikonfirmasi `AskUserQuestion`). Diverifikasi lengkap di browser (rename
+item/menu/kategori item/kategori menu, termasuk penolakan nama bentrok
+case-insensitive+spasi-tepi dengan pesan rapi) dan test otomatis (+4 test
+domain, semua lolos).
+
+**F -- Keamanan kredensial**: kolom baru `core_users.wajib_ganti_kredensial`
+(migrasi `0012_add_wajib_ganti_kredensial.sql`), ditambahkan ke `AuthUser`
+(otomatis ikut payload JWT karena `jwt.sign(user, ...)` men-sign seluruh
+object). `resetCredential` sekarang terima `input?: {pinManual?,
+passwordManual?}` -- PIN manual wajib TEPAT 6 digit & bukan pola lemah
+(semua sama, atau berurutan naik/turun penuh -- keputusan `AskUserQuestion`,
+bukan blocklist luas), password manual minimal 8 karakter (tidak ada
+aturan kekuatan password lain di repo untuk ditiru, ini lantai minimum
+default). Reset APA PUN (manual maupun tetap auto-generate) SELALU
+menyalakan `wajib_ganti_kredensial` + audit log PENANDA SAJA
+(`fieldName: "kredensial_direset"`, nilai `"manual"`/`"otomatis"`, TIDAK
+PERNAH nilai kredensialnya -- F6). Middleware baru `requireGantiKredensialDulu`
+dipasang GLOBAL (`build-server.ts`, setelah `requireAuth`) untuk semua
+endpoint modul bisnis, DAN eksplisit di 4 route lain dalam
+`auth/router.ts` (route-route `/api/auth/*` tidak lewat middleware global
+karena router itu di-mount SEBELUM `requireAuth` global -- lihat komentar
+lengkap di kode). Endpoint baru `POST /api/auth/ganti-kredensial`
+(self-service, wajib tahu kredensial LAMA, rate-limit 5x/15menit REUSE
+`method: "password"/"pin"` yang sudah ada -- tidak perlu migrasi CHECK
+constraint baru untuk method ketiga).
+
+**Bug nyata ditemukan & diperbaiki lewat test** (bukan cuma dirancang,
+betul-betul meledak saat test pertama dijalankan): endpoint
+`/ganti-kredensial` awalnya menyusun token baru dengan `{...user,
+tokenVersion: ..., wajibGantiKredensial: false}` -- `user` di situ adalah
+payload JWT yang SUDAH di-decode (`getAuthUser(req)`), yang juga membawa
+`iat`/`exp` bawaan `jsonwebtoken`. `jwt.sign()` menolak payload yang
+sudah punya `exp` sambil diberi opsi `expiresIn` ("Bad payload already
+has an exp property"), jadi endpoint ini 100% gagal (400) sebelum
+diperbaiki. Perbaikannya: bangun object `AuthUser` BARU secara eksplisit
+field-per-field, jangan pernah spread payload JWT yang sudah di-decode
+ke `signAuthToken` lagi.
+
+**Aturan "PIN unik per lokasi" DICABUT TOTAL** (fungsi `isPinTakenAtLocations`
+dihapus, 3 pemanggilnya dibersihkan) -- dikonfirmasi lewat pembacaan kode
+bahwa aturan ini TIDAK PERNAH benar-benar dibutuhkan untuk korektnes
+login: alur PIN SELALU "pilih nama dari daftar dulu -> `POST /login-pin`
+dengan `{userId, pin}` eksplisit", PIN cuma diverifikasi ke SATU user
+yang sudah diketahui id-nya, tidak pernah dicari lintas user. Test lama
+`auth.test.ts` ("PIN duplikat di lokasi sama ditolak...") diubah jadi
+test POSITIF (PIN sama di lokasi sama MAUPUN beda sekarang diterima),
+bukan dihapus -- supaya perilaku baru ini tetap ada yang menjaga regresi.
+
+**Insiden kecil selama verifikasi browser** (dev saja): reset PIN manual
+sempat dicoba dengan nilai lemah (`111111`) untuk membuktikan pesan error
+-- ditolak dengan benar SEBELUM menyentuh database (tidak ada UPDATE yang
+jalan), dikonfirmasi lewat query langsung setelahnya. Staf fixture asli
+("Fitri") yang dipakai untuk uji coba end-to-end (reset manual -> login ->
+redirect paksa -> ganti kredensial sendiri -> akses normal pulih) di-reset
+SEKALI LAGI ke auto-generate di akhir sesi supaya tidak meninggalkan PIN
+tes yang diketahui tertinggal di data dev.

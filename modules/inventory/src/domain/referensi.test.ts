@@ -15,6 +15,7 @@ import {
   updateKategoriMenu,
   updateSatuan,
 } from "./referensi.js";
+import { createItem } from "./master.js";
 import { withRollback } from "./test-helpers.js";
 
 after(() => pool.end());
@@ -47,6 +48,58 @@ test("updateKategori: nonaktifkan kategori -> kategoriExists jadi false lagi (it
 
     await updateKategori(client, id, { isActive: false });
     assert.equal(await kategoriExists(client, "Kategori Dinonaktifkan"), false, "kategori nonaktif tidak boleh lolos validasi item baru");
+  });
+});
+
+test("updateKategori: rename kategori item CASCADE ke inventory_items.category, unik tanpa besar/kecil & spasi tepi, dicatat ke audit log termasuk penanda item_terdampak (2026-10-30)", async () => {
+  await withRollback(async (client) => {
+    const { id: idLama } = await createKategori(client, "Kategori Rename Lama");
+    const { id: idLain } = await createKategori(client, "Kategori Rename Lain");
+    await createItem(client, {
+      kode: "TEST-REF-001",
+      name: "Item Pakai Kategori Rename",
+      type: "bahan_baku",
+      recipeUnit: "gr",
+      category: "Kategori Rename Lama",
+    });
+
+    await updateKategori(client, idLama, { name: "Kategori Rename Baru" });
+
+    const { rows: itemRows } = await client.query<{ category: string }>(
+      `SELECT category FROM inventory_items WHERE kode = 'TEST-REF-001'`,
+    );
+    assert.equal(itemRows[0].category, "Kategori Rename Baru", "cascade: category item ikut berubah");
+
+    const { rows: auditRows } = await client.query<{ field_name: string }>(
+      `SELECT field_name FROM core_audit_log WHERE table_name = 'inventory_kategori_item' AND record_id = $1 ORDER BY id DESC LIMIT 2`,
+      [idLama],
+    );
+    assert.ok(
+      auditRows.some((r) => r.field_name === "item_terdampak"),
+      "ada entri audit penanda item_terdampak terpisah",
+    );
+
+    await assert.rejects(
+      () => updateKategori(client, idLama, { name: "  KATEGORI rename LAIN  " }),
+      /sudah dipakai kategori item lain/i,
+    );
+    void idLain;
+  });
+});
+
+test("updateKategoriMenu: rename nama unik tanpa besar/kecil & spasi tepi, TIDAK perlu cascade (kategori_id FK proper) (2026-10-30)", async () => {
+  await withRollback(async (client) => {
+    const { id: idA } = await createKategoriMenu(client, { kode: "RNA", nama: "Kategori Menu Rename A" });
+    await createKategoriMenu(client, { kode: "RNB", nama: "Kategori Menu Rename B" });
+
+    await updateKategoriMenu(client, idA, { nama: "Kategori Menu Rename A Baru" });
+    const { rows } = await client.query<{ nama: string }>(`SELECT nama FROM inventory_kategori_menu WHERE id = $1`, [idA]);
+    assert.equal(rows[0].nama, "Kategori Menu Rename A Baru");
+
+    await assert.rejects(
+      () => updateKategoriMenu(client, idA, { nama: "  kategori MENU rename B  " }),
+      /sudah dipakai kategori menu lain/i,
+    );
   });
 });
 
