@@ -88,7 +88,7 @@ export function StokPage() {
 
   const [search, setSearch] = useState("");
   const [locationFilter, setLocationFilter] = useState<"all" | number>("all");
-  const [entitasFilter, setEntitasFilter] = useState<"all" | string>("all");
+  const [tipeFilter, setTipeFilter] = useState<"all" | "outlet" | "kitchen">("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("semua");
   const [qtyState, setQtyState] = useState<Record<string, QtyState>>({});
   const [minStokState, setMinStokState] = useState<MinStokState>({ map: {}, loading: false, error: null });
@@ -140,17 +140,12 @@ export function StokPage() {
     };
   }, []);
 
-  const entitasOptions = useMemo(() => {
-    const set = new Set(options.map((l) => l.entitas));
-    return Array.from(set);
-  }, [options]);
-
   const visibleLocations = useMemo(
     () =>
       options.filter(
-        (l) => (locationFilter === "all" || l.id === locationFilter) && (entitasFilter === "all" || l.entitas === entitasFilter),
+        (l) => (locationFilter === "all" || l.id === locationFilter) && (tipeFilter === "all" || l.tipe === tipeFilter),
       ),
-    [options, locationFilter, entitasFilter],
+    [options, locationFilter, tipeFilter],
   );
 
   // Ambil qty live untuk semua item x lokasi yang sedang terlihat. Metadata
@@ -330,14 +325,11 @@ export function StokPage() {
               </Select>
             </Field>
 
-            <Field label="Entitas">
-              <Select value={entitasFilter} onChange={(e) => setEntitasFilter(e.target.value)}>
-                <option value="all">Semua entitas</option>
-                {entitasOptions.map((e) => (
-                  <option key={e} value={e}>
-                    {e}
-                  </option>
-                ))}
+            <Field label="Tipe lokasi">
+              <Select value={tipeFilter} onChange={(e) => setTipeFilter(e.target.value as "all" | "outlet" | "kitchen")}>
+                <option value="all">Semua tipe</option>
+                <option value="outlet">Outlet</option>
+                <option value="kitchen">Kitchen</option>
               </Select>
             </Field>
           </div>
@@ -620,7 +612,7 @@ function DalamPerjalananTable({ title, rows, items }: { title: string; rows: Dal
                 </div>
                 <div className="mt-0.5 flex justify-between text-xs text-slate-500">
                   <span>Transfer #{row.transferId}</span>
-                  {row.nilai !== null ? <span>{formatRupiah(row.nilai)}</span> : null}
+                  {row.nilai != null ? <span>{formatRupiah(row.nilai)}</span> : null}
                 </div>
               </div>
             );

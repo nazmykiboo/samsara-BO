@@ -14,7 +14,7 @@ import {
   updateVendor,
 } from "./vendor.js";
 import { createPembelian } from "./stok.js";
-import { locationId, withRollback } from "./test-helpers.js";
+import { kitchenLocationId, withRollback } from "./test-helpers.js";
 
 after(() => pool.end());
 
@@ -132,7 +132,7 @@ test("getAmbangKenaikanHargaPersen: default 10 dari seed migrasi 0030", async ()
 
 test("laporkanSupplierLama: HANYA baris dengan vendor_id NULL, dikelompokkan per teks supplier, TIDAK digabung/dinormalisasi", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const supplierUnik = `${PREFIX}Toko Lama ${Date.now()}`;
 
     // createPembelian() SEKARANG mewajibkan vendorId (lihat stok.ts) dan
@@ -156,7 +156,7 @@ test("laporkanSupplierLama: HANYA baris dengan vendor_id NULL, dikelompokkan per
 
 test("createPembelian dengan vendorId: katalog + riwayat harga ter-update otomatis, TIDAK ada peringatan kalau kenaikan di bawah ambang", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const { id: vendorId } = await createVendor(client, { name: `${PREFIX}Vendor Pembelian Normal` });
     await catatHargaManual(client, vendorId, "BB-001", 10000);
 
@@ -180,7 +180,7 @@ test("createPembelian dengan vendorId: katalog + riwayat harga ter-update otomat
 
 test("createPembelian dengan vendorId: peringatan MUNCUL kalau kenaikan di ATAS ambang, berisi persen+harga lama+harga baru yang benar", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const { id: vendorId } = await createVendor(client, { name: `${PREFIX}Vendor Pembelian Naik` });
     await catatHargaManual(client, vendorId, "BB-002", 10000);
 
@@ -201,7 +201,7 @@ test("createPembelian dengan vendorId: peringatan MUNCUL kalau kenaikan di ATAS 
 
 test("createPembelian dengan vendorId TAPI item BELUM PERNAH ada di katalog -- tidak ada harga lama untuk dibandingkan, jadi TIDAK ada peringatan (bukan error)", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const { id: vendorId } = await createVendor(client, { name: `${PREFIX}Vendor Item Baru` });
 
     const result = await createPembelian(client, {
@@ -219,7 +219,7 @@ test("createPembelian dengan vendorId TAPI item BELUM PERNAH ada di katalog -- t
 
 test("createPembelian: vendorId wajib -- ditolak 400 kalau kosong (tes di stok.test.ts); vendor LAIN yang tidak dipakai tetap kosong katalognya", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const { id: vendorDipakai } = await createVendor(client, { name: `${PREFIX}Vendor Dipakai` });
     const { id: vendorTidakDipakai } = await createVendor(client, { name: `${PREFIX}Vendor Tidak Dipakai` });
 

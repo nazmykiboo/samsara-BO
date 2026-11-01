@@ -73,7 +73,10 @@ yang muncul dan tombol apa yang bisa kamu tekan:
 - **Supervisor** — bisa mencatat transaksi sehari-hari (pembelian, produksi,
   penjualan, kirim transfer) tapi **hanya untuk lokasi yang ditugaskan ke
   dia**. Tidak bisa mengubah data master (item/resep/harga jual) dan tidak
-  bisa menyetujui hasil opname.
+  bisa menyetujui hasil opname. Sama seperti Staf, **tidak bisa lihat
+  HPP/harga beli/margin** di layar mana pun (Riwayat Transaksi, Laporan
+  Harian, Pembelian, Transfer, rekomendasi harga menu, dll) — cuma owner
+  dan manajer ops yang melihat angka-angka biaya ini.
 - **Staf** — peran paling terbatas. Bisa lihat stok (lokasi sendiri),
   menerima transfer, mencatat waste/mutasi lain **jenis pengurangan
   sehari-hari saja** (rusak, hilang, dipakai makan staf, dipakai sampel —
@@ -188,8 +191,7 @@ bagian khusus untuk melihat **transfer yang masih dalam perjalanan**
    mempersempit tabel (misalnya ketik "Gula pasir").
 3. Ada tiga filter tambahan di atas tabel:
    - **Lokasi** — pilih satu lokasi tertentu atau "Semua lokasi".
-   - **Entitas** — pengelompokan internal (Central Kitchen vs Outlet),
-     bisa dibiarkan "Semua entitas".
+   - **Tipe lokasi** — Outlet atau Kitchen, bisa dibiarkan "Semua tipe".
    - **Status** — pilih "Habis saja", "Menipis saja", atau "Aman saja"
      kalau mau fokus ke item yang bermasalah dulu.
 4. Setiap baris menampilkan nama item, kode, kategori, lokasi, dan angka

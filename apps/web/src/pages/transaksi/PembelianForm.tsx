@@ -72,10 +72,14 @@ export function PembelianForm() {
   async function isiHargaTerakhirUntuk(vendor: number, itemKode: string) {
     try {
       const res = await getHargaTerakhir(vendor, itemKode);
+      // `res.hargaTerakhir` bisa `undefined` (field tidak ada sama sekali --
+      // role tanpa hpp.lihat_harga, Tahap 1B) -- disamakan ke `null` supaya
+      // tetap cocok tipe `Baris.hargaTerakhirVendor` (number | null).
+      const hargaTerakhir = res.hargaTerakhir ?? null;
       setBaris((prev) =>
         prev.map((b) =>
           b.item.kode === itemKode
-            ? { ...b, hargaTerakhirVendor: res.hargaTerakhir, hargaSatuan: b.hargaSatuan || (res.hargaTerakhir ? String(res.hargaTerakhir) : b.hargaSatuan) }
+            ? { ...b, hargaTerakhirVendor: hargaTerakhir, hargaSatuan: b.hargaSatuan || (hargaTerakhir ? String(hargaTerakhir) : b.hargaSatuan) }
             : b,
         ),
       );
@@ -278,7 +282,7 @@ export function PembelianForm() {
           satuan resep.
         </ResultBox>
       ) : null}
-      {result && result.peringatanHarga.length > 0 ? (
+      {result && result.peringatanHarga && result.peringatanHarga.length > 0 ? (
         <WarningBox>
           {/* WarningBox merender <p> -- children di sini WAJIB inline saja
               (tanpa <div>/<p> bersarang), pakai <span className="block"> bukan

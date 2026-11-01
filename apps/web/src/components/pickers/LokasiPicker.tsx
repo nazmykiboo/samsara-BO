@@ -3,17 +3,23 @@ import { useAuth } from "../../auth/AuthContext";
 import { useLokasiContext } from "../../data/LokasiContext";
 import { Field } from "../ui/Input";
 import { Select } from "../ui/Select";
+import type { LokasiTipe } from "../../api/types";
 
 /** Bentuk yang dipakai SELURUH app lewat `useLokasiOptions()` -- `id: number`
  * (BUKAN string seperti `LokasiPublik.id` dari API/BIGINT) supaya konsumen
  * lama (perbandingan `l.id === locationFilter`, key berbasis angka, dst,
  * mis. di StokPage.tsx) tidak perlu diubah sama sekali -- ini PERSIS bentuk
  * `MockLokasi` lama sebelum Tahap 1 "Outlet & Kitchen", cuma sumbernya
- * sekarang live API bukan snapshot statis. */
+ * sekarang live API bukan snapshot statis.
+ *
+ * `tipe` ditambah Tahap 1A ("Tipe lokasi jadi sumber kebenaran CK") --
+ * konsumen yang perlu kenali Central Kitchen WAJIB pakai `tipe === "kitchen"`,
+ * JANGAN LAGI bandingkan `entitas` (lihat migrasi core 0013). */
 export interface LokasiOption {
   id: number;
   name: string;
   entitas: string;
+  tipe: LokasiTipe | null;
 }
 
 /** Lokasi AKTIF yang boleh dipilih user ini -- dibatasi locationIds kalau bukan
@@ -32,7 +38,9 @@ export function useLokasiOptions(): LokasiOption[] {
   const { lokasi } = useLokasiContext();
   return useMemo(() => {
     if (!user) return [];
-    const aktif = lokasi.filter((l) => l.isActive).map((l) => ({ id: Number(l.id), name: l.name, entitas: l.entitas }));
+    const aktif = lokasi
+      .filter((l) => l.isActive)
+      .map((l) => ({ id: Number(l.id), name: l.name, entitas: l.entitas, tipe: l.tipe }));
     if (user.allLocations) return aktif;
     return aktif.filter((l) => user.locationIds.includes(l.id));
   }, [user, lokasi]);

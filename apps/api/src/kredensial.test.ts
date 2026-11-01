@@ -21,8 +21,8 @@ const testUserIds: number[] = [];
 before(async () => {
   const client = await pool.connect();
   try {
-    const { rows } = await client.query<{ id: number }>(`SELECT id FROM core_locations WHERE entitas = 'samsara_ck'`);
-    if (!rows[0]) throw new Error("Fixture lokasi samsara_ck tidak ada di database dev");
+    const { rows } = await client.query<{ id: number }>(`SELECT id FROM core_locations WHERE tipe = 'kitchen'`);
+    if (!rows[0]) throw new Error("Fixture lokasi kitchen tidak ada di database dev");
     ckLocationId = rows[0].id;
   } finally {
     client.release();

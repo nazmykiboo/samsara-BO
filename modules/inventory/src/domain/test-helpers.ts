@@ -25,24 +25,40 @@ export async function locationId(client: PoolClient, entitas: string): Promise<n
   return rows[0].id;
 }
 
-/** Lokasi "outlet mana saja selain Central Kitchen" -- SENGAJA TIDAK hardcode
- * entitas spesifik (dulu "samsara_outlet"): entitas/nama outlet dev bisa
- * berubah kapan saja lewat fitur Outlet & Kitchen (mis. diganti jadi nama
- * outlet sungguhan), dan test yang hardcode entitas lama langsung gagal
- * begitu lokasinya di-rename. Dipakai test yang cuma butuh "lokasi outlet
- * APAPUN" (beda dari lokasi CK), bukan test yang sengaja menguji entitas
- * tertentu. */
+/** Lokasi "outlet mana saja" -- berbasis `tipe` (BUKAN `entitas`, sejak
+ * migrasi core 0013 "Tipe lokasi jadi sumber kebenaran CK") -- SENGAJA
+ * TIDAK hardcode nama/id spesifik: nama outlet dev bisa berubah kapan saja
+ * lewat fitur Outlet & Kitchen, dan `tipe` TIDAK PERNAH berubah lewat
+ * rename nama (beda dari `entitas` versi lama). Dipakai test yang cuma
+ * butuh "lokasi outlet APAPUN" (beda dari lokasi Kitchen), bukan test yang
+ * sengaja menguji lokasi tertentu. */
 export async function outletLocationId(client: PoolClient): Promise<number> {
   const { rows } = await client.query<{ id: number }>(
-    `SELECT id FROM core_locations WHERE entitas != 'samsara_ck' AND is_active = true ORDER BY id LIMIT 1`,
+    `SELECT id FROM core_locations WHERE tipe = 'outlet' AND is_active = true ORDER BY id LIMIT 1`,
   );
   if (!rows[0]) {
-    throw new Error(`Tidak ada lokasi outlet (selain samsara_ck) di database -- jalankan migrasi & seed dulu`);
+    throw new Error(`Tidak ada lokasi outlet (tipe='outlet') di database -- jalankan migrasi & seed dulu`);
   }
   // Number(...) WAJIB: driver pg mengembalikan kolom BIGINT sebagai STRING JS
   // walau tipe TS query di atas bilang `number` -- tanpa ini, perbandingan
   // `===`/`assert.equal` ke angka yang sudah di-Number() di tempat lain
   // (mis. lokasiId hasil getDetailTransaksiPenjualan) diam-diam selalu false.
+  return Number(rows[0].id);
+}
+
+/** Lokasi Kitchen (Central Kitchen) PERTAMA yang aktif -- berbasis `tipe`,
+ * BUKAN `entitas` (lihat migrasi core 0013: `entitas` sekarang derived dari
+ * `tipe`, bukan sumber kebenaran lagi). Dipakai test yang butuh "lokasi
+ * Kitchen" tanpa hardcode nama/entitas tertentu -- pengganti
+ * `locationId(client, "samsara_ck")` yang sudah tidak valid lagi sejak
+ * `entitas` baris CK berubah jadi literal `"kitchen"`. */
+export async function kitchenLocationId(client: PoolClient): Promise<number> {
+  const { rows } = await client.query<{ id: number }>(
+    `SELECT id FROM core_locations WHERE tipe = 'kitchen' AND is_active = true ORDER BY id LIMIT 1`,
+  );
+  if (!rows[0]) {
+    throw new Error(`Tidak ada lokasi kitchen (tipe='kitchen') di database -- jalankan migrasi & seed dulu`);
+  }
   return Number(rows[0].id);
 }
 

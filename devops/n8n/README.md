@@ -617,3 +617,103 @@ Semua REUSED (tidak ada yang baru dibuat):
 
 Setelah impor, pilih ulang credential di tiap node bergaris merah
 (pola sama seperti § 5).
+
+## 13. Perbaikan error handling & backfill data (gap sejak 28 Okt 2026)
+
+### Apa yang ditemukan
+
+GoFood (dalam `log-penjualan-direct.json`) dan Majoo level-transaksi
+(`raw-majoo-direct.json`) berhenti menghasilkan baris baru sejak ±28
+Okt 2026 jam 13:00 WIB, walau eksekusi n8n tetap tercatat "success".
+Audit (baca-saja file JSON, TIDAK PERNAH menyentuh data eksekusi n8n
+mentah yang bisa memuat token sesi) menemukan akar masalahnya tersebar
+di **10 Code node** across `log-penjualan-direct.json` (4 node) dan
+`transaksi-biaya-direct.json` (6 node), semuanya memakai
+`ignoreHttpStatusErrors: true` (dibutuhkan supaya kode JS bisa baca
+body respons error untuk pesan yang informatif) DIKOMBINASIKAN dengan
+pola `(response && response.xxx) || []` — begitu respons API tidak
+sesuai bentuk yang diharapkan (mis. token revoked/expired di sisi
+server, 401/403, atau perubahan bentuk JSON platform), `[]` kosong
+diam-diam dianggap "tidak ada data lagi", loop paginasi berhenti
+bersih TANPA error apa pun. Token GoFood yang revoked di sisi server
+(tidak terdeteksi validasi lokal `api_tokens.status`/`expires_at`,
+yang hanya mengecek bookkeeping lokal) adalah kandidat paling kuat
+untuk gap GoFood ini.
+
+### Apa yang diperbaiki (per 2026-11-01)
+
+Di SELURUH 10 node tersebut (`Ambil Daftar Transaksi Shopee/GrabFood/
+GoFood`, `Ambil Daftar Sales Majoo` di `log-penjualan-direct.json`;
+`Ambil Daftar Settlement Shopee`, `Ambil Detail Clearing Shopee`,
+`Ambil Daftar Transaksi GrabFood/GoFood`, `Ambil Daftar Payout GoFood`,
+`Ambil Detail Payout GoFood` di `transaksi-biaya-direct.json`), plus
+`Petakan Baris Sales`/`Loop Control Sales`/`Petakan Baris Refund` di
+`raw-majoo-direct.json`:
+
+- **Validasi bentuk respons SEBELUM dipakai** — kalau field yang
+  diharapkan array (`data`, `data.list`, `statements`,
+  `transaction_shares`, dst) BUKAN array, `throw new Error(...)` dengan
+  pesan yang menyebut platform + halaman/offset saat ini. TIDAK PERNAH
+  lagi coalesce diam-diam ke `[]`.
+- **3 node yang SUDAH punya `throw` tapi dengan lubang "diam-diam
+  `break`" di halaman >1/offset>0** (`Ambil Daftar Settlement Shopee`,
+  `Ambil Daftar Transaksi GrabFood` di `transaksi-biaya-direct.json`) —
+  lubang itu dihapus, throw sekarang berlaku di halaman MANAPUN.
+- **Page cap** ditambahkan di SEMUA loop paginasi (tidak ada satu pun
+  sebelumnya) — 200 halaman untuk kebanyakan, 500 untuk endpoint
+  page-size kecil (GoFood, size=20) — supaya loop yang entah kenapa
+  tidak pernah berhenti sendiri (API selalu balas tepat `limit` baris)
+  gagal dengan jelas, bukan jalan selamanya.
+- **Timeout 15 detik** ditambah di panggilan yang belum punya
+  (`Get Detail Sales`/`Get Refund Sales` di `raw-majoo-direct.json`,
+  dan semua Code node HTTP yang disebut di atas) — konsisten dengan
+  node lain yang sudah lama punya timeout.
+- **Logging row-count per halaman** (`console.log`) di tiap iterasi
+  loop — kalau masalah serupa terulang, log eksekusi n8n langsung
+  menunjukkan di halaman/platform mana jumlah baris berhenti wajar.
+
+### Backfill Majoo (window sementara diperlebar 2 → 7 hari)
+
+`raw-majoo-direct.json`, node "Atur Mode": `windowDays` untuk jadwal
+otomatis diubah dari `2` jadi **`7` SEMENTARA** (dry-run manual tetap
+`1`, tidak relevan untuk backfill). Begitu workflow ini berjalan normal
+lagi (jadwal otomatis berikutnya, atau dipicu manual), rentang tanggal
+otomatis mencakup 7 hari ke belakang — cukup untuk menutup gap sejak 28
+Okt.
+
+**WAJIB dikembalikan ke `2` setelah backfill selesai** (sekali data gap
+sudah masuk, window 7 hari jadi tidak perlu dan memperlambat tiap
+eksekusi tanpa guna) — edit node "Atur Mode" di editor n8n, ubah balik
+`$execution.mode === "manual" ? 1 : 7` jadi `$execution.mode === "manual" ? 1 : 2`,
+simpan workflow.
+
+### Backfill GoFood (prosedur manual, BUKAN config persisten)
+
+`log-penjualan-direct.json` (sumber GoFood untuk level-item) **tidak
+punya konsep rentang hari mundur** — jendelanya SELALU "06:00–21:59:59
+WIB HARI INI" (node "Tentukan Jendela Waktu"), karena workflow ini
+didesain jalan tiap jam, bukan sekali sehari seperti Majoo. Melebarkan
+`windowDays` seperti Majoo TIDAK BISA dilakukan di sini — tidak ada
+variabel itu.
+
+Untuk menutup gap GoFood sejak 28 Okt, jalankan backfill MANUAL per
+hari (bukan ubah konfigurasi permanen):
+1. Buka `log-penjualan-direct.json` di editor n8n.
+2. Edit SEMENTARA node "Tentukan Jendela Waktu": ganti baris
+   `const wibNow = new Date(now.getTime() + 7 * 3600 * 1000);` jadi
+   tanggal target secara eksplisit (mis. `const wibNow = new
+   Date('2026-10-28T12:00:00+07:00');` untuk backfill tanggal 28 Okt).
+3. Jalankan EKSEKUSI MANUAL (bukan jadwal otomatis) — dry-run dulu (§
+   6) untuk cek jumlah baris wajar, baru kirim sungguhan.
+4. Ulangi langkah 2-3 untuk tiap tanggal yang hilang (satu tanggal per
+   eksekusi manual).
+5. **WAJIB kembalikan node "Tentukan Jendela Waktu" ke kode asli**
+   (`const wibNow = new Date(now.getTime() + 7 * 3600 * 1000);`) segera
+   setelah backfill selesai — JANGAN biarkan hardcode tanggal tertinggal,
+   jadwal otomatis berikutnya akan memakai tanggal yang salah kalau lupa
+   dikembalikan.
+
+Import ulang-tidak-perlu dari sisi app: `POST /import/log-penjualan`
+sudah idempoten per `unique_key` (dibuat -> dilewati kalau identik,
+diperbarui kalau berubah) — aman dijalankan berkali-kali untuk tanggal
+yang sama tanpa membuat baris dobel.

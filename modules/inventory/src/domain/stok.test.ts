@@ -13,7 +13,7 @@ import {
   getDalamPerjalanan,
   listOpname,
 } from "./stok.js";
-import { locationId, outletLocationId, vendorIdPembelianUmum, withRollback } from "./test-helpers.js";
+import { kitchenLocationId, outletLocationId, vendorIdPembelianUmum, withRollback } from "./test-helpers.js";
 
 after(() => pool.end());
 
@@ -25,7 +25,7 @@ async function itemId(client: import("pg").PoolClient, kode: string): Promise<nu
 
 test("createPembelian: konversi satuan beli ke satuan resep otomatis", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const before = await getCurrentStock(client, await itemId(client, "BB-001"), ck);
 
     const result = await createPembelian(client, {
@@ -45,7 +45,7 @@ test("createPembelian: konversi satuan beli ke satuan resep otomatis", async () 
 
 test("createPembelian: TANPA vendorId ditolak 400 dengan pesan jelas, vendor seed \"Pembelian Umum\" bisa dipakai", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     await assert.rejects(
       () =>
         // @ts-expect-error -- sengaja menghilangkan vendorId untuk menguji validasi wajibnya
@@ -70,7 +70,7 @@ test("createPembelian: TANPA vendorId ditolak 400 dengan pesan jelas, vendor see
 
 test("createPembelian: item pending_data tanpa konversi satuan ditolak, bukan diproses dengan angka salah", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const vendorId = await vendorIdPembelianUmum(client);
     await assert.rejects(
       () =>
@@ -87,7 +87,7 @@ test("createPembelian: item pending_data tanpa konversi satuan ditolak, bukan di
 
 test("createTransferKirim: stok lokasi asal langsung berkurang, TAPI belum masuk stok lokasi manapun (dalam perjalanan)", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const outlet = await outletLocationId(client);
     const bubur = await itemId(client, "BB-001");
 
@@ -115,7 +115,7 @@ test("createTransferKirim: stok lokasi asal langsung berkurang, TAPI belum masuk
 
 test("createTransferTerima: susut = qty_kirim - qty_terima tercatat saat terima, stok tujuan bertambah qty_terima", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const outlet = await outletLocationId(client);
     const bubur = await itemId(client, "BB-001");
 
@@ -149,7 +149,7 @@ test("createTransferTerima: susut = qty_kirim - qty_terima tercatat saat terima,
 
 test("createTransferTerima: transfer yang sudah diterima tidak bisa diterima ulang", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const outlet = await outletLocationId(client);
 
     const kirim = await createTransferKirim(client, {
@@ -169,7 +169,7 @@ test("createTransferTerima: transfer yang sudah diterima tidak bisa diterima ula
 
 test("createTransferKirim: antar entitas terdeteksi otomatis, harga transfer default = HPP item di lokasi asal (Skema A), dihitung saat kirim", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const outlet = await outletLocationId(client);
 
     const result = await createTransferKirim(client, {
@@ -179,24 +179,25 @@ test("createTransferKirim: antar entitas terdeteksi otomatis, harga transfer def
       baris: [{ itemKode: "BB-001", qtyKirim: 50, unit: "gr" }],
     });
 
-    assert.equal(result.antarEntitas, true, "Central Kitchen dan outlet manapun (outletLocationId mengecualikan samsara_ck) beda entitas");
+    assert.equal(result.antarEntitas, true, "Central Kitchen (tipe=kitchen) dan outlet (tipe=outlet) beda entitas (entitas derived dari tipe)");
     assert.equal(result.baris[0].hargaTransferPerSatuan, 3.35, "default Skema A = harga_master item (BB-001)");
   });
 });
 
-test("createTransferKirim: transfer dalam entitas yang sama TIDAK ditandai antar_entitas", async () => {
+test("createTransferKirim: transfer antar sesama outlet (tipe sama) TIDAK ditandai antar_entitas", async () => {
   await withRollback(async (client) => {
     const outlet1 = await outletLocationId(client);
-    // Lokasi kedua dibuat dengan entitas SAMA PERSIS seperti outlet1 (dibaca
-    // dinamis, BUKAN hardcode "samsara_outlet") supaya kasus non-antar-entitas
-    // benar-benar teruji terlepas dari apa pun entitas outlet dev saat ini.
-    const { rows: entitasRows } = await client.query<{ entitas: string }>(
-      `SELECT entitas FROM core_locations WHERE id = $1`,
+    // Lokasi kedua dibuat dengan `tipe` SAMA PERSIS seperti outlet1 (dibaca
+    // dinamis, bukan hardcode) -- sejak migrasi core 0013, `entitas` DERIVED
+    // dari `tipe` (selalu sama), jadi "entitas sama" sekarang berarti
+    // "tipe sama" (dua-duanya outlet).
+    const { rows: tipeRows } = await client.query<{ tipe: string }>(
+      `SELECT tipe FROM core_locations WHERE id = $1`,
       [outlet1],
     );
     const { rows } = await client.query<{ id: number }>(
-      `INSERT INTO core_locations (name, entitas, is_active) VALUES ('Outlet Kedua (test)', $1, true) RETURNING id`,
-      [entitasRows[0].entitas],
+      `INSERT INTO core_locations (name, entitas, tipe, is_active) VALUES ('Outlet Kedua (test)', $1, $1, true) RETURNING id`,
+      [tipeRows[0].tipe],
     );
     const outlet2 = rows[0].id;
 
@@ -218,7 +219,7 @@ test("createTransferKirim: transfer dalam entitas yang sama TIDAK ditandai antar
 
 test("createMutasiLain: 'jenis' valid tersimpan, 'alasan' tetap tersimpan terpisah (dua kolom berdampingan)", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const bubur = await itemId(client, "BB-001");
     const before = await getCurrentStock(client, bubur, ck);
 
@@ -244,7 +245,7 @@ test("createMutasiLain: 'jenis' valid tersimpan, 'alasan' tetap tersimpan terpis
 
 test("createMutasiLain: tanpa 'jenis' DITOLAK dengan pesan yang menyebut daftar nilai valid", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     await assert.rejects(
       () =>
         // @ts-expect-error -- memang menguji input tanpa `jenis` (kontrak baru: wajib)
@@ -266,7 +267,7 @@ test("createMutasiLain: tanpa 'jenis' DITOLAK dengan pesan yang menyebut daftar 
 
 test("createMutasiLain: 'jenis' di luar 6 nilai valid DITOLAK (tidak sampai ke constraint Postgres)", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     await assert.rejects(
       () =>
         createMutasiLain(client, {
@@ -288,7 +289,7 @@ test("createMutasiLain: 'jenis' di luar 6 nilai valid DITOLAK (tidak sampai ke c
 
 test("createMutasiLain: jenis 'koreksi_tambah' dengan semua qty POSITIF tersimpan dan menambah stok", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const bubur = await itemId(client, "BB-001");
     const before = await getCurrentStock(client, bubur, ck);
 
@@ -317,7 +318,7 @@ test("createMutasiLain: jenis 'koreksi_tambah' dengan semua qty POSITIF tersimpa
 
 test("createMutasiLain: jenis 'koreksi_tambah' dengan qty NEGATIF DITOLAK (arah tidak cocok)", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     await assert.rejects(
       () =>
         createMutasiLain(client, {
@@ -338,7 +339,7 @@ test("createMutasiLain: jenis 'koreksi_tambah' dengan qty NEGATIF DITOLAK (arah 
 
 test("createMutasiLain: jenis pengurangan ('waste_rusak') dengan qty POSITIF DITOLAK, pesannya mengarahkan ke koreksi_tambah", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const bubur = await itemId(client, "BB-001");
     const before = await getCurrentStock(client, bubur, ck);
 
@@ -370,7 +371,7 @@ test("createMutasiLain: jenis pengurangan ('waste_rusak') dengan qty POSITIF DIT
 // bawah membuktikan itu untuk kedua sisi (jenis pengurangan & penambahan).
 test("createMutasiLain: baris bertanda CAMPURAN dengan jenis 'koreksi_tambah' DITOLAK (baris negatifnya melanggar)", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     await assert.rejects(
       () =>
         createMutasiLain(client, {
@@ -394,7 +395,7 @@ test("createMutasiLain: baris bertanda CAMPURAN dengan jenis 'koreksi_tambah' DI
 
 test("createMutasiLain: baris bertanda CAMPURAN dengan jenis 'waste_rusak' DITOLAK (baris positifnya melanggar)", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     await assert.rejects(
       () =>
         createMutasiLain(client, {
@@ -570,7 +571,7 @@ test("createPenjualan: menu yang bergantung ke item pending_data -> hpp_saat_tra
 
 test("createOpname: status draft, qty_sistem snapshot, TAPI stok BELUM berubah sampai disetujui", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const bubur = await itemId(client, "BB-001");
 
     const before = await getCurrentStock(client, bubur, ck);
@@ -593,7 +594,7 @@ test("createOpname: status draft, qty_sistem snapshot, TAPI stok BELUM berubah s
 
 test("decideOpname: 'setuju' memposting selisih ke ledger, tercatat siapa & kapan", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const bubur = await itemId(client, "BB-001");
 
     const before = await getCurrentStock(client, bubur, ck);
@@ -623,7 +624,7 @@ test("decideOpname: 'setuju' memposting selisih ke ledger, tercatat siapa & kapa
 
 test("decideOpname: 'tolak' tidak mengubah stok sama sekali", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const bubur = await itemId(client, "BB-001");
 
     const before = await getCurrentStock(client, bubur, ck);
@@ -645,7 +646,7 @@ test("decideOpname: 'tolak' tidak mengubah stok sama sekali", async () => {
 
 test("decideOpname: draft yang sudah diputuskan tidak bisa diputuskan ulang", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const draft = await createOpname(client, {
       locationId: ck,
       tanggal: "2026-09-29",
@@ -662,7 +663,7 @@ test("decideOpname: draft yang sudah diputuskan tidak bisa diputuskan ulang", as
 
 test("listOpname: filter ?status=draft cuma menampilkan yang belum diputuskan, baris berisi item & selisih", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
 
     const draft1 = await createOpname(client, {
       locationId: ck,
@@ -690,7 +691,9 @@ test("listOpname: filter ?status=draft cuma menampilkan yang belum diputuskan, b
 
     const found1 = drafts.find((d) => d.headerId === draft1.headerId)!;
     assert.equal(found1.status, "draft");
-    assert.equal(found1.locationId, ck);
+    // Number(...) WAJIB -- driver pg mengembalikan BIGINT sebagai string JS,
+    // sedangkan `kitchenLocationId` sudah numeric (lihat komentarnya).
+    assert.equal(Number(found1.locationId), ck);
     assert.equal(found1.baris[0].itemKode, "BB-001");
     assert.equal(found1.baris[0].selisih, 3);
 

@@ -1,5 +1,5 @@
 import { ApiError, api } from "./client";
-import type { HppMethod, LokasiDetailInput, LokasiLengkap, LokasiPenolakanNonaktif } from "./types";
+import type { HppMethod, LokasiDetailInput, LokasiLengkap, LokasiPenolakanNonaktif, LokasiTipe } from "./types";
 
 export class LokasiTidakBisaNonaktifError extends Error {
   constructor(public readonly penghalang: string[]) {
@@ -27,8 +27,11 @@ export function listLokasiLengkap(): Promise<LokasiLengkap[]> {
   return api.get("/api/inventory/lokasi");
 }
 
+/** `entitas` TIDAK diterima lagi -- derived otomatis dari `tipe` di backend
+ * (lihat migrasi core 0013 & `createLokasi` di domain/pengaturan.ts). `tipe`
+ * WAJIB diisi (bukan opsional seperti field detail lain). */
 export function createLokasi(
-  input: { name: string; entitas: string } & LokasiDetailInput,
+  input: { name: string; tipe: LokasiTipe } & Omit<LokasiDetailInput, "tipe">,
 ): Promise<{ id: string }> {
   return api.post("/api/inventory/lokasi", input);
 }
@@ -41,7 +44,7 @@ export function createLokasi(
  */
 export async function updateLokasi(
   id: number,
-  input: { name?: string; entitas?: string; isActive?: boolean } & LokasiDetailInput,
+  input: { name?: string; isActive?: boolean } & LokasiDetailInput,
 ): Promise<{ id: number }> {
   try {
     return await api.patch(`/api/inventory/lokasi/${id}`, input);

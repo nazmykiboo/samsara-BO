@@ -304,9 +304,10 @@ export interface RekomendasiHargaChannel {
 }
 export interface RekomendasiHargaResult {
   kode: string;
-  hppPerPorsi: number | null;
+  /** TIDAK ADA di respons untuk role supervisor/staf (hpp.lihat_harga, Tahap 1B) -- `rekomendasi` (harga JUAL) tetap tampil. */
+  hppPerPorsi?: number | null;
   targetFoodCostPersen: number;
-  hargaDasar: number | null;
+  hargaDasar?: number | null;
   rekomendasi: RekomendasiHargaChannel[];
 }
 
@@ -372,7 +373,8 @@ export interface StokResponse {
   qty: number;
 }
 
-/** transferId/locationAsalId/locationTujuanId adalah string karena kolomnya BIGINT (lihat catatan headerId di atas). */
+/** transferId/locationAsalId/locationTujuanId adalah string karena kolomnya BIGINT (lihat catatan headerId di atas).
+ * hargaTransferPerSatuan/nilai TIDAK ADA di respons untuk role supervisor/staf (hpp.lihat_harga, Tahap 1B). */
 export interface DalamPerjalananRow {
   transferId: string;
   locationAsalId: string;
@@ -380,8 +382,8 @@ export interface DalamPerjalananRow {
   itemKode: string | null;
   qtyKirim: number;
   unit: string;
-  hargaTransferPerSatuan: number | null;
-  nilai: number | null;
+  hargaTransferPerSatuan?: number | null;
+  nilai?: number | null;
 }
 
 export interface PembelianBarisInput {
@@ -399,8 +401,9 @@ export interface PeringatanKenaikanHarga {
 export interface PembelianResult {
   headerId: string;
   baris: Array<{ itemKode: string; qtyRecipeUnit: number }>;
-  /** Tahap 3 -- terisi kalau `vendorId` dikirim dan ada baris yang harganya naik di atas ambang. Informasional, tidak pernah menggagalkan pembelian. */
-  peringatanHarga: PeringatanKenaikanHarga[];
+  /** Tahap 3 -- terisi kalau `vendorId` dikirim dan ada baris yang harganya naik di atas ambang. Informasional, tidak pernah menggagalkan pembelian.
+   * TIDAK ADA di respons untuk role supervisor/staf (hpp.lihat_harga, Tahap 1B). */
+  peringatanHarga?: PeringatanKenaikanHarga[];
 }
 
 export interface ProduksiInput {
@@ -436,7 +439,8 @@ export interface TransferKirimBarisInput {
 export interface TransferKirimResult {
   headerId: string;
   antarEntitas: boolean;
-  baris: Array<{ itemKode: string; qtyKirim: number; hargaTransferPerSatuan: number | null }>;
+  /** hargaTransferPerSatuan TIDAK ADA per baris untuk role supervisor/staf (hpp.lihat_harga, Tahap 1B). */
+  baris: Array<{ itemKode: string; qtyKirim: number; hargaTransferPerSatuan?: number | null }>;
 }
 
 export interface TransferTerimaResult {
@@ -530,7 +534,8 @@ export interface LaporanHarianMasukBaris {
   itemNama: string;
   qtyBeli: number;
   satuanBeli: string;
-  hargaSatuan: number;
+  /** TIDAK ADA di respons untuk role supervisor/staf (hpp.lihat_harga, Tahap 1B). */
+  hargaSatuan?: number;
   /** Nama vendor (Tahap 3+) kalau pembelian ini punya vendor. Null untuk pembelian lama sebelum vendor diwajibkan. */
   vendorNama: string | null;
   /** DEPRECATED -- teks bebas dari SEBELUM vendor diwajibkan, null untuk pembelian baru. Tampilkan sebagai "Supplier (lama)" kalau terisi. */
@@ -590,9 +595,12 @@ export interface DetailTransaksiPenjualanBaris {
   sumberPencatatan: SumberPencatatan;
   /** HPP (rupiah) menu ini PADA SAAT transaksi dicatat. `null` kalau waktu itu HPP tidak bisa
    * dihitung (item resep datanya belum lengkap / `pending_data`) -- tampilkan sebagai "HPP belum
-   * tersedia", bukan error. Lihat `HppSumber` untuk arti `hppSumber`. */
-  hppSaatTransaksi: number | null;
-  hppSumber: HppSumber;
+   * tersedia", bukan error. Lihat `HppSumber` untuk arti `hppSumber`.
+   * KEDUA field ini TIDAK ADA SAMA SEKALI di respons untuk role supervisor/staf (hpp.lihat_harga,
+   * Tahap 1B) -- beda dari `null` (yang berarti "HPP memang belum terhitung"). Konsumen WAJIB cek
+   * `!== undefined` dulu sebelum membedakan kasus `null`. */
+  hppSaatTransaksi?: number | null;
+  hppSumber?: HppSumber;
 }
 
 /** Response GET /transaksi/penjualan (2026-10-30: bukan array flat lagi). `total` = jumlah

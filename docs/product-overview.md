@@ -218,6 +218,14 @@ Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
   saja) sesuai preseden § "Keputusan desain penting" di bawah, tapi daftar
   **ringkas publik** (tanpa login, dipakai flow login PIN staf & picker
   lokasi di seluruh app) ada di `GET /api/core/lokasi`.
+  **`tipe` jadi WAJIB & satu-satunya sumber kebenaran "ini Central Kitchen"
+  (2026-11-01, migrasi `0013_tipe_lokasi_wajib`)** — sebelumnya `entitas`
+  (teks bebas independen) yang dipakai ~7 titik kode untuk pengenalan CK,
+  dan bug nyata ditemukan: rename nama lokasi CK membuatnya berhenti
+  dikenali sebagai Kitchen di seluruh app. `entitas` sekarang **derived**
+  (otomatis sama persis dengan `tipe`, bukan input form lagi) — form
+  tambah/edit lokasi TIDAK punya field "Entitas" lagi, dan ganti `tipe`
+  pada lokasi yang sudah punya transaksi ditolak 400.
 - `core_business_identity` (BARU, satu baris): nama tampilan + logo
   (PNG/JPG/WebP maks 500KB, disimpan sebagai bytea). `GET
   /api/core/identitas-bisnis`(`/logo`) publik; `PUT` owner saja (action
@@ -265,9 +273,25 @@ Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
 - **Snapshot HPP historis** per baris transaksi penjualan (migrasi 0028,
   kolom `hpp_saat_transaksi`/`hpp_sumber`) — **✅ hidup penuh & teruji**:
   ditulis otomatis tiap transaksi Penjualan baru (`snapshot_asli`), tampil
-  di halaman Riwayat Transaksi, dan dipakai analitik operasional untuk tren
-  COGS (`cogsTren`). Jalur backfill untuk data lama (`snapshot_estimasi`)
-  sudah ada skemanya tapi scriptnya di luar migrasi ini.
+  di halaman Riwayat Transaksi **untuk owner/manajer_ops saja** (lihat
+  catatan kebocoran biaya di bawah), dan dipakai analitik operasional
+  untuk tren COGS (`cogsTren`). Jalur backfill untuk data lama
+  (`snapshot_estimasi`) sudah ada skemanya tapi scriptnya di luar migrasi
+  ini.
+- **Kebocoran field biaya ke supervisor/staf ditutup (2026-11-01, Tahap
+  1B)** — audit menemukan 7 endpoint yang mengembalikan field biaya
+  (`hppSaatTransaksi`/`hppSumber` di Riwayat Transaksi, `hargaSatuan` di
+  Laporan Harian, `hppPerPorsi`/`hargaDasar` di rekomendasi harga menu,
+  `hargaTransferPerSatuan`/`nilai` di Transfer & "dalam perjalanan",
+  `peringatanHarga` di Pembelian, `hargaTerakhir` di satu endpoint vendor)
+  TANPA gate `hasPermission(user, "hpp.lihat_harga")`, padahal field
+  serupa sudah benar di-strip di endpoint lain (`GET /items/:kode/hpp`,
+  dkk) sejak lama. Semua 7 ditutup dengan pola yang sama (strip di layer
+  response, query SQL tidak berubah). **Test permanen anti-regresi**
+  (`apps/api/src/cost-leak.test.ts`) memindai respons ketujuh endpoint ini
+  per role (scan rekursif nama field, bukan cuma 7 assert manual) —
+  dengan kontrol positif owner/manajer_ops supaya test tidak lolos cuma
+  karena field hilang semua.
 - Analitik — **bukan modul terpisah**, cuma 2 endpoint di dalam modul
   Inventory (`GET /analitik/penjualan`, `GET /analitik/operasional`):
   - Penjualan: minggu ini vs minggu lalu per menu, top/bottom produk,
@@ -323,13 +347,15 @@ Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
   - **Harga difilter berdasar permission `hpp.lihat_harga`** (role
     supervisor/staf): katalog per vendor, "pencarian barang ke vendor", dan
     riwayat harga semuanya **menyembunyikan/403 harga** untuk role tanpa
-    izin itu — KECUALI satu endpoint sempit "harga terakhir untuk satu
-    vendor+item" (`GET /vendor/:id/item/:itemKode/harga-terakhir`) yang
-    **sengaja tetap tampil ke supervisor**, karena itu yang dipakai form
-    Pembelian untuk isi-otomatis & supervisor memang boleh bikin pembelian
-    — tanpa itu dia tidak bisa menilai wajar-tidaknya harga yang
-    ditawarkan vendor. Alasan lengkap: `docs/architecture-decisions.md`
-    § 28.
+    izin itu. Endpoint "harga terakhir untuk satu vendor+item" (`GET
+    /vendor/:id/item/:itemKode/harga-terakhir`, dipakai form Pembelian
+    untuk isi-otomatis) **sempat sengaja TIDAK di-strip** supaya supervisor
+    bisa menilai kewajaran harga vendor saat isi Pembelian — **direvisi
+    2026-11-01 (Tahap 1B)**: sekarang ikut di-strip juga, konsisten "tidak
+    ada field biaya bocor ke supervisor/staf" di SEMUA endpoint tanpa
+    kecuali (isi-otomatis form Pembelian jadi tidak berfungsi untuk
+    supervisor, trade-off yang diterima sadar). Alasan desain lama:
+    `docs/architecture-decisions.md` § 28.
   - **Supplier teks lama tidak digabung otomatis** ke vendor baru — endpoint
     "laporan supplier lama" (`GET /vendor/laporan-supplier-lama`, owner/
     manajer_ops) cuma mengelompokkan & melaporkan daftar teks supplier yang
@@ -367,10 +393,21 @@ Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
   POST ke 4 endpoint import lewat akun `integrasi`, jadwal cron di n8n.
   GoFood (dalam workflow Log Penjualan) dan Majoo level-transaksi
   **berhenti menghasilkan baris baru sejak ±28 Okt** walau eksekusi n8n
-  tetap "success" — silent-failure yang belum didiagnosis, **di luar
-  scope perbaikan sejauh ini**, perlu dicek langsung di n8n UI. (4
-  workflow LAMA berbasis Google Sheets, `devops/n8n/*.json` tanpa akhiran
-  `-direct`, masih ada di repo tapi sudah digantikan, tidak diimpor lagi.)
+  tetap "success" — **didiagnosis & diperbaiki 2026-11-01 (Tahap 1C)**:
+  akar masalahnya pola `(response && response.xxx) || []` dikombinasikan
+  `ignoreHttpStatusErrors: true` di **10 Code node** across
+  `log-penjualan-direct.json` dan `transaksi-biaya-direct.json` (token
+  revoked/expired atau bentuk respons tak terduga diam-diam dianggap
+  "tidak ada data lagi", bukan error). Semua 10 node (+3 node terkait di
+  `raw-majoo-direct.json`) sekarang throw eksplisit kalau bentuk respons
+  tidak sesuai, ditambah page cap, timeout, dan logging row-count per
+  halaman. Backfill gap: window Majoo dilebarkan sementara 2→7 hari
+  (WAJIB dikembalikan manual setelah selesai), GoFood butuh backfill
+  manual per-hari (tidak punya konsep window — lihat
+  `devops/n8n/README.md` § 13 untuk prosedur lengkap kedua jenis
+  backfill ini). (4 workflow LAMA berbasis Google Sheets,
+  `devops/n8n/*.json` tanpa akhiran `-direct`, masih ada di repo tapi
+  sudah digantikan, tidak diimpor lagi.)
 - Item mapping: pemetaan kode eksternal platform → kode menu internal
   Samsara, antrian disegarkan otomatis dari arsip log — ✅
 - Proses sinkronisasi (`POST /proses`): ubah arsip log jadi transaksi

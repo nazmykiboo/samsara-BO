@@ -65,9 +65,23 @@ async function patchLokasi(
   return { status: res.status, body: (await res.json()) as { error?: string; penghalang?: string[]; id?: number } };
 }
 
+async function postLokasi(
+  body: Record<string, unknown>,
+  token: string,
+): Promise<{ status: number; body: { error?: string; id?: number } }> {
+  const res = await fetch(`${baseUrl}/api/inventory/lokasi`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: (await res.json()) as { error?: string; id?: number } };
+}
+
 async function bersihkanArtefakTest(): Promise<void> {
   const client = await pool.connect();
   try {
+    await client.query(`DELETE FROM inventory_transaksi_opname WHERE location_id = ANY(
+      SELECT id FROM core_locations WHERE name LIKE $1)`, [`${PREFIX}%`]);
     await client.query(`DELETE FROM inventory_stock_ledger WHERE location_id = ANY(
       SELECT id FROM core_locations WHERE name LIKE $1)`, [`${PREFIX}%`]);
     await client.query(`DELETE FROM hr_jadwal_shift WHERE lokasi_id = ANY(
@@ -248,6 +262,74 @@ test("PATCH /lokasi/:id: field detail baru (alamat, kota, jamBuka, dst) tersimpa
   assert.equal(row[0].kota, "Malang");
   assert.equal(row[0].jam_buka, "06:00:00");
   assert.equal(row[0].penanggung_jawab, "Ibnu");
+});
+
+// ---------------------------------------------------------------------------
+// Tahap 1A: tipe lokasi jadi sumber kebenaran CK (entitas derived dari tipe)
+// ---------------------------------------------------------------------------
+
+test("POST /lokasi: tanpa tipe ditolak 400 dengan pesan jelas", async () => {
+  const hasil = await postLokasi({ name: `${PREFIX}TANPA-TIPE` }, ownerToken);
+  assert.equal(hasil.status, 400);
+  assert.match(hasil.body.error ?? "", /tipe lokasi wajib dipilih/i);
+});
+
+test("POST /lokasi: dengan tipe='kitchen' -> entitas tersimpan otomatis sama persis ('kitchen'), BUKAN input terpisah", async () => {
+  const hasil = await postLokasi({ name: `${PREFIX}KITCHEN-BARU`, tipe: "kitchen" }, ownerToken);
+  assert.equal(hasil.status, 201, JSON.stringify(hasil.body));
+
+  const row = await query<{ tipe: string; entitas: string }>(
+    `SELECT tipe, entitas FROM core_locations WHERE id = $1`,
+    [hasil.body.id],
+  );
+  assert.equal(row[0].tipe, "kitchen");
+  assert.equal(row[0].entitas, "kitchen", "entitas HARUS derived dari tipe, walau body request tidak mengirim entitas sama sekali");
+});
+
+test("PATCH /lokasi/:id: rename nama SAJA (tipe tetap) TIDAK mengubah tipe/entitas lokasi -- regresi bug nyata owner", async () => {
+  const create = await postLokasi({ name: `${PREFIX}CK-LAMA`, tipe: "kitchen" }, ownerToken);
+  const id = create.body.id!;
+
+  const hasil = await patchLokasi(id, { name: `${PREFIX}CK-BARU` }, ownerToken);
+  assert.equal(hasil.status, 200, JSON.stringify(hasil.body));
+
+  const row = await query<{ name: string; tipe: string; entitas: string }>(
+    `SELECT name, tipe, entitas FROM core_locations WHERE id = $1`,
+    [id],
+  );
+  assert.equal(row[0].name, `${PREFIX}CK-BARU`);
+  assert.equal(row[0].tipe, "kitchen", "tipe TIDAK boleh berubah hanya karena nama di-rename");
+  assert.equal(row[0].entitas, "kitchen", "entitas TIDAK boleh berubah hanya karena nama di-rename");
+});
+
+test("PATCH /lokasi/:id: ganti tipe pada lokasi yang SUDAH punya transaksi (opname) ditolak 400, tipe tidak berubah", async () => {
+  const create = await postLokasi({ name: `${PREFIX}SUDAH-TRANSAKSI`, tipe: "outlet" }, ownerToken);
+  const id = create.body.id!;
+  await query(`INSERT INTO inventory_transaksi_opname (location_id, tanggal, status) VALUES ($1, CURRENT_DATE, 'draft')`, [
+    id,
+  ]);
+
+  const hasil = await patchLokasi(id, { tipe: "kitchen" }, ownerToken);
+  assert.equal(hasil.status, 400);
+  assert.match(hasil.body.error ?? "", /sudah punya transaksi/i);
+
+  const row = await query<{ tipe: string }>(`SELECT tipe FROM core_locations WHERE id = $1`, [id]);
+  assert.equal(row[0].tipe, "outlet", "tipe TETAP tidak berubah setelah ditolak");
+});
+
+test("PATCH /lokasi/:id: ganti tipe pada lokasi TANPA transaksi berhasil, entitas ikut berubah", async () => {
+  const create = await postLokasi({ name: `${PREFIX}BELUM-TRANSAKSI`, tipe: "outlet" }, ownerToken);
+  const id = create.body.id!;
+
+  const hasil = await patchLokasi(id, { tipe: "kitchen" }, ownerToken);
+  assert.equal(hasil.status, 200, JSON.stringify(hasil.body));
+
+  const row = await query<{ tipe: string; entitas: string }>(
+    `SELECT tipe, entitas FROM core_locations WHERE id = $1`,
+    [id],
+  );
+  assert.equal(row[0].tipe, "kitchen");
+  assert.equal(row[0].entitas, "kitchen", "entitas ikut berubah otomatis mengikuti tipe baru");
 });
 
 // ---------------------------------------------------------------------------

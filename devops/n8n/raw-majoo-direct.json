@@ -55,7 +55,7 @@
               "id": "8ee1a1fa-c20b-428a-a7f1-bb14567f7ddb",
               "name": "windowDays",
               "type": "number",
-              "value": "={{ $execution.mode === \"manual\" ? 1 : 2 }}"
+              "value": "={{ $execution.mode === \"manual\" ? 1 : 7 }}"
             }
           ]
         },
@@ -262,7 +262,9 @@
         "sendHeaders": true,
         "specifyHeaders": "json",
         "jsonHeaders": "={\"authorization\": \"Bearer {{ $json.access_token }}\", \"content-type\": \"application/json\", \"origin\": \"https://dashboard.majoo.id\", \"referer\": \"https://dashboard.majoo.id/\", \"x-brand-key\": \"undefined\", \"accept\": \"*/*\"}",
-        "options": {}
+        "options": {
+          "timeout": 15000
+        }
       },
       "retryOnFail": true,
       "maxTries": 3,
@@ -293,7 +295,7 @@
         -220
       ],
       "parameters": {
-        "jsCode": "// Baris 'sales' satu halaman -> 20 kolom KOLOM_MAJOO\n// (modules/sales-sync/src/domain/import-csv.ts:527-546), LANGSUNG\n// ditambahkan ke akumulator statis (bukan cuma di-return) -- node ini\n// jalan ulang tiap iterasi loop halaman, outputnya sendiri cuma dipakai\n// untuk debug per-halaman, sumber kebenarannya akumulator di\n// 'Ambil Baris Sales Terkumpul'. Kolom refund_* dikosongkan di sini --\n// diisi 'Petakan Baris Refund' untuk baris dari endpoint refund_sales.\nconst merged = $input.first().json;\nconst items = merged.data || [];\n\nconst baris = items.map(t => ({\n  id: t.id,\n  transaction_no: t.transaction_no,\n  transaction_date: t.transaction_date,\n  payment_date: t.payment_date,\n  order_type_name: t.order_type_name,\n  payment_method_name: t.payment_method_name,\n  payment_cashier_name: t.payment_cashier_name,\n  total_sales: t.total_sales,\n  receivables: t.receivables,\n  total_discount_amount: t.total_discount_amount,\n  refund_amount: t.refund_amount,\n  is_paid: t.is_paid,\n  outlet_id: t.outlet_id,\n  hasMore: '',\n  nextPage: '',\n  _empty: '',\n  refund_id: '',\n  refund_no: '',\n  refund_date: '',\n  refund_reason: '',\n}));\n\nconst sd = $getWorkflowStaticData('node');\nsd.barisSalesMajoo = (sd.barisSalesMajoo || []).concat(baris);\n\nreturn [{ json: { jumlahDitambahkan: baris.length, totalSejauhIni: sd.barisSalesMajoo.length } }];"
+        "jsCode": "// Baris 'sales' satu halaman -> 20 kolom KOLOM_MAJOO\n// (modules/sales-sync/src/domain/import-csv.ts:527-546), LANGSUNG\n// ditambahkan ke akumulator statis (bukan cuma di-return) -- node ini\n// jalan ulang tiap iterasi loop halaman, outputnya sendiri cuma dipakai\n// untuk debug per-halaman, sumber kebenarannya akumulator di\n// 'Ambil Baris Sales Terkumpul'. Kolom refund_* dikosongkan di sini --\n// diisi 'Petakan Baris Refund' untuk baris dari endpoint refund_sales.\n//\n// Tahap 1C (perbaikan silent-failure, lihat README §13): `merged.data`\n// yang BUKAN array (respons API tidak sesuai bentuk yang diharapkan)\n// SEKARANG throw -- TIDAK PERNAH lagi diam-diam dianggap \"halaman\n// kosong\" lewat `|| []`.\nconst merged = $input.first().json;\nif (!Array.isArray(merged.data)) {\n  throw new Error(`Majoo (sales): respons tidak sesuai bentuk yang diharapkan di halaman ${merged.page} -- ${JSON.stringify(merged).slice(0, 500)}`);\n}\nconst items = merged.data;\nconsole.log(`[Majoo raw-sales] halaman ${merged.page}: ${items.length} baris`);\n\nconst baris = items.map(t => ({\n  id: t.id,\n  transaction_no: t.transaction_no,\n  transaction_date: t.transaction_date,\n  payment_date: t.payment_date,\n  order_type_name: t.order_type_name,\n  payment_method_name: t.payment_method_name,\n  payment_cashier_name: t.payment_cashier_name,\n  total_sales: t.total_sales,\n  receivables: t.receivables,\n  total_discount_amount: t.total_discount_amount,\n  refund_amount: t.refund_amount,\n  is_paid: t.is_paid,\n  outlet_id: t.outlet_id,\n  hasMore: '',\n  nextPage: '',\n  _empty: '',\n  refund_id: '',\n  refund_no: '',\n  refund_date: '',\n  refund_reason: '',\n}));\n\nconst sd = $getWorkflowStaticData('node');\nsd.barisSalesMajoo = (sd.barisSalesMajoo || []).concat(baris);\n\nreturn [{ json: { jumlahDitambahkan: baris.length, totalSejauhIni: sd.barisSalesMajoo.length } }];"
       }
     },
     {
@@ -306,7 +308,7 @@
         60
       ],
       "parameters": {
-        "jsCode": "const limit = 100;\nconst merged = $input.first().json;\nconst items = merged.data || [];\n\nreturn [{\n  json: {\n    hasMore: items.length === limit,\n    nextPage: merged.page + 1,\n    access_token: merged.access_token,\n    start_date: merged.start_date,\n    end_date: merged.end_date\n  }\n}];"
+        "jsCode": "// Tahap 1C (perbaikan silent-failure, lihat README §13): `merged.data`\n// yang BUKAN array SEKARANG throw (konsisten dengan 'Petakan Baris\n// Sales', node ini jalan paralel menerima input yang sama -- SEBELUMNYA\n// `|| []` membuat respons tak terduga diam-diam dianggap \"halaman\n// terakhir\" tanpa error). Page cap ditambahkan supaya loop tidak\n// berjalan tanpa batas kalau API Majoo entah kenapa SELALU mengembalikan\n// tepat `limit` baris.\nconst limit = 100;\nconst MAKS_HALAMAN = 200;\nconst merged = $input.first().json;\nif (!Array.isArray(merged.data)) {\n  throw new Error(`Majoo (sales): respons tidak sesuai bentuk yang diharapkan di halaman ${merged.page} -- ${JSON.stringify(merged).slice(0, 500)}`);\n}\nconst items = merged.data;\n\nif (merged.page > MAKS_HALAMAN) {\n  throw new Error(`Majoo (sales): melewati ${MAKS_HALAMAN} halaman -- kemungkinan loop tidak berhenti, cek manual`);\n}\n\nreturn [{\n  json: {\n    hasMore: items.length === limit,\n    nextPage: merged.page + 1,\n    access_token: merged.access_token,\n    start_date: merged.start_date,\n    end_date: merged.end_date\n  }\n}];"
       }
     },
     {
@@ -496,7 +498,9 @@
         "sendHeaders": true,
         "specifyHeaders": "json",
         "jsonHeaders": "={\"authorization\": \"Bearer {{ $json.access_token }}\", \"content-type\": \"application/json\", \"origin\": \"https://dashboard.majoo.id\", \"referer\": \"https://dashboard.majoo.id/\", \"x-brand-key\": \"undefined\", \"accept\": \"*/*\"}",
-        "options": {}
+        "options": {
+          "timeout": 15000
+        }
       },
       "retryOnFail": true,
       "maxTries": 3,
@@ -512,7 +516,7 @@
         420
       ],
       "parameters": {
-        "jsCode": "// Baris 'refund' -> 20 kolom KOLOM_MAJOO. Kolom sales dikosongkan --\n// transaction_no dipakai sebagai field gabung ke baris sales terkait\n// (join dilakukan di sisi pembaca laporan, BUKAN di sini -- sama\n// seperti perilaku 'Format Refund Rows' yang sudah ada).\nconst items = $input.first().json.data || [];\n\nreturn items.map(r => ({ json: {\n  id: '',\n  transaction_no: r.no_transaksi_penjualan,\n  transaction_date: '',\n  payment_date: '',\n  order_type_name: '',\n  payment_method_name: '',\n  payment_cashier_name: '',\n  total_sales: '',\n  receivables: '',\n  total_discount_amount: '',\n  refund_amount: r.refund_rp,\n  is_paid: '',\n  outlet_id: '',\n  hasMore: '',\n  nextPage: '',\n  _empty: '',\n  refund_id: r.id,\n  refund_no: r.no_transaksi_refund,\n  refund_date: r.tanggal,\n  refund_reason: r.alasan_refund || '',\n} }));"
+        "jsCode": "// Baris 'refund' -> 20 kolom KOLOM_MAJOO. Kolom sales dikosongkan --\n// transaction_no dipakai sebagai field gabung ke baris sales terkait\n// (join dilakukan di sisi pembaca laporan, BUKAN di sini -- sama\n// seperti perilaku 'Format Refund Rows' yang sudah ada).\n//\n// Tahap 1C (perbaikan silent-failure, lihat README §13): respons yang\n// BUKAN array SEKARANG throw, bukan diam-diam dianggap \"tidak ada\n// refund\" lewat `|| []`.\nconst response = $input.first().json;\nif (!Array.isArray(response.data)) {\n  throw new Error(`Majoo (refund): respons tidak sesuai bentuk yang diharapkan -- ${JSON.stringify(response).slice(0, 500)}`);\n}\nconst items = response.data;\nconsole.log(`[Majoo raw-refund] ${items.length} baris`);\n\nreturn items.map(r => ({ json: {\n  id: '',\n  transaction_no: r.no_transaksi_penjualan,\n  transaction_date: '',\n  payment_date: '',\n  order_type_name: '',\n  payment_method_name: '',\n  payment_cashier_name: '',\n  total_sales: '',\n  receivables: '',\n  total_discount_amount: '',\n  refund_amount: r.refund_rp,\n  is_paid: '',\n  outlet_id: '',\n  hasMore: '',\n  nextPage: '',\n  _empty: '',\n  refund_id: r.id,\n  refund_no: r.no_transaksi_refund,\n  refund_date: r.tanggal,\n  refund_reason: r.alasan_refund || '',\n} }));"
       }
     },
     {

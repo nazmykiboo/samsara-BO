@@ -2,13 +2,13 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { pool } from "@samsara/core";
 import { listMinStokByLocation, upsertMinStok } from "./min-stok.js";
-import { locationId, outletLocationId, withRollback } from "./test-helpers.js";
+import { kitchenLocationId, outletLocationId, withRollback } from "./test-helpers.js";
 
 after(() => pool.end());
 
 test("upsertMinStok: item+lokasi baru -> insert, audit log old_value null", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
 
     const result = await upsertMinStok(client, { itemKode: "BB-001", locationId: ck, minStok: 500, userId: 1 });
     assert.equal(result.itemKode, "BB-001");
@@ -74,7 +74,7 @@ test("upsertMinStok: item+lokasi yang sudah ada -> update (ON CONFLICT), bukan b
 
 test("upsertMinStok: min_stok negatif ditolak", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     await assert.rejects(
       () => upsertMinStok(client, { itemKode: "BB-001", locationId: ck, minStok: -1, userId: 1 }),
       />= 0/,
@@ -84,7 +84,7 @@ test("upsertMinStok: min_stok negatif ditolak", async () => {
 
 test("upsertMinStok: item tidak ditemukan -> error", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     await assert.rejects(
       () => upsertMinStok(client, { itemKode: "ITEM-TIDAK-ADA", locationId: ck, minStok: 10 }),
       /tidak ditemukan/,
@@ -94,7 +94,7 @@ test("upsertMinStok: item tidak ditemukan -> error", async () => {
 
 test("listMinStokByLocation: cuma baris milik lokasi yang diminta, tidak bocor dari lokasi lain", async () => {
   await withRollback(async (client) => {
-    const ck = await locationId(client, "samsara_ck");
+    const ck = await kitchenLocationId(client);
     const outlet = await outletLocationId(client);
 
     await upsertMinStok(client, { itemKode: "BB-001", locationId: ck, minStok: 500, userId: 1 });

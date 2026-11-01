@@ -146,9 +146,10 @@ export async function listLokasi(client: PoolClient): Promise<LokasiRow[]> {
 
 export interface CreateLokasiInput {
   name: string;
-  entitas: string;
+  /** WAJIB -- menentukan `entitas` (derived, bukan lagi input independen).
+   * Lihat migrasi core 0013 & keputusan desain Tahap 1A. */
+  tipe: LokasiTipe;
   kode?: string;
-  tipe?: LokasiTipe;
   alamat?: string;
   kota?: string;
   telepon?: string;
@@ -160,6 +161,9 @@ export interface CreateLokasiInput {
 }
 
 export async function createLokasi(client: PoolClient, input: CreateLokasiInput): Promise<{ id: number }> {
+  if (input.tipe !== "outlet" && input.tipe !== "kitchen") {
+    throw new Error("Tipe lokasi wajib dipilih (Outlet atau Kitchen)");
+  }
   const { rows } = await client.query<{ id: number }>(
     `INSERT INTO core_locations
        (name, entitas, kode, tipe, alamat, kota, telepon, jam_buka, jam_tutup, penanggung_jawab, tanggal_buka, kitchen_default_id)
@@ -167,9 +171,9 @@ export async function createLokasi(client: PoolClient, input: CreateLokasiInput)
      RETURNING id`,
     [
       input.name,
-      input.entitas,
+      input.tipe, // entitas DERIVED dari tipe, lihat keputusan desain Tahap 1A
       input.kode ?? null,
-      input.tipe ?? null,
+      input.tipe,
       input.alamat ?? null,
       input.kota ?? null,
       input.telepon ?? null,
@@ -185,10 +189,12 @@ export async function createLokasi(client: PoolClient, input: CreateLokasiInput)
 
 export interface UpdateLokasiInput {
   name?: string;
-  entitas?: string;
   isActive?: boolean;
   kode?: string | null;
-  tipe?: LokasiTipe | null;
+  /** Kalau diisi dan BEDA dari tipe lama, ditolak kalau lokasi sudah punya
+   * transaksi (lihat `cekPenghalangGantiTipe`). `entitas` otomatis ikut
+   * berubah (derived), tidak diterima sebagai input terpisah lagi. */
+  tipe?: LokasiTipe;
   alamat?: string | null;
   kota?: string | null;
   telepon?: string | null;
@@ -265,6 +271,38 @@ export class LokasiTidakBisaNonaktifError extends Error {
 }
 
 /**
+ * Cek penghalang GANTI TIPE lokasi -- beda dari `cekPenghalangNonaktifLokasi`
+ * di atas (yang cuma soal state SAAT INI: stok sisa, transfer berjalan,
+ * dst). Ganti tipe perlu lebih ketat: lokasi yang PERNAH punya transaksi
+ * APA PUN (walau sudah lama selesai, stok sudah 0) ditolak -- supaya
+ * laporan historis yang difilter by `tipe` (lihat laporan.ts, analitik)
+ * tidak diam-diam salah kategori begitu tipe lokasi diganti.
+ *
+ * Mengecek SEMUA 6 tabel transaksi Inventory lewat satu query UNION ALL +
+ * LIMIT 1 (lebih murah daripada 6 round-trip terpisah) -- TIDAK perlu cek
+ * `inventory_stock_ledger` terpisah, baris ledger selalu berasal dari salah
+ * satu transaksi di bawah.
+ */
+async function cekPenghalangGantiTipe(client: PoolClient, locationId: number): Promise<boolean> {
+  const { rows } = await client.query(
+    `SELECT 1 FROM inventory_transaksi_pembelian WHERE location_id = $1
+     UNION ALL
+     SELECT 1 FROM inventory_transaksi_produksi WHERE location_id = $1
+     UNION ALL
+     SELECT 1 FROM inventory_transaksi_penjualan WHERE location_id = $1
+     UNION ALL
+     SELECT 1 FROM inventory_transaksi_transfer WHERE location_asal_id = $1 OR location_tujuan_id = $1
+     UNION ALL
+     SELECT 1 FROM inventory_transaksi_mutasi_lain WHERE location_id = $1
+     UNION ALL
+     SELECT 1 FROM inventory_transaksi_opname WHERE location_id = $1
+     LIMIT 1`,
+    [locationId],
+  );
+  return rows.length > 0;
+}
+
+/**
  * @param authHeader Header `Authorization` request yang memicu update ini
  * -- WAJIB diisi kalau `input.isActive === false` (diteruskan ke guard
  * jadwal shift di atas); diabaikan sama sekali untuk update lain.
@@ -300,6 +338,17 @@ export async function updateLokasi(
     if (penghalang.length > 0) throw new LokasiTidakBisaNonaktifError(penghalang);
   }
 
+  if (input.tipe !== undefined && input.tipe !== old.tipe) {
+    if (await cekPenghalangGantiTipe(client, id)) {
+      throw new Error("Lokasi ini sudah punya transaksi, tipe tidak bisa diganti lagi.");
+    }
+  }
+
+  // `entitas` DERIVED dari tipe (lihat migrasi core 0013) -- selalu
+  // disamakan ke tipe yang berlaku SETELAH update ini, bukan dari input
+  // terpisah lagi.
+  const tipeBaru = input.tipe === undefined ? old.tipe : input.tipe;
+
   await client.query(
     `UPDATE core_locations
      SET name = $1, entitas = $2, is_active = $3, kode = $4, tipe = $5, alamat = $6, kota = $7,
@@ -308,10 +357,10 @@ export async function updateLokasi(
      WHERE id = $14`,
     [
       input.name ?? old.name,
-      input.entitas ?? old.entitas,
+      tipeBaru,
       input.isActive ?? old.is_active,
       input.kode === undefined ? old.kode : input.kode,
-      input.tipe === undefined ? old.tipe : input.tipe,
+      tipeBaru,
       input.alamat === undefined ? old.alamat : input.alamat,
       input.kota === undefined ? old.kota : input.kota,
       input.telepon === undefined ? old.telepon : input.telepon,

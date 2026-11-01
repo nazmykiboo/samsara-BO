@@ -35,7 +35,8 @@ export function listVendorUntukItem(itemKode: string): Promise<VendorUntukItem[]
   return api.get(`/api/inventory/vendor/untuk-item/${encodeURIComponent(itemKode)}`);
 }
 
-export function getHargaTerakhir(vendorId: number, itemKode: string): Promise<{ hargaTerakhir: number | null }> {
+/** `hargaTerakhir` tidak ada di respons untuk role supervisor/staf (hpp.lihat_harga) -- lihat router.ts. */
+export function getHargaTerakhir(vendorId: number, itemKode: string): Promise<{ hargaTerakhir?: number | null }> {
   return api.get(`/api/inventory/vendor/${vendorId}/item/${encodeURIComponent(itemKode)}/harga-terakhir`);
 }
 

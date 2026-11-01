@@ -55,8 +55,9 @@ interface EntriOrderAsli {
     menuKode: string;
     menuNama: string;
     qty: number;
-    hppSaatTransaksi: number | null;
-    hppSumber: DetailTransaksiPenjualanBaris["hppSumber"];
+    /** `undefined` (field tidak ada sama sekali di respons, BUKAN `null`) untuk role supervisor/staf -- lihat DetailTransaksiPenjualanBaris. */
+    hppSaatTransaksi?: number | null;
+    hppSumber?: DetailTransaksiPenjualanBaris["hppSumber"];
   }>;
   totalQty: number;
 }
@@ -647,12 +648,14 @@ function KartuTransaksiTercatat({ order }: { order: EntriOrderAsli }) {
               </span>
               <span className="shrink-0 text-right text-slate-600">
                 <span className="block">{item.qty} porsi</span>
-                <span className="mt-0.5 flex items-center justify-end gap-1 text-slate-500">
-                  {item.hppSaatTransaksi === null
-                    ? "HPP belum tersedia"
-                    : `HPP ${formatRupiah(item.hppSaatTransaksi)}`}
-                  <HppSumberBadge sumber={item.hppSumber} />
-                </span>
+                {item.hppSaatTransaksi !== undefined ? (
+                  <span className="mt-0.5 flex items-center justify-end gap-1 text-slate-500">
+                    {item.hppSaatTransaksi === null
+                      ? "HPP belum tersedia"
+                      : `HPP ${formatRupiah(item.hppSaatTransaksi)}`}
+                    <HppSumberBadge sumber={item.hppSumber ?? null} />
+                  </span>
+                ) : null}
               </span>
             </li>
           ))}

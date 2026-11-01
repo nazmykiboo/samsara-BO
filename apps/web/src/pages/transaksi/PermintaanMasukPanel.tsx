@@ -24,7 +24,7 @@ export function PermintaanMasukPanel() {
   // bikin useEffect di bawah yang bergantung ke ckOptions re-run tiap
   // render -- pola bug yang sama pernah ditemukan di StokPage.tsx (lihat
   // komentar di LokasiPicker.tsx), dicegah dari awal di sini.
-  const ckOptions = useMemo(() => options.filter((l) => l.entitas === "samsara_ck"), [options]);
+  const ckOptions = useMemo(() => options.filter((l) => l.tipe === "kitchen"), [options]);
   const canPenuhi = user ? bisaMemenuhiPermintaan(user.role) : false;
 
   const [locationId, setLocationId] = useState<number | null>(null);

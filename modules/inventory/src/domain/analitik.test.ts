@@ -16,10 +16,13 @@ after(() => pool.end());
  * datang dari data sintetis test ini. Aman karena `withRollback` selalu
  * me-ROLLBACK (termasuk baris core_locations-nya).
  */
-async function lokasiQa(client: PoolClient, nama: string, entitas = "samsara_outlet"): Promise<number> {
+async function lokasiQa(client: PoolClient, nama: string, tipe: "outlet" | "kitchen" = "outlet"): Promise<number> {
   const { rows } = await client.query<{ id: string }>(
-    `INSERT INTO core_locations (name, entitas) VALUES ($1, $2) RETURNING id`,
-    [`QA-ANALITIK ${nama}`, entitas],
+    // `entitas` DERIVED dari `tipe` sejak migrasi core 0013 -- `tipe` WAJIB
+    // NOT NULL, jadi fixture ini harus ikut mengisinya (bukan cuma `entitas`
+    // seperti sebelumnya).
+    `INSERT INTO core_locations (name, entitas, tipe) VALUES ($1, $2, $2) RETURNING id`,
+    [`QA-ANALITIK ${nama}`, tipe],
   );
   // Number(...) WAJIB: driver pg mengembalikan BIGINT sebagai string JS, dan
   // fungsi analitik membandingkan lokasiId hasil query dengan `===`.
@@ -896,15 +899,15 @@ test("getAnalitikOperasional: transfer status 'dikirim' TIDAK dihitung susut (qt
     const sebelum = await getAnalitikOperasional(client, {});
 
     const { rows: ckRows } = await client.query<{ id: string }>(
-      `SELECT id FROM core_locations WHERE entitas = 'samsara_ck' LIMIT 1`,
+      `SELECT id FROM core_locations WHERE tipe = 'kitchen' LIMIT 1`,
     );
-    // entitas != 'samsara_ck' (BUKAN hardcode 'samsara_outlet') -- query yang
-    // diuji di sini (getAnalitikOperasional) sudah diperbaiki memakai pola
-    // yang sama, lihat COMMENT di domain/laporan.ts.
+    // tipe = 'outlet' (BUKAN hardcode entitas apa pun) -- query yang diuji
+    // di sini (getAnalitikOperasional) sudah diperbaiki memakai pola yang
+    // sama, lihat COMMENT di domain/laporan.ts (migrasi core 0013).
     const { rows: outletRows } = await client.query<{ id: string }>(
-      `SELECT id FROM core_locations WHERE entitas != 'samsara_ck' AND is_active = true LIMIT 1`,
+      `SELECT id FROM core_locations WHERE tipe = 'outlet' AND is_active = true LIMIT 1`,
     );
-    assert.ok(ckRows[0] && outletRows[0], "butuh lokasi CK & minimal 1 outlet aktif (migrasi 0011)");
+    assert.ok(ckRows[0] && outletRows[0], "butuh lokasi Kitchen & minimal 1 outlet aktif");
 
     const { rows: headerRows } = await client.query<{ id: string }>(
       `INSERT INTO inventory_transaksi_transfer (location_asal_id, location_tujuan_id, tanggal, status)

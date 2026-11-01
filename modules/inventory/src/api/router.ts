@@ -257,6 +257,14 @@ export function createRouter(): Router {
         const targetRaw = Number(req.query.target_food_cost);
         const target = Number.isFinite(targetRaw) && targetRaw > 0 ? targetRaw : await getTargetFoodCostPersen(client);
         const result = await getRekomendasiHarga(client, req.params.kode, target, method);
+        if (!hasPermission(user, "hpp.lihat_harga")) {
+          // Pola sama GET .../hpp: `rekomendasi` (channel + hargaJual, harga
+          // JUAL yang disarankan) TETAP tampil -- yang disembunyikan cuma
+          // hppPerPorsi & hargaDasar (keduanya langsung membocorkan biaya).
+          const { hppPerPorsi, hargaDasar, ...publicResult } = result;
+          res.json(publicResult);
+          return;
+        }
         res.json(result);
       } finally {
         client.release();
@@ -437,6 +445,13 @@ export function createRouter(): Router {
       const result = await withTransaction((client) =>
         createPembelian(client, { ...req.body, createdByUserId: user.id }),
       );
+      if (!hasPermission(user, "hpp.lihat_harga")) {
+        // `peringatanHarga` berisi hargaLama/hargaBaru (data biaya) --
+        // disembunyikan untuk staf/supervisor, sisanya (headerId, baris) aman.
+        const { peringatanHarga, ...publicResult } = result;
+        res.status(201).json(publicResult);
+        return;
+      }
       res.status(201).json(result);
     }),
   );
@@ -475,6 +490,15 @@ export function createRouter(): Router {
       const result = await withTransaction((client) =>
         createTransferKirim(client, { ...req.body, createdByUserId: user.id }),
       );
+      if (!hasPermission(user, "hpp.lihat_harga")) {
+        // `hargaTransferPerSatuan` per baris = harga/HPP item di lokasi asal
+        // (Skema A) -- disembunyikan untuk staf/supervisor, qty/item tetap tampil.
+        res.status(201).json({
+          ...result,
+          baris: result.baris.map(({ hargaTransferPerSatuan, ...rest }) => rest),
+        });
+        return;
+      }
       res.status(201).json(result);
     }),
   );
@@ -534,12 +558,19 @@ export function createRouter(): Router {
     asyncHandler(async (req, res) => {
       const client = await pool.connect();
       try {
+        const user = getAuthUser(req);
         const asal = Number(req.query.locationAsal);
         const tujuan = Number(req.query.locationTujuan);
         const rows = await getDalamPerjalanan(client, {
           locationAsalId: Number.isFinite(asal) ? asal : undefined,
           locationTujuanId: Number.isFinite(tujuan) ? tujuan : undefined,
         });
+        if (!hasPermission(user, "hpp.lihat_harga")) {
+          // `hargaTransferPerSatuan`/`nilai` membocorkan biaya transfer --
+          // disembunyikan untuk staf/supervisor, qty/item tetap tampil.
+          res.json(rows.map(({ hargaTransferPerSatuan, nilai, ...rest }) => rest));
+          return;
+        }
         res.json(rows);
       } finally {
         client.release();
@@ -659,7 +690,18 @@ export function createRouter(): Router {
       }
       const client = await pool.connect();
       try {
+        const user = getAuthUser(req);
         const result = await getLaporanHarian(client, { locationId, tanggal });
+        if (!hasPermission(user, "hpp.lihat_harga")) {
+          // `hargaSatuan` (harga beli per unit) di baris "masuk" membocorkan
+          // biaya -- sisanya (qty, vendor, dst) tetap tampil, operasional
+          // sehari-hari tetap butuh tahu APA yang dibeli, cuma bukan harganya.
+          res.json({
+            ...result,
+            masuk: result.masuk.map(({ hargaSatuan, ...rest }) => rest),
+          });
+          return;
+        }
         res.json(result);
       } finally {
         client.release();
@@ -711,6 +753,15 @@ export function createRouter(): Router {
         // Bentuk response {rows, total} (BUKAN array flat seperti sebelumnya)
         // -- paginasi per-transaksi, lihat getDetailTransaksiPenjualan. `total`
         // = jumlah TRANSAKSI yang cocok filter, bukan jumlah baris menu.
+        if (!hasPermission(user, "hpp.lihat_harga")) {
+          // hppSaatTransaksi/hppSumber membocorkan biaya per baris -- Riwayat
+          // Transaksi untuk supervisor/staf TIDAK boleh menampilkan HPP.
+          res.json({
+            rows: hasil.rows.map(({ hppSaatTransaksi, hppSumber, ...rest }) => rest),
+            total: hasil.totalTransaksi,
+          });
+          return;
+        }
         res.json({ rows: hasil.rows, total: hasil.totalTransaksi });
       } finally {
         client.release();
@@ -998,13 +1049,13 @@ export function createRouter(): Router {
   // (owner/manajer_ops) khusus CRUD vendor + isi harga katalog manual.
   //
   // Harga (hargaTerakhir/riwayat) di-strip untuk role tanpa hpp.lihat_harga
-  // di endpoint BROWSE/LIST (sesuai instruksi: "harga difilter dari
-  // response supervisor dan staf") -- TAPI endpoint harga-terakhir SATU
-  // vendor+item (dipakai isi-otomatis form Pembelian) dan peringatan
-  // kenaikan harga di response POST /transaksi/pembelian SENGAJA TIDAK
-  // ikut di-strip: supervisor yang mengisi Pembelian perlu lihat harga
-  // terakhir untuk tahu apakah harga yang ditawarkan vendor wajar, beda
-  // dari "lihat katalog harga vendor secara umum" yang memang sensitif.
+  // di SEMUA endpoint tanpa kecuali (Tahap 1B, menutup SELURUH 7 eksposur
+  // dari audit -- termasuk harga-terakhir SATU vendor+item di bawah dan
+  // peringatan kenaikan harga di POST /transaksi/pembelian, yang SEBELUMNYA
+  // sengaja tidak di-strip supaya supervisor bisa menilai kewajaran harga
+  // vendor saat isi Pembelian -- keputusan direvisi: konsisten "tidak ada
+  // field biaya bocor ke supervisor/staf" lebih diutamakan daripada
+  // kenyamanan isi-otomatis itu).
   router.get(
     "/vendor",
     requirePermission("vendor.lihat"),
@@ -1089,13 +1140,18 @@ export function createRouter(): Router {
   );
 
   // Dipakai form Pembelian untuk isi-otomatis harga -- lihat catatan
-  // permission harga di atas (SENGAJA tidak di-strip di sini).
+  // permission harga di atas (Tahap 1B: sekarang ikut di-strip juga).
   router.get(
     "/vendor/:id/item/:itemKode/harga-terakhir",
     requirePermission("pembelian.create"),
     asyncHandler(async (req, res) => {
       const client = await pool.connect();
       try {
+        const user = getAuthUser(req);
+        if (!hasPermission(user, "hpp.lihat_harga")) {
+          res.json({});
+          return;
+        }
         const hargaTerakhir = await getHargaTerakhir(client, Number(req.params.id), req.params.itemKode);
         res.json({ hargaTerakhir });
       } finally {

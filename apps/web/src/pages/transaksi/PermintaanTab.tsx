@@ -7,7 +7,7 @@ type SubTab = "ajukan" | "masuk";
 
 export function PermintaanTab() {
   const options = useLokasiOptions();
-  const punyaLokasiCk = useMemo(() => options.some((l) => l.entitas === "samsara_ck"), [options]);
+  const punyaLokasiCk = useMemo(() => options.some((l) => l.tipe === "kitchen"), [options]);
 
   const [subTab, setSubTab] = useState<SubTab>("ajukan");
 

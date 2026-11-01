@@ -4,7 +4,7 @@ import type { PoolClient } from "pg";
 import { pool, writeAuditLog, type AuthUser } from "@samsara/core";
 import { createPenjualan } from "./stok.js";
 import { DEFAULT_LIMIT_DETAIL_PENJUALAN, getDetailTransaksiPenjualan } from "./laporan.js";
-import { locationId, outletLocationId, withRollback } from "./test-helpers.js";
+import { kitchenLocationId, outletLocationId, withRollback } from "./test-helpers.js";
 
 after(() => pool.end());
 
@@ -39,15 +39,9 @@ async function buatPenjualan(
   return Number(headerId);
 }
 
-/**
- * `locationId()` di test-helpers mengembalikan id BIGINT apa adanya dari
- * driver pg, jadi STRING -- sedangkan di produksi `AuthUser.locationIds`
- * sudah berupa number (core/src/auth/users.ts mengonversinya) dan router
- * mengirim `Number(req.query.lokasi)`. Dinormalkan supaya test memakai tipe
- * yang sama dengan jalur produksi.
- */
-async function lokasi(client: PoolClient, entitas: string): Promise<number> {
-  return Number(await locationId(client, entitas));
+/** Lokasi Kitchen (Central Kitchen) -- sudah numeric (lihat `kitchenLocationId`). */
+async function lokasi(client: PoolClient): Promise<number> {
+  return kitchenLocationId(client);
 }
 
 /**
@@ -471,7 +465,7 @@ test("getDetailTransaksiPenjualan: kolom jam ikut dibawa (terisi atau null)", as
 test("getDetailTransaksiPenjualan: role non-allLocations dipaksa ke lokasi sendiri walau lokasiId tidak dikirim", async () => {
   await withRollback(async (client) => {
     const outlet = await outletLocationId(client);
-    const ck = await lokasi(client, "samsara_ck");
+    const ck = await lokasi(client);
     const tanggal = await tanggalRelatif(client, 0);
     const sumber = channelTest("LOKASI-SCOPE");
 
@@ -519,7 +513,7 @@ test("getDetailTransaksiPenjualan: role non-allLocations dipaksa ke lokasi sendi
 test("getDetailTransaksiPenjualan: owner boleh mempersempit ke satu lokasi lewat lokasiId", async () => {
   await withRollback(async (client) => {
     const outlet = await outletLocationId(client);
-    const ck = await lokasi(client, "samsara_ck");
+    const ck = await lokasi(client);
     const tanggal = await tanggalRelatif(client, 0);
     const sumber = channelTest("LOKASI-OWNER");
 

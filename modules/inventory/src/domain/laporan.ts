@@ -51,7 +51,7 @@ export interface GetLaporanHarianInput {
 /** Resolve lokasi Central Kitchen. Lihat catatan asumsi di `perluDibeli` di bawah. */
 async function resolveLokasiCk(client: PoolClient): Promise<number | null> {
   const { rows } = await client.query<{ id: number }>(
-    `SELECT id FROM core_locations WHERE entitas = 'samsara_ck' LIMIT 1`,
+    `SELECT id FROM core_locations WHERE tipe = 'kitchen' LIMIT 1`,
   );
   return rows[0]?.id ?? null;
 }
@@ -125,10 +125,11 @@ export async function getLaporanHarian(client: PoolClient, input: GetLaporanHari
   // apa yang perlu DIBELI CK, bukan per-outlet. TIDAK difilter tanggal
   // (kondisi SEKARANG, bukan histori hari itu).
   //
-  // ASUMSI (lihat migrasi 0011): saat ini cuma ada 1 Central Kitchen
-  // (`entitas = 'samsara_ck'`), jadi `LIMIT 1` aman. Kalau nanti ada CK
-  // kedua, resolveLokasiCk() di atas HARUS direvisit (jadi daftar, bukan
-  // satu id) -- jangan diam-diam "diperbaiki" tanpa keputusan owner.
+  // ASUMSI (lihat migrasi core 0013, "Tipe lokasi jadi sumber kebenaran
+  // CK"): saat ini cuma ada 1 Central Kitchen (`tipe = 'kitchen'`), jadi
+  // `LIMIT 1` aman. Kalau nanti ada CK kedua, resolveLokasiCk() di atas
+  // HARUS direvisit (jadi daftar, bukan satu id) -- jangan diam-diam
+  // "diperbaiki" tanpa keputusan owner.
   const lokasiCkId = await resolveLokasiCk(client);
   let perluDibeli: LaporanHarianPerluDibeliItem[] = [];
   if (lokasiCkId !== null) {
@@ -1020,20 +1021,19 @@ export async function getAnalitikOperasional(
   }
 
   // --- transferSusutTren --------------------------------------------------
-  // Tujuan transfer SENGAJA `entitas != 'samsara_ck'` (bukan hardcode nilai
-  // entitas outlet tertentu, mis. 'samsara_outlet') -- bug nyata ditemukan
-  // saat perbaikan vendor-pembelian (lihat docs/architecture-decisions.md
-  // §29): entitas outlet dev bisa berubah lewat fitur Outlet & Kitchen,
-  // dan versi lama query ini diam-diam berhenti mencocokkan baris apa pun
-  // (bukan error, cuma angka transferSusutTren jadi nol terus) begitu outlet
-  // di-rename entitasnya.
+  // Tujuan transfer berbasis `tipe` (BUKAN `entitas` lagi sejak migrasi core
+  // 0013, "Tipe lokasi jadi sumber kebenaran CK" -- lihat COMMENT kolom
+  // `entitas` di migrasi itu). Bug nyata versi lama (sebelum 0013): query
+  // ini hardcode nilai `entitas` ('samsara_ck'/!= itu), dan berhenti
+  // mencocokkan baris apa pun begitu `entitas` lokasi berubah/direname --
+  // sekarang `tipe` konsisten TIDAK PERNAH berubah lewat rename nama.
   const { rows: transferRows } = await client.query<{ pekan_ke: number; susut_total: string | null }>(
     `SELECT (h.tanggal - $1::date) / 7 AS pekan_ke,
             SUM(b.qty_kirim - b.qty_terima) AS susut_total
      FROM inventory_transaksi_transfer h
      JOIN inventory_transaksi_transfer_baris b ON b.header_id = h.id
-     JOIN core_locations asal ON asal.id = h.location_asal_id AND asal.entitas = 'samsara_ck'
-     JOIN core_locations tujuan ON tujuan.id = h.location_tujuan_id AND tujuan.entitas != 'samsara_ck'
+     JOIN core_locations asal ON asal.id = h.location_asal_id AND asal.tipe = 'kitchen'
+     JOIN core_locations tujuan ON tujuan.id = h.location_tujuan_id AND tujuan.tipe = 'outlet'
      WHERE h.status = 'diterima' AND h.tanggal BETWEEN $1 AND $2
      GROUP BY (h.tanggal - $1::date) / 7`,
     [rentangMulai, rentangSelesai],

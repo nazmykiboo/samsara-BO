@@ -22,7 +22,6 @@ const TIPE_LABEL: Record<LokasiTipe, string> = { outlet: "Outlet", kitchen: "Kit
 
 interface FormState {
   name: string;
-  entitas: string;
   kode: string;
   tipe: LokasiTipe | "";
   alamat: string;
@@ -37,7 +36,6 @@ interface FormState {
 
 const FORM_KOSONG: FormState = {
   name: "",
-  entitas: "",
   kode: "",
   tipe: "",
   alamat: "",
@@ -53,7 +51,6 @@ const FORM_KOSONG: FormState = {
 function lokasiToForm(l: LokasiLengkap): FormState {
   return {
     name: l.name,
-    entitas: l.entitas,
     kode: l.kode ?? "",
     tipe: l.tipe ?? "",
     alamat: l.alamat ?? "",
@@ -67,11 +64,11 @@ function lokasiToForm(l: LokasiLengkap): FormState {
   };
 }
 
-/** Body yang dikirim ke API dari FormState -- string kosong -> undefined (biarkan NULL di backend), bukan dikirim sebagai "". */
+/** Body yang dikirim ke API dari FormState -- string kosong -> undefined (biarkan NULL di backend), bukan dikirim sebagai "".
+ * `entitas` TIDAK dikirim lagi -- derived otomatis dari `tipe` di backend. */
 function formToPayload(f: FormState) {
   return {
     name: f.name.trim(),
-    entitas: f.entitas.trim(),
     kode: f.kode.trim() || undefined,
     tipe: f.tipe || undefined,
     alamat: f.alamat.trim() || undefined,
@@ -151,8 +148,7 @@ export function OutletKitchenTab() {
                       {l.tipe ? <Badge tone="info">{TIPE_LABEL[l.tipe]}</Badge> : null}
                     </p>
                     <p className="text-xs text-slate-500">
-                      {l.kode ? `${l.kode} · ` : ""}
-                      {l.entitas}
+                      {l.kode ? `${l.kode}` : ""}
                       {l.alamat ? ` · ${l.alamat}` : ""}
                       {l.kota ? `, ${l.kota}` : ""}
                     </p>
@@ -223,14 +219,14 @@ function LokasiForm({
     e.preventDefault();
     setError(null);
     setPenghalang(null);
-    if (!form.name.trim() || !form.entitas.trim()) {
-      setError("Nama dan entitas wajib diisi.");
+    if (!form.name.trim() || !form.tipe) {
+      setError("Nama dan tipe lokasi wajib diisi.");
       return;
     }
     setSaving(true);
     try {
       if (lokasiId === null) {
-        await createLokasi(formToPayload(form) as { name: string; entitas: string });
+        await createLokasi(formToPayload(form) as { name: string; tipe: LokasiTipe });
       } else {
         await updateLokasi(lokasiId, formToPayload(form));
       }
@@ -284,21 +280,20 @@ function LokasiForm({
       </h2>
       <form onSubmit={simpan} className="space-y-3">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Nama">
-            <Input value={form.name} onChange={(e) => patch({ name: e.target.value })} required />
-          </Field>
-          <Field label="Entitas (kode internal, mis. samsara_outlet)">
-            <Input value={form.entitas} onChange={(e) => patch({ entitas: e.target.value })} required />
-          </Field>
-          <Field label="Kode singkat (opsional)">
-            <Input value={form.kode} onChange={(e) => patch({ kode: e.target.value })} placeholder="mis. OUT-01" />
-          </Field>
           <Field label="Tipe">
-            <Select value={form.tipe} onChange={(e) => patch({ tipe: e.target.value as LokasiTipe })}>
-              <option value="">- Pilih -</option>
+            <Select value={form.tipe} onChange={(e) => patch({ tipe: e.target.value as LokasiTipe })} required>
+              <option value="" disabled>
+                - Pilih Outlet atau Kitchen -
+              </option>
               <option value="outlet">Outlet</option>
               <option value="kitchen">Kitchen</option>
             </Select>
+          </Field>
+          <Field label="Nama">
+            <Input value={form.name} onChange={(e) => patch({ name: e.target.value })} required />
+          </Field>
+          <Field label="Kode singkat (opsional)">
+            <Input value={form.kode} onChange={(e) => patch({ kode: e.target.value })} placeholder="mis. OUT-01" />
           </Field>
           <Field label="Alamat">
             <Input value={form.alamat} onChange={(e) => patch({ alamat: e.target.value })} />

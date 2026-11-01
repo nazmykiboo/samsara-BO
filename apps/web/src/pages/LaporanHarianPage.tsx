@@ -154,7 +154,11 @@ function MasukSection({ data }: { data: LaporanHarian }) {
                 <span>
                   {row.vendorNama ?? (row.supplier ? `Supplier (lama): ${row.supplier}` : "Vendor tidak diisi")}
                 </span>
-                <span>{formatRupiah(row.hargaSatuan)} / {row.satuanBeli}</span>
+                {row.hargaSatuan !== undefined ? (
+                  <span>
+                    {formatRupiah(row.hargaSatuan)} / {row.satuanBeli}
+                  </span>
+                ) : null}
               </div>
               {row.noReferensi ? <p className="mt-0.5 text-xs text-slate-400">Ref: {row.noReferensi}</p> : null}
             </div>

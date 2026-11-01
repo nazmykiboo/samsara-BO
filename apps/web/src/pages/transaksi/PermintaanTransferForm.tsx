@@ -29,10 +29,10 @@ export function PermintaanTransferForm() {
   // locationTujuanId). Staf outlet yang hanya di-assign ke lokasi outletnya tetap harus bisa
   // memilih CK sebagai tujuan permintaan.
   const { lokasi: daftarLokasi } = useLokasiContext();
-  const asalOptions = daftarLokasi.filter((l) => l.isActive && l.entitas === "samsara_ck");
+  const asalOptions = daftarLokasi.filter((l) => l.isActive && l.tipe === "kitchen");
   // Lokasi tujuan (outlet yang mengajukan) TETAP dibatasi ke lokasi milik user -- ini yang
   // discoped backend (locationTujuanId wajib salah satu lokasi milik staf/supervisor).
-  const tujuanOptions = options.filter((l) => l.entitas !== "samsara_ck");
+  const tujuanOptions = options.filter((l) => l.tipe !== "kitchen");
 
   const [locationAsalId, setLocationAsalId] = useState<number | null>(null);
   const [locationTujuanId, setLocationTujuanId] = useState<number | null>(null);
