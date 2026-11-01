@@ -107,14 +107,23 @@ sungguhan, bukan disalin dari versi dokumen sebelumnya):
   tidak ada yang berubah untuk pemakai sungguhan sebagai efek deploy ini.
   Detail lengkap: `devops/README.md` § "Deploy #3".
 
+- **Deploy #4 (2026-11-01): Tipe lokasi jadi sumber kebenaran CK, tutup
+  kebocoran biaya, perbaiki silent-failure n8n** — 1 migrasi baru
+  (`core/0013`), metodologi latihan-dulu yang sama persis Deploy #2/#3. 58
+  tabel lama identik sebelum/sesudah. Smoke test production lulus semua,
+  n8n/Postgres/VNC tidak terganggu (uptime tetap "Up 13 days"). Insiden
+  kecil (`.env` dev ikut ter-rsync, sempat membuat container `api` gagal
+  connect Postgres <1 menit, diperbaiki langsung) — detail lengkap dan
+  pelajarannya: `devops/README.md` § "Deploy #4".
+
 Ringkasnya: app Samsara Backoffice sudah bisa diakses publik dengan HTTPS
 valid di `burnas-app.duckdns.org`, berjalan berdampingan dengan n8n/VNC yang
 sudah ada tanpa mengganggu satu pun, database production sudah termigrasi
 bersih dari nol DAN data masternya sudah disinkronkan penuh dengan dev, DAN
-sudah melewati dua siklus deploy lanjutan penuh (Deploy #2 & #3, dengan
-latihan di salinan lokal lebih dulu tiap kalinya) tanpa insiden — app sudah
-benar-benar dipakai owner, bukan cuma live secara teknis. Production sekarang jadi acuan utama
-data master ke depan, bukan dev.
+sudah melewati tiga siklus deploy lanjutan penuh (Deploy #2, #3 & #4, dengan
+latihan di salinan lokal lebih dulu tiap kalinya) tanpa insiden berarti —
+app sudah benar-benar dipakai owner, bukan cuma live secara teknis.
+Production sekarang jadi acuan utama data master ke depan, bukan dev.
 
 ---
 

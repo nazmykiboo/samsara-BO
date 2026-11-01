@@ -1,8 +1,60 @@
 # Runbook Deploy Production — Samsara Backoffice
 
-Status per 2026-10-30 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
+Status per 2026-11-01 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
 disalin dari versi dokumen sebelumnya). **App sudah LIVE, dipakai owner
-sungguhan, dan sudah melewati Deploy #3** — lihat § "Deploy #3" di bawah.
+sungguhan, dan sudah melewati Deploy #4** — lihat § "Deploy #4" di bawah.
+
+## Deploy #4: Tipe lokasi jadi sumber kebenaran CK, tutup kebocoran biaya, perbaiki silent-failure n8n (2026-11-01)
+
+1 migrasi baru (`core/0013_tipe_lokasi_wajib`) berhasil dijalankan ke
+production, container `api`/`web` di-rebuild & restart (n8n/Postgres/VNC
+**tidak disentuh sama sekali** — uptime tetap "Up 13 days" sebelum & sesudah,
+dicek eksplisit).
+
+**Metodologi** (sama persis Deploy #2/#3): `pg_dump` production → restore ke
+database lokal terpisah (`samsara_prod_rehearsal`) → migrasi dijalankan ke
+salinan itu → 58 tabel lama dibandingkan jumlah barisnya sebelum/sesudah
+(**identik**, cuma `schema_migrations` +1 sesuai ekspektasi) → migrasi dites
+idempoten (jalan ke-2 tidak melakukan apa-apa) → database lokal dihapus →
+BARU dicoba ke production sungguhan.
+
+**Insiden kecil saat deploy (ditemukan & diperbaiki dalam <2 menit, TIDAK
+ada data yang rusak)**: `rsync` tanpa exclude eksplisit untuk `.env` sempat
+mengirim file `.env` LOKAL (dev, isi `DB_HOST=localhost` untuk Postgres
+native di laptop) ke direktori project di VPS. Docker Compose otomatis
+membaca file bernama persis `.env` di direktori project untuk substitusi
+variabel (`${DB_HOST:-postgres}`) — **terpisah** dari `env_file:
+.env.production` yang dipakai aplikasi — sehingga container `api` yang baru
+di-recreate sempat gagal connect ke Postgres (`ECONNREFUSED localhost:5432`)
+selama kurang dari semenit. Diperbaiki dengan menghapus file `.env` yang
+tidak seharusnya ada itu di VPS (bukan bagian dari deploy yang dimaksud,
+tidak pernah ada di project ini sebelumnya) dan recreate ulang container
+`api` — kembali ke default `DB_HOST=postgres` yang benar. `.env.production`
+(file application-level, isinya kredensial) **tidak pernah terbaca isinya**
+sepanjang proses ini, cuma dibandingkan checksum SHA-256 sebelum/sesudah
+(identik, tidak berubah). **Pelajaran untuk deploy berikutnya**: tambahkan
+`--exclude .env` eksplisit di perintah `rsync` (di luar exclude yang sudah
+ada untuk `node_modules`/`dist`/`.git`) supaya ini tidak terulang.
+
+**Smoke test production**: HTTPS valid, `/health` OK (3 modul aktif),
+`GET /api/core/lokasi` publik menampilkan ketiga lokasi dengan `entitas`
+sudah derived benar dari `tipe` (`Samsara Central Kitchen`/`CK Sutami`
+keduanya `entitas: "kitchen"`, `Burnas - Merjosari` `entitas: "outlet"`),
+59 tabel di production (58 lama + `schema_migrations`, tidak ada tabel baru
+dari migrasi ini — cuma `ALTER COLUMN`/`UPDATE`). **Status fitur setelah
+deploy**: `otomatis_aktif = true` di production — **ini BUKAN diaktifkan
+oleh deploy ini** (migrasi `0013` tidak menyentuh `salessync_settings` sama
+sekali), dicek dan dikonfirmasi SUDAH `true` sebelum deploy dimulai —
+owner sendiri yang menyalakannya lewat UI setelah Deploy #3, di luar scope
+pekerjaan ini, TIDAK disentuh/diubah oleh deploy ini ke arah mana pun.
+
+Backup pra-deploy diverifikasi dulu (permission 600, `gzip -t` valid, ukuran
+1.9MB wajar dibanding backup harian) SEBELUM migrasi dijalankan — tersimpan
+di `/root/samsara-backups/samsara_pre-deploy-tahap1_2026-11-01_135436.sql.gz`
+di VPS, ikut rotasi retensi 7 hari otomatis seperti backup harian lainnya.
+Tidak ada kredensial apa pun yang pernah terbaca/tertulis ke chat/log/git
+sepanjang proses (termasuk insiden `.env` di atas — hanya checksum yang
+dibandingkan, bukan isi).
 
 ## Deploy #3: Pemrosesan otomatis sales-sync, izin staf granular, rename item/menu/kategori, keamanan kredensial (2026-10-30)
 
