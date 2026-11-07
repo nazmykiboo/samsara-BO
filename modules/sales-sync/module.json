@@ -9,6 +9,7 @@
     "salessync_log_penjualan",
     "salessync_transaksi",
     "salessync_raw_majoo",
+    "salessync_majoo_refund",
     "salessync_biaya_platform",
     "salessync_item_mapping",
     "salessync_platform_channel_map",
@@ -90,6 +91,12 @@
         "path": "/otomatis/status",
         "description": "READ-ONLY. Ringkasan untuk dashboard halaman Sinkronisasi: {pengaturan, otomatisTerakhir, imporTerakhir, tertahan, perluDitinjau}. `otomatisTerakhir` dari salessync_otomatis_log (baris TERAKHIR, null kalau belum pernah jalan). `imporTerakhir` dari salessync_import_log (satu baris TERBARU per jenis_impor, array bisa kurang dari 4 elemen kalau ada jenis yang belum pernah dipanggil). `tertahan`/`perluDitinjau` dihitung LIVE lewat pratinjauProses pakai tanggalMulai tersimpan -- null (BUKAN 0) kalau tanggal_mulai_otomatis belum pernah diisi owner, beda makna dari 0 (sudah diisi, tidak ada yang tertahan).",
         "permission": { "action": "sales_sync.manage", "roles": ["owner", "manajer_ops"] }
+      },
+      {
+        "method": "GET",
+        "path": "/refund",
+        "description": "READ-ONLY (2026-11-07). Gabungan (UNION, bukan JOIN) sinyal refund dari DUA sumber TIDAK SIMETRIS dalam rentang tanggal [tanggal_mulai, tanggal_selesai] WAJIB keduanya (YYYY-MM-DD, inklusif, WIB): salessync_log_penjualan (item_type='refund', SEMUA platform -- punya item/qty, TIDAK PERNAH punya nominal Rupiah) dan salessync_majoo_refund (KHUSUS Majoo, migrasi 0004 -- punya nominal Rupiah, TIDAK PUNYA breakdown item). Dipakai Riwayat Transaksi (cocokkan ke no_referensi via HTTP cross-module dari Inventory) dan kartu 'Refund hari ini' di Laporan Harian/Analitik. Response: array {orderId, platform, itemName: string|null, qty: number|null, refundAmount: number|null, refundDate, refundReason: string|null} -- itemName/qty DAN refundAmount masing-masing bisa null tergantung sumbernya, konsumen wajib menangani keduanya independen. roles supervisor TIDAK menerima field refundAmount (hpp.lihat_harga, pola sama Tahap 1B) -- field lain (termasuk jumlah/qty) tetap tampil.",
+        "permission": { "action": "refund.lihat", "roles": ["owner", "manajer_ops", "supervisor"] }
       }
     ]
   },

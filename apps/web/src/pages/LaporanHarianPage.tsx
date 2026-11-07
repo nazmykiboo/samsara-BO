@@ -10,6 +10,7 @@ import { getLaporanHarian } from "../api/laporan";
 import { ApiError } from "../api/client";
 import type { LaporanHarian } from "../api/types";
 import { formatRupiah, todayIso } from "../utils/format";
+import { RefundHariIniCard } from "../components/RefundHariIniCard";
 
 export function LaporanHarianPage() {
   const options = useLokasiOptions();
@@ -95,6 +96,7 @@ export function LaporanHarianPage() {
 
       {!loading && !error && data ? (
         <div className="space-y-4">
+          <RefundHariIniCard tanggal={tanggal} />
           <KeluarSection data={data} />
           <MasukSection data={data} />
           <PermintaanSection data={data} />

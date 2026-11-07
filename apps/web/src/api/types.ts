@@ -601,6 +601,23 @@ export interface DetailTransaksiPenjualanBaris {
    * `!== undefined` dulu sebelum membedakan kasus `null`. */
   hppSaatTransaksi?: number | null;
   hppSumber?: HppSumber;
+  /** Refund yang terhubung ke transaksi ini lewat `noReferensi` (2026-11-07,
+   * cross-module ke Sales-Sync) -- array kosong = tidak ada refund diketahui
+   * (BUKAN berarti pasti tidak pernah direfund, cuma belum tersinkron/di
+   * luar jendela tanggal yang diambil, lihat `RefundEntry`). Field
+   * `refundAmount` di tiap entri bisa null (sumbernya tidak punya nominal)
+   * ATAU tidak ada sama sekali (role tanpa `hpp.lihat_harga`). */
+  refund: RefundEntryRiwayat[];
+}
+
+export interface RefundEntryRiwayat {
+  orderId: string;
+  platform: string;
+  itemName: string | null;
+  qty: number | null;
+  refundAmount?: number | null;
+  refundDate: string;
+  refundReason: string | null;
 }
 
 /** Response GET /transaksi/penjualan (2026-10-30: bukan array flat lagi). `total` = jumlah

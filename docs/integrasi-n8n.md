@@ -488,8 +488,24 @@ platform,platform_order_number,platform_transaction_id,order_time,settled_time,s
 
 ### 8.4 `import/raw-majoo`
 
-Tabel tujuan: `salessync_raw_majoo`. **Kunci unik: `id`** (primary key,
-diisi apa adanya dari id asli Majoo — bukan auto-increment).
+CSV sumber yang SAMA (20 kolom `KOLOM_MAJOO` di bawah) bisa berisi DUA
+bentuk baris berbeda, ditentukan dari isi kolom `id`/`refund_id`
+(**2026-11-07**, lihat `devops/n8n/README.md` § 14 untuk latar belakang
+bug yang diperbaiki):
+
+1. **Baris transaksi** (`id` terisi) → tabel `salessync_raw_majoo`.
+   **Kunci unik: `id`** (primary key, diisi apa adanya dari id asli
+   Majoo — bukan auto-increment).
+2. **Baris refund** (`id` KOSONG, `refund_id` terisi) → tabel BARU
+   `salessync_majoo_refund`. **Kunci unik: `refund_id`** (primary key,
+   diisi apa adanya dari id refund asli Majoo). Lihat § 8.4b di bawah
+   untuk kolom lengkapnya.
+3. Baris yang `id` MAUPUN `refund_id`-nya sama-sama kosong **ditolak**
+   dengan pesan jelas (`"Baris tidak punya 'id' maupun 'refund_id'..."`),
+   masuk `errors[]` seperti baris gagal lainnya — tidak pernah dipaksa
+   masuk salah satu tabel.
+
+#### 8.4a Baris transaksi (`id` terisi) → `salessync_raw_majoo`
 
 | Kolom | Wajib? | Format diterima | Catatan |
 |---|---|---|---|
@@ -526,6 +542,32 @@ Contoh header:
 ```
 id,transaction_no,transaction_date,payment_date,order_type_name,payment_method_name,payment_cashier_name,total_sales,receivables,total_discount_amount,refund_amount,is_paid,outlet_id,hasMore,nextPage,_empty,refund_id,refund_no,refund_date,refund_reason
 ```
+
+#### 8.4b Baris refund (`id` KOSONG, `refund_id` terisi) → `salessync_majoo_refund`
+
+Kolom SUMBER yang dibaca sama persis dengan baris transaksi di atas (CSV
+satu format, 20 kolom) — tapi hanya 5 kolom berikut yang dipakai untuk
+jenis baris ini (kolom lain boleh/memang dikosongkan sumbernya, lihat
+`devops/n8n/raw-majoo-direct.json` node "Petakan Baris Refund"):
+
+| Kolom sumber | Kolom tabel | Wajib? | Format diterima | Catatan |
+|---|---|---|---|---|
+| `refund_id` | `refund_id` | **Wajib** | bilangan bulat | **KUNCI UNIK**, id refund asli dari Majoo (BUKAN id transaksi). |
+| `refund_no` | `refund_no` | Opsional | teks bebas | Kosong -> `NULL`. |
+| `transaction_no` | `transaction_no` | **Wajib** | teks bebas | Menghubungkan ke transaksi asal secara teks (bukan FK) -- lihat `salessync_raw_majoo.transaction_no` dan `salessync_log_penjualan.order_id`. |
+| `refund_date` | `refund_date` | **Wajib** | format `YYYY-MM-DD HH:mm:ss` (tanpa offset/Z), diperlakukan sebagai **jam lokal Asia/Jakarta apa adanya** -- lihat catatan "Z" di atas, logika yang sama dipakai di sini | |
+| `refund_amount` | `refund_amount` | **Wajib** | sama seperti `total_sales` baris transaksi | |
+| `refund_reason` | `refund_reason` | Opsional | teks bebas | Kosong -> `NULL`. |
+
+Seluruh 20 kolom baris CSV-nya (termasuk yang kosong) ikut disimpan apa
+adanya ke kolom `raw_payload` (JSONB) -- untuk ketertelusuran/debug,
+tidak dipakai logic apa pun.
+
+**Upsert kunci `refund_id`** (`ON CONFLICT (refund_id) DO UPDATE`) --
+kirim ulang baris refund yang sama (mis. `refund_amount` dikoreksi)
+memperbarui baris yang ada, bukan membuat baris dobel. **Tidak ada
+penggabungan/dedup per `transaction_no`** -- satu transaksi yang direfund
+dua kali (dua `refund_id` berbeda) tersimpan sebagai DUA baris terpisah.
 
 ### 8.5 `import/biaya-platform`
 

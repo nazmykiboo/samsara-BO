@@ -87,6 +87,7 @@ import {
   listPermintaanTransfer,
   type PermintaanTransferStatus,
 } from "../domain/permintaan-transfer.js";
+import { listRefundViaApi, type RefundViaApi } from "../lib/internal-api.js";
 import {
   getAnalitikOperasional,
   getAnalitikPenjualan,
@@ -750,6 +751,36 @@ export function createRouter(): Router {
           limit: Number.isFinite(limit) ? limit : undefined,
           offset: Number.isFinite(offset) ? offset : undefined,
         });
+
+        // Refund (cross-module, Sales-Sync) -- lihat baris terhubung "Refund"
+        // di Riwayat Transaksi (2026-11-07). MURNI informasional, dicocokkan
+        // ke no_referensi; kegagalan ambilnya TIDAK BOLEH menggagalkan
+        // seluruh Riwayat Transaksi (fallback ke "tidak ada info refund").
+        // authHeader DITERUSKAN APA ADANYA -- Sales-Sync menerapkan gate
+        // hpp.lihat_harga-nya SENDIRI terhadap user yang sama, jadi
+        // refundAmount otomatis ikut ter-strip untuk supervisor tanpa
+        // Inventory perlu strip ulang di sini.
+        const refundByOrderId = new Map<string, RefundViaApi[]>();
+        if (hasil.rows.length > 0 && req.headers.authorization) {
+          const tanggalBaris = hasil.rows.map((r) => r.tanggal);
+          const rangeMulai = tanggalBaris.reduce((a, b) => (a < b ? a : b));
+          const rangeSelesai = tanggalBaris.reduce((a, b) => (a > b ? a : b));
+          try {
+            const refundRows = await listRefundViaApi(req.headers.authorization, rangeMulai, rangeSelesai);
+            for (const r of refundRows) {
+              const list = refundByOrderId.get(r.orderId) ?? [];
+              list.push(r);
+              refundByOrderId.set(r.orderId, list);
+            }
+          } catch {
+            // diam -- lihat komentar di atas, Riwayat Transaksi tetap tampil tanpa info refund.
+          }
+        }
+        const rowsDenganRefund = hasil.rows.map((r) => ({
+          ...r,
+          refund: r.noReferensi ? (refundByOrderId.get(r.noReferensi) ?? []) : [],
+        }));
+
         // Bentuk response {rows, total} (BUKAN array flat seperti sebelumnya)
         // -- paginasi per-transaksi, lihat getDetailTransaksiPenjualan. `total`
         // = jumlah TRANSAKSI yang cocok filter, bukan jumlah baris menu.
@@ -757,12 +788,12 @@ export function createRouter(): Router {
           // hppSaatTransaksi/hppSumber membocorkan biaya per baris -- Riwayat
           // Transaksi untuk supervisor/staf TIDAK boleh menampilkan HPP.
           res.json({
-            rows: hasil.rows.map(({ hppSaatTransaksi, hppSumber, ...rest }) => rest),
+            rows: rowsDenganRefund.map(({ hppSaatTransaksi, hppSumber, ...rest }) => rest),
             total: hasil.totalTransaksi,
           });
           return;
         }
-        res.json({ rows: hasil.rows, total: hasil.totalTransaksi });
+        res.json({ rows: rowsDenganRefund, total: hasil.totalTransaksi });
       } finally {
         client.release();
       }

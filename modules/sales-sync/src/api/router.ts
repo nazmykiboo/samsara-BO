@@ -1,6 +1,6 @@
 import express, { Router, type Request, type Response, type NextFunction } from "express";
 import type { PoolClient } from "pg";
-import { pool, getAuthUser, requirePermission } from "@samsara/core";
+import { pool, getAuthUser, hasPermission, requirePermission } from "@samsara/core";
 import {
   importBiayaPlatform,
   importLogPenjualan,
@@ -15,6 +15,7 @@ import { jalankanOtomatisJikaAktif } from "../domain/otomatis.js";
 import { pratinjauProses } from "../domain/pratinjau.js";
 import { getPengaturanOtomatis, setPengaturanOtomatis } from "../domain/settings.js";
 import { getImporLogTerakhirPerJenis, getOtomatisLogTerakhir } from "../domain/status.js";
+import { listRefundRange } from "../domain/refund.js";
 
 async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
@@ -297,6 +298,34 @@ export function createRouter(): Router {
         tertahan: pratinjau?.dilewatiBelumTerpetakan.length ?? null,
         perluDitinjau: pratinjau?.perluDitinjau.length ?? null,
       });
+    }),
+  );
+
+  router.get(
+    "/refund",
+    requirePermission("refund.lihat"),
+    asyncHandler(async (req, res) => {
+      const tanggalMulai = String(req.query.tanggal_mulai ?? "");
+      const tanggalSelesai = String(req.query.tanggal_selesai ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(tanggalMulai) || !/^\d{4}-\d{2}-\d{2}$/.test(tanggalSelesai)) {
+        res.status(400).json({ error: "Query param 'tanggal_mulai'/'tanggal_selesai' (YYYY-MM-DD) wajib diisi" });
+        return;
+      }
+      const user = getAuthUser(req);
+      const client = await pool.connect();
+      try {
+        const rows = await listRefundRange(client, tanggalMulai, tanggalSelesai);
+        if (!hasPermission(user, "hpp.lihat_harga")) {
+          // refundAmount (nominal Rupiah) disembunyikan untuk supervisor --
+          // pola sama persis Tahap 1B (hpp.lihat_harga), konsisten "tidak
+          // ada field biaya bocor ke supervisor/staf" di seluruh app.
+          res.json(rows.map(({ refundAmount, ...rest }) => rest));
+          return;
+        }
+        res.json(rows);
+      } finally {
+        client.release();
+      }
     }),
   );
 

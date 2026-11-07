@@ -6,6 +6,7 @@ import { listBelumDiproses } from "../../api/sales-sync";
 import type {
   BarisBelumDiproses,
   DetailTransaksiPenjualanBaris,
+  RefundEntryRiwayat,
   SumberPencatatan,
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
@@ -60,6 +61,8 @@ interface EntriOrderAsli {
     hppSumber?: DetailTransaksiPenjualanBaris["hppSumber"];
   }>;
   totalQty: number;
+  /** Refund yang terhubung ke order ini lewat noReferensi (sama untuk semua baris menu, diambil dari baris pertama). */
+  refund: RefundEntryRiwayat[];
 }
 
 interface EntriOrderBelumDiproses {
@@ -91,6 +94,7 @@ function kelompokkanAsli(rows: DetailTransaksiPenjualanBaris[]): EntriOrderAsli[
         sumberPencatatan: row.sumberPencatatan,
         items: [],
         totalQty: 0,
+        refund: row.refund,
       };
       peta.set(row.headerId, entri);
     }
@@ -633,6 +637,11 @@ function KartuTransaksiTercatat({ order }: { order: EntriOrderAsli }) {
         </div>
         <span className="flex shrink-0 flex-col items-end gap-1">
           <SumberPencatatanBadge sumber={order.sumberPencatatan} />
+          {order.refund.length > 0 ? (
+            <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">
+              {order.refund.length === 1 ? "Ada refund" : `${order.refund.length} refund`}
+            </span>
+          ) : null}
           <span className="text-xs text-slate-400" aria-hidden>
             {terbuka ? "▲ Tutup rincian" : "▼ Lihat rincian"}
           </span>
@@ -659,9 +668,32 @@ function KartuTransaksiTercatat({ order }: { order: EntriOrderAsli }) {
               </span>
             </li>
           ))}
+          {order.refund.map((r, idx) => (
+            <RefundBarisRiwayat key={`refund-${idx}`} refund={r} />
+          ))}
         </ul>
       ) : null}
     </div>
+  );
+}
+
+/** Satu baris "Refund" terhubung ke transaksi asli -- bisa berisi item/qty (sumber non-Majoo) ATAU
+ * nominal Rupiah (sumber Majoo), JARANG keduanya sekaligus, lihat `RefundEntryRiwayat`. */
+function RefundBarisRiwayat({ refund }: { refund: RefundEntryRiwayat }) {
+  return (
+    <li className="flex items-start justify-between gap-2 border-t border-dashed border-red-100 pt-1.5">
+      <span className="min-w-0 text-red-700">
+        <span className="rounded bg-red-50 px-1.5 py-0.5 font-medium">Refund</span>{" "}
+        {refund.itemName ?? "(tanpa rincian item)"}
+        {refund.refundReason ? <span className="block text-slate-400">{refund.refundReason}</span> : null}
+      </span>
+      <span className="shrink-0 text-right text-red-700">
+        {refund.qty !== null ? <span className="block">{refund.qty} porsi</span> : null}
+        {"refundAmount" in refund && refund.refundAmount !== null && refund.refundAmount !== undefined ? (
+          <span className="block">{formatRupiah(refund.refundAmount)}</span>
+        ) : null}
+      </span>
+    </li>
   );
 }
 

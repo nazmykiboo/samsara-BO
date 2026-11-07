@@ -66,6 +66,15 @@ export function DashboardSinkronisasiSection({
         </Card>
       </div>
 
+      {status?.perluDitinjau && status.perluDitinjau > 0 ? (
+        <p className="text-xs text-slate-500">
+          <strong>Perlu ditinjau</strong> = pesanan dengan retur/refund atau data bermasalah (EXCEPTION) -- TIDAK
+          PERNAH memotong/mengembalikan stok secara otomatis. Kalau pesanannya ternyata BELUM sempat dimasak (bahan
+          belum terpakai), supervisor bisa mengoreksi stok manual lewat Transaksi &gt; Mutasi Lain, jenis "Koreksi
+          Tambah Stok", dengan alasan yang menyebut nomor pesanannya.
+        </p>
+      ) : null}
+
       {status ? (
         <Card>
           <h3 className="mb-2 text-sm font-semibold text-slate-900">Impor terakhir per sumber</h3>

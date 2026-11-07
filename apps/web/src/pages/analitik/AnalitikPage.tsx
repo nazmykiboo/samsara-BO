@@ -4,7 +4,8 @@ import { Card } from "../../components/ui/Card";
 import { Field, Input } from "../../components/ui/Input";
 import { Select } from "../../components/ui/Select";
 import { usePermission } from "../../auth/usePermission";
-import { formatTanggalSingkat } from "../../utils/format";
+import { formatTanggalSingkat, todayIso } from "../../utils/format";
+import { RefundHariIniCard } from "../../components/RefundHariIniCard";
 import { OperasionalTab } from "./OperasionalTab";
 import { PenjualanTab } from "./PenjualanTab";
 
@@ -83,6 +84,8 @@ export function AnalitikPage() {
           </button>
         ) : null}
       </Card>
+
+      <RefundHariIniCard tanggal={todayIso()} />
 
       <div className="flex flex-wrap gap-1 rounded-lg bg-slate-100 p-1">
         {TABS.map((t) => (

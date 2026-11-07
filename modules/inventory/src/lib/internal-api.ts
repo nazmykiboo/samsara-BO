@@ -34,3 +34,42 @@ export async function adaJadwalKeDepanViaApi(authHeader: string, lokasiId: numbe
   }
   return Array.isArray(data) && data.length > 0;
 }
+
+/** Satu entri hasil `GET /api/sales-sync/refund` -- lihat `RefundEntry` di
+ * `modules/sales-sync/src/domain/refund.ts` untuk arti field opsional/null-nya.
+ * `refundAmount` SENGAJA opsional di sini (bukan `| null`) -- Sales-Sync
+ * sudah menghapus key itu dari respons kalau user yang memanggil (lewat
+ * `authHeader` yang diteruskan apa adanya) tidak punya `hpp.lihat_harga`,
+ * jadi stripping-nya otomatis ikut tanpa Inventory perlu cek ulang. */
+export interface RefundViaApi {
+  orderId: string;
+  platform: string;
+  itemName: string | null;
+  qty: number | null;
+  refundAmount?: number | null;
+  refundDate: string;
+  refundReason: string | null;
+}
+
+/**
+ * GET /api/sales-sync/refund?tanggal_mulai&tanggal_selesai -- dipakai
+ * Riwayat Transaksi (`getDetailTransaksiPenjualan`) untuk menghubungkan
+ * baris transaksi ke refund-nya (lewat `no_referensi` = `orderId`). Murni
+ * informasional -- pemanggil WAJIB menangani kegagalan ini dengan lembut
+ * (Riwayat Transaksi tetap harus tampil walau pengambilan refund gagal),
+ * BUKAN melempar error yang menggagalkan seluruh request.
+ */
+export async function listRefundViaApi(
+  authHeader: string,
+  tanggalMulai: string,
+  tanggalSelesai: string,
+): Promise<RefundViaApi[]> {
+  const url = `${BASE_URL}/api/sales-sync/refund?tanggal_mulai=${tanggalMulai}&tanggal_selesai=${tanggalSelesai}`;
+  const res = await fetch(url, { headers: { Authorization: authHeader } });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const message = (data as { error?: string } | null)?.error ?? `Gagal mengambil data refund (HTTP ${res.status})`;
+    throw new Error(message);
+  }
+  return Array.isArray(data) ? (data as RefundViaApi[]) : [];
+}

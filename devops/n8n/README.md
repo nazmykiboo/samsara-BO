@@ -717,3 +717,108 @@ Import ulang-tidak-perlu dari sisi app: `POST /import/log-penjualan`
 sudah idempoten per `unique_key` (dibuat -> dilewati kalau identik,
 diperbarui kalau berubah) — aman dijalankan berkali-kali untuk tanggal
 yang sama tanpa membuat baris dobel.
+
+### Keamanan token (2026-11-07)
+
+`raw-majoo-direct.json` (cabang Sales maupun Refund) sebelumnya meneruskan
+`access_token` sebagai FIELD DATA biasa dari satu node ke node berikutnya
+(`Tentukan Rentang Tanggal` → `Siapkan Request Sales` → ... → `Increment
+Page Sales` → kembali ke `Get Detail Sales`, dan pola yang sama di cabang
+Refund) — artinya token ikut tampil di tab Output SETIAP node di
+sepanjang rantai itu kalau seseorang membuka data eksekusi di editor n8n,
+bukan cuma di node yang benar-benar memintanya.
+
+**Diperbaiki**: `access_token` sekarang HANYA ada di output node
+`Parse Token Majoo`/`Parse Token Majoo (Refund)` sendiri (node yang
+memang tugasnya membaca token dari `api_tokens`). Node lain yang butuh
+token (`Get Detail Sales`, `Get Refund Sales`) mengambilnya langsung lewat
+expression `{{ $('Parse Token Majoo').item.json.access_token }}` /
+`{{ $('Parse Token Majoo (Refund)').item.json.access_token }}` di field
+header-nya sendiri — BUKAN membaca `$json.access_token` dari input node
+yang mungkin sudah lewat beberapa node perantara. Node `Siapkan Request
+Sales`, `Loop Control Sales`, `Increment Page Sales`, `Siapkan Request
+Refund` TIDAK LAGI menyimpan/meneruskan `access_token` sama sekali di
+output-nya.
+
+## 14. Refund Majoo berdiri sendiri (`salessync_majoo_refund`, 2026-11-07)
+
+### Apa yang diperbaiki
+
+Diagnosis Tahap 0 (baca-saja, tidak pernah menyentuh data eksekusi n8n
+mentah) membuktikan **SETIAP baris refund dari endpoint
+`GET /v1/refund_sales` SELALU gagal masuk** sejak awal: node "Petakan
+Baris Refund" mengosongkan kolom `id` (`id: ''`) untuk baris jenis ini
+(refund memang tidak punya `id` Majoo sendiri, cuma `refund_id`) — tapi
+importer backend (`modules/sales-sync/src/domain/import-csv.ts`,
+`bilanganBulatWajib("id")`) menolak `id` kosong untuk SEMUA baris tanpa
+kecuali, karena kolom itu primary key `salessync_raw_majoo`. Baris gagal
+ini tercatat di `errors[]` respons import, yang memicu node "Ada Baris
+Gagal?" workflow ini menghentikan eksekusi dengan error eksplisit
+(`stopAndError`) — BUKAN silent-failure, tapi kemungkinan besar luput
+diperhatikan karena alasannya spesifik ke baris refund, bukan ke seluruh
+eksekusi.
+
+Dugaan awal ("importer melewati baris lama saat dikirim ulang, bukan
+memperbarui") **dibuktikan SALAH** lewat kode + test baru
+(`modules/sales-sync/src/domain/import-csv.test.ts`): SQL upsert
+(`ON CONFLICT (id) DO UPDATE SET ... WHERE (...) IS DISTINCT FROM (...)`)
+sudah benar memperbarui `refund_amount`/`is_paid`/`receivables`/
+`total_discount_amount`/`payment_date` saat baris dengan `id` yang sama
+dikirim ulang. Akar masalahnya murni `id` kosong, bukan logic update.
+
+### Perubahan
+
+- **Tabel baru `salessync_majoo_refund`** (migrasi
+  `modules/sales-sync/src/db/migrations/0004_tabel_refund_majoo.sql`),
+  kunci unik `refund_id`. Baris refund (`id` kosong, `refund_id` terisi)
+  SEKARANG masuk ke sini lewat `importRawMajoo` yang sudah dibuat
+  bercabang: `id` terisi → `salessync_raw_majoo` (seperti sebelumnya),
+  `id` kosong + `refund_id` terisi → `salessync_majoo_refund` (BARU),
+  keduanya kosong → ditolak dengan pesan jelas. Spesifikasi lengkap:
+  `docs/integrasi-n8n.md` § 8.4.
+- **`raw-majoo-direct.json` cabang Refund** sekarang MENGIKUTI SEMUA
+  halaman (pola loop If/Wait/Set identik cabang Sales — SEBELUMNYA cuma
+  `page=1` tetap, data refund di halaman >1 hilang diam-diam kalau ada).
+  Node baru: `Gabung Konteks Halaman Refund`, `Loop Control Refund`,
+  `Ada Halaman Lagi? (Refund)`, `Tunggu 2 Detik (Refund)`,
+  `Increment Page Refund`, `Ambil Baris Refund Terkumpul`.
+- Jendela tanggal refund (`start_date`/`end_date` yang dikirim ke
+  `/v1/refund_sales`) didokumentasikan eksplisit sebagai **tanggal
+  refund** (bukan tanggal transaksi asal) di komentar node "Siapkan
+  Request Refund" — nama endpoint & perilakunya mengindikasikan ini,
+  TIDAK bisa dipastikan 100% tanpa akses API langsung (di luar scope
+  diagnosis).
+- **Tidak ada penggabungan/dedup per `transaction_no`** — satu transaksi
+  yang direfund dua kali tetap tersimpan sebagai DUA baris
+  `salessync_majoo_refund` terpisah (dua `refund_id` berbeda), teruji.
+- Respons API yang bentuknya tidak sesuai (bukan array) ATAU error HTTP
+  SEKARANG throw eksplisit di "Petakan Baris Refund"/"Loop Control
+  Refund" — pola sama Tahap 1C, tidak lagi coalesce diam-diam ke `[]`.
+- Jendela impor (`windowDays`) TETAP 7 hari sementara (belum dikembalikan
+  ke 2 hari dari Tahap 1C, lihat § 13) — refund dengan jarak waktu dari
+  transaksi aslinya yang jauh (lihat 2 baris legacy Agustus di arsip)
+  tetap bisa tertangkap selama masih dalam 7 hari dari HARI INI (window
+  ini basisnya tanggal refund, bukan tanggal transaksi asal).
+- Lihat juga § 13 "Keamanan token" di atas — berlaku untuk cabang Refund
+  juga (token tidak lagi ikut di output node manapun selain node login).
+
+### Langkah impor ulang / backfill refund yang terlewat
+
+Refund yang SUDAH terjadi sebelum perbaikan ini (termasuk 2 transaksi
+yang jadi pemicu diagnosis ini) **TIDAK otomatis tertangkap** oleh
+jadwal rutin berikutnya kalau refund-nya di luar jendela 7 hari window
+saat ini. Untuk menangkapnya:
+
+1. Jalankan `raw-majoo-direct.json` secara MANUAL (bukan tunggu jadwal) --
+   dry-run dulu (§ 6) untuk cek `jumlahBaris`/pratinjau refund masuk akal.
+2. Kalau refund yang dicari lebih lama dari 7 hari ke belakang dari hari
+   eksekusi, perbesar SEMENTARA `windowDays` di node "Atur Mode" (field
+   `windowDays`, ganti angka `7` ke cakupan yang dibutuhkan untuk
+   eksekusi MANUAL itu saja) — **WAJIB dikembalikan ke nilai semula
+   setelah backfill selesai**, sama seperti catatan revert di § 13.
+3. Kirim sungguhan. `POST /import/raw-majoo` idempoten per `id`
+   (transaksi) MAUPUN per `refund_id` (refund, tabel baru) — aman
+   dijalankan berkali-kali, tidak membuat baris dobel.
+4. Verifikasi lewat Riwayat Transaksi (baris "Refund" muncul terhubung ke
+   transaksi asal) atau query langsung `salessync_majoo_refund WHERE
+   transaction_no = '...'`.

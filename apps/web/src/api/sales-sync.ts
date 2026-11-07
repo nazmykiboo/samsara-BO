@@ -95,3 +95,23 @@ export function listBelumDiproses(
 export function prosesSinkronisasi(tanggalMulai: string): Promise<HasilProsesSinkronisasi> {
   return api.post<HasilProsesSinkronisasi>("/api/sales-sync/proses", { tanggalMulai });
 }
+
+/** GET /api/sales-sync/refund -- gabungan sinyal refund dari 2 sumber TIDAK SIMETRIS (lihat
+ * RefundEntry): itemName/qty bisa null (baris dari salessync_majoo_refund, tidak ada breakdown
+ * item), refundAmount bisa null (baris platform selain Majoo, arsipnya tidak pernah punya nominal
+ * Rupiah -- BUKAN berarti refund-nya Rp 0) ATAU disembunyikan untuk role tanpa `hpp.lihat_harga`
+ * (supervisor tetap menerima baris ini, cuma field refundAmount-nya hilang). */
+export interface RefundEntry {
+  orderId: string;
+  platform: string;
+  itemName: string | null;
+  qty: number | null;
+  refundAmount?: number | null;
+  refundDate: string;
+  refundReason: string | null;
+}
+
+export function listRefund(tanggalMulai: string, tanggalSelesai: string): Promise<RefundEntry[]> {
+  const params = new URLSearchParams({ tanggal_mulai: tanggalMulai, tanggal_selesai: tanggalSelesai });
+  return api.get<RefundEntry[]>(`/api/sales-sync/refund?${params.toString()}`);
+}

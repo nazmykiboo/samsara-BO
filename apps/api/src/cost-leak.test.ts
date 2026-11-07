@@ -81,6 +81,8 @@ const FIELD_BIAYA_TERLARANG = new Set([
   "harga_baru",
   "peringatanharga",
   "peringatan_harga",
+  "refundamount",
+  "refund_amount",
   "nilai",
   "margin",
   "foodcostpct",
@@ -425,4 +427,45 @@ test("GET /vendor/:id/item/:itemKode/harga-terakhir: hargaTerakhir bocor ke supe
   const supervisor = await getJson(`/api/inventory/vendor/${vendorUmumId}/item/BB-001/harga-terakhir`, supervisorToken);
   assert.equal(supervisor.status, 200, JSON.stringify(supervisor.body));
   assertNoCostFields(supervisor.body, "harga-terakhir (supervisor)");
+});
+
+// ---------------------------------------------------------------------------
+// 8. GET /sales-sync/refund
+// ---------------------------------------------------------------------------
+
+test("GET /sales-sync/refund: refundAmount bocor ke supervisor, tetap tampil untuk owner; qty/itemName TETAP tampil untuk supervisor", async () => {
+  const tanggal = await query<{ t: string }>(`SELECT to_char(CURRENT_DATE, 'YYYY-MM-DD') AS t`).then((r) => r[0].t);
+  const client = await pool.connect();
+  const refundId = Math.floor(Date.now() / 1000);
+  try {
+    await client.query(
+      `INSERT INTO salessync_majoo_refund (refund_id, transaction_no, refund_date, refund_amount)
+       VALUES ($1, 'TEST-COSTLEAK-REFUND', now(), 57000)`,
+      [refundId],
+    );
+
+    const owner = await getJson(
+      `/api/sales-sync/refund?tanggal_mulai=${tanggal}&tanggal_selesai=${tanggal}`,
+      ownerToken,
+    );
+    assert.equal(owner.status, 200, JSON.stringify(owner.body));
+    const ownerRow = (owner.body as Array<Record<string, unknown>>).find((r) => r.orderId === "TEST-COSTLEAK-REFUND");
+    assert.ok(ownerRow && "refundAmount" in ownerRow, "owner HARUS tetap melihat refundAmount");
+    assert.equal(ownerRow!.refundAmount, 57000);
+
+    const supervisor = await getJson(
+      `/api/sales-sync/refund?tanggal_mulai=${tanggal}&tanggal_selesai=${tanggal}`,
+      supervisorToken,
+    );
+    assert.equal(supervisor.status, 200, JSON.stringify(supervisor.body));
+    assertNoCostFields(supervisor.body, "sales-sync/refund (supervisor)");
+    const supervisorRow = (supervisor.body as Array<Record<string, unknown>>).find(
+      (r) => r.orderId === "TEST-COSTLEAK-REFUND",
+    );
+    assert.ok(supervisorRow, "baris refund TETAP muncul untuk supervisor, cuma refundAmount yang disembunyikan");
+    assert.equal(supervisorRow!.platform, "Majoo", "field non-biaya (platform) tetap tampil untuk supervisor");
+  } finally {
+    await client.query(`DELETE FROM salessync_majoo_refund WHERE refund_id = $1`, [refundId]);
+    client.release();
+  }
 });

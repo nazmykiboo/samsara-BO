@@ -35,6 +35,7 @@ const PREFIX = "TEST-IMP-";
 const PLATFORM = `${PREFIX}PLATFORM`;
 /** id raw Majoo fiktif, jauh di atas id asli mana pun di arsip. */
 const MAJOO_ID_DASAR = 9_900_000_000;
+const MAJOO_REFUND_ID_DASAR = 9_800_000_000;
 
 // ---------------------------------------------------------------------------
 // Helper CSV & query
@@ -536,6 +537,45 @@ test("importRawMajoo: dibuat -> dilewati -> diperbarui dengan kunci upsert (id) 
   });
 });
 
+test("importRawMajoo: kirim ulang baris SAMA (id sama) dengan refund_amount/is_paid/receivables/total_discount_amount/payment_date berubah -> kelima kolom ter-update, BUKAN dilewati", async () => {
+  await withRollback(async (client) => {
+    const csv = buatCsv(HEADER_MAJOO, [barisMajoo(1)]);
+    assert.deepEqual(await importRawMajoo(client, csv), { dibuat: 1, diperbarui: 0, dilewati: 0, errors: [] });
+
+    const csvRefund = buatCsv(HEADER_MAJOO, [
+      barisMajoo(1, {
+        refund_amount: "57000",
+        is_paid: "0",
+        receivables: "12000",
+        total_discount_amount: "3000",
+        payment_date: "2025-12-16T09:00:00Z",
+      }),
+    ]);
+    assert.deepEqual(
+      await importRawMajoo(client, csvRefund),
+      { dibuat: 0, diperbarui: 1, dilewati: 0, errors: [] },
+      "dugaan 'baris lama dilewati, bukan di-update' TERBUKTI SALAH -- upsert ON CONFLICT DO UPDATE menangkap perubahan ini",
+    );
+    assert.equal(await hitungMajoo(client), 1, "tetap 1 baris, bukan baris baru");
+
+    const { rows } = await client.query<{
+      refund_amount: string;
+      is_paid: boolean;
+      receivables: string;
+      total_discount_amount: string;
+      payment_date: string;
+    }>(
+      `SELECT refund_amount, is_paid, receivables, total_discount_amount, payment_date::text FROM salessync_raw_majoo WHERE id = $1`,
+      [MAJOO_ID_DASAR + 1],
+    );
+    assert.equal(Number(rows[0].refund_amount), 57000, "refund_amount ter-update");
+    assert.equal(rows[0].is_paid, false, "is_paid ter-update");
+    assert.equal(Number(rows[0].receivables), 12000, "receivables ter-update");
+    assert.equal(Number(rows[0].total_discount_amount), 3000, "total_discount_amount ter-update");
+    assert.ok(rows[0].payment_date.startsWith("2025-12-16"), "payment_date ter-update");
+  });
+});
+
 test("importRawMajoo: id bukan angka masuk errors[] dengan nomor baris benar, baris lain tetap tersimpan", async () => {
   await withRollback(async (client) => {
     const csv = buatCsv(HEADER_MAJOO, [barisMajoo(1), barisMajoo(2, { id: "bukan-angka" }), barisMajoo(3)]);
@@ -616,6 +656,136 @@ test('importRawMajoo: angka "polos" (total_sales dkk.) TETAP benar walau sumber 
     assert.equal(Number(rows[0].total_sales), 50000, 'bukan 50 dari parseFloat("50,000")');
     assert.equal(Number(rows[0].receivables), -1000, 'bukan -1 dari parseFloat("-1,000")');
     assert.equal(rows[0].jam_lokal, "2025-12-15 15:12:22", '"12/15/2025 15:12:22" (gaya Sheet) = jam lokal WIB');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3b. importRawMajoo -- baris refund BERDIRI SENDIRI (id kosong, refund_id
+// terisi) -> salessync_majoo_refund. Lihat migrasi 0004 & diagnosis Tahap 0
+// (2026-11-07): endpoint /v1/refund_sales SELALU mengirim id kosong.
+// ---------------------------------------------------------------------------
+
+function barisRefundMajoo(nomor: number, ubah: Record<string, string> = {}): Record<string, string> {
+  return {
+    ...barisMajoo(nomor),
+    id: "",
+    transaction_date: "",
+    payment_date: "",
+    order_type_name: "",
+    payment_method_name: "",
+    payment_cashier_name: "",
+    total_sales: "",
+    receivables: "",
+    total_discount_amount: "",
+    refund_amount: "57000",
+    is_paid: "",
+    outlet_id: "",
+    refund_id: String(MAJOO_REFUND_ID_DASAR + nomor),
+    refund_no: `${PREFIX}RCS-${nomor}`,
+    refund_date: "2026-11-07 10:15:00",
+    refund_reason: "Pesanan dibatalkan pelanggan",
+    ...ubah,
+  };
+}
+
+const hitungRefundMajoo = (client: PoolClient) =>
+  hitung(client, `SELECT count(*)::text AS n FROM salessync_majoo_refund WHERE transaction_no LIKE $1`, [
+    `${PREFIX}%`,
+  ]);
+
+test("importRawMajoo: baris refund TANPA id (cuma refund_id) masuk ke salessync_majoo_refund, bukan ditolak", async () => {
+  await withRollback(async (client) => {
+    const csv = buatCsv(HEADER_MAJOO, [barisRefundMajoo(1)]);
+    assert.deepEqual(await importRawMajoo(client, csv), { dibuat: 1, diperbarui: 0, dilewati: 0, errors: [] });
+    assert.equal(await hitungRefundMajoo(client), 1);
+
+    const { rows } = await client.query<{
+      refund_id: string;
+      refund_no: string;
+      transaction_no: string;
+      refund_amount: string;
+      refund_reason: string;
+      jam_lokal: string;
+      raw_payload: Record<string, string>;
+    }>(
+      `SELECT refund_id, refund_no, transaction_no, refund_amount, refund_reason, raw_payload,
+              to_char(refund_date AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD HH24:MI:SS') AS jam_lokal
+       FROM salessync_majoo_refund WHERE refund_id = $1`,
+      [MAJOO_REFUND_ID_DASAR + 1],
+    );
+    assert.equal(Number(rows[0].refund_id), MAJOO_REFUND_ID_DASAR + 1);
+    assert.equal(rows[0].refund_no, `${PREFIX}RCS-1`);
+    assert.equal(rows[0].transaction_no, `${PREFIX}TRXNO-1`);
+    assert.equal(Number(rows[0].refund_amount), 57000);
+    assert.equal(rows[0].refund_reason, "Pesanan dibatalkan pelanggan");
+    assert.equal(rows[0].jam_lokal, "2026-11-07 10:15:00", '"2026-11-07 10:15:00" (tanpa offset) = jam lokal WIB apa adanya');
+    assert.equal(rows[0].raw_payload.refund_id, String(MAJOO_REFUND_ID_DASAR + 1), "raw_payload menyimpan baris CSV mentah");
+  });
+});
+
+test("importRawMajoo: kirim ulang refund SAMA (refund_id sama) tidak menggandakan, dilewati kalau identik -> diperbarui kalau refund_amount berubah", async () => {
+  await withRollback(async (client) => {
+    const csv = buatCsv(HEADER_MAJOO, [barisRefundMajoo(1)]);
+    assert.deepEqual(await importRawMajoo(client, csv), { dibuat: 1, diperbarui: 0, dilewati: 0, errors: [] });
+
+    assert.deepEqual(await importRawMajoo(client, csv), { dibuat: 0, diperbarui: 0, dilewati: 1, errors: [] });
+    assert.equal(await hitungRefundMajoo(client), 1, "kirim ulang identik tidak menambah baris");
+
+    const csvUbah = buatCsv(HEADER_MAJOO, [barisRefundMajoo(1, { refund_amount: "60000" })]);
+    assert.deepEqual(await importRawMajoo(client, csvUbah), { dibuat: 0, diperbarui: 1, dilewati: 0, errors: [] });
+    assert.equal(await hitungRefundMajoo(client), 1);
+
+    const { rows } = await client.query<{ refund_amount: string }>(
+      `SELECT refund_amount FROM salessync_majoo_refund WHERE refund_id = $1`,
+      [MAJOO_REFUND_ID_DASAR + 1],
+    );
+    assert.equal(Number(rows[0].refund_amount), 60000);
+  });
+});
+
+test("importRawMajoo: DUA refund atas SATU transaksi (transaction_no sama, refund_id beda) tersimpan KEDUANYA", async () => {
+  await withRollback(async (client) => {
+    const csv = buatCsv(HEADER_MAJOO, [
+      barisRefundMajoo(1, { transaction_no: `${PREFIX}TRXNO-SAMA` }),
+      barisRefundMajoo(2, { transaction_no: `${PREFIX}TRXNO-SAMA` }),
+    ]);
+    assert.deepEqual(await importRawMajoo(client, csv), { dibuat: 2, diperbarui: 0, dilewati: 0, errors: [] });
+
+    const { rows } = await client.query<{ refund_id: string }>(
+      `SELECT refund_id FROM salessync_majoo_refund WHERE transaction_no = $1 ORDER BY refund_id`,
+      [`${PREFIX}TRXNO-SAMA`],
+    );
+    assert.equal(rows.length, 2, "dua refund_id berbeda atas transaction_no yang sama DUA-DUANYA tersimpan");
+  });
+});
+
+test("importRawMajoo: refund atas transaksi yang transaction_date-nya BEDA (refund_date lain tanggal) tetap masuk", async () => {
+  await withRollback(async (client) => {
+    const csv = buatCsv(HEADER_MAJOO, [
+      barisRefundMajoo(1, { transaction_no: `${PREFIX}TRXNO-LAMA`, refund_date: "2026-08-20 09:00:00" }),
+    ]);
+    assert.deepEqual(await importRawMajoo(client, csv), { dibuat: 1, diperbarui: 0, dilewati: 0, errors: [] });
+
+    const { rows } = await client.query<{ jam_lokal: string }>(
+      `SELECT to_char(refund_date AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD') AS jam_lokal
+       FROM salessync_majoo_refund WHERE transaction_no = $1`,
+      [`${PREFIX}TRXNO-LAMA`],
+    );
+    assert.equal(rows[0].jam_lokal, "2026-08-20", "refund atas transaksi tanggal lain tetap tersimpan apa adanya, tidak ditolak");
+  });
+});
+
+test("importRawMajoo: baris TANPA id DAN TANPA refund_id ditolak dengan pesan jelas, baris lain tetap masuk", async () => {
+  await withRollback(async (client) => {
+    const csv = buatCsv(HEADER_MAJOO, [
+      barisRefundMajoo(1, { refund_id: "" }),
+      barisMajoo(2),
+    ]);
+    const hasil = await importRawMajoo(client, csv);
+    assert.equal(hasil.dibuat, 1, "baris 2 (transaksi valid) tetap masuk");
+    assert.equal(hasil.errors.length, 1);
+    assert.equal(hasil.errors[0]!.baris, 1);
+    assert.match(hasil.errors[0]!.pesan, /id.*maupun.*refund_id/i);
   });
 });
 

@@ -453,6 +453,52 @@ Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
   ringkasan total, dan badge status per baris arsip yang belum diproses
   ("Perlu ditinjau" untuk refund, "Menunggu tanggal mulai otomatis" untuk
   order sebelum `tanggal_mulai_otomatis`).
+- **Refund Majoo berdiri sendiri (2026-11-07)** — tabel baru
+  `salessync_majoo_refund` (migrasi 0004, kunci unik `refund_id`). Audit
+  Tahap 0 membuktikan SETIAP baris refund dari endpoint Majoo
+  `GET /v1/refund_sales` SELALU gagal masuk ke arsip sejak workflow
+  langsung-API dibangun — baris itu tidak punya `id` Majoo (cuma
+  `refund_id`), tapi importer lama mewajibkan `id` untuk SEMUA baris
+  tanpa kecuali (primary key `salessync_raw_majoo`). `importRawMajoo`
+  sekarang bercabang per baris: `id` terisi → `salessync_raw_majoo`
+  seperti sebelumnya, `id` kosong + `refund_id` terisi → tabel baru ini,
+  keduanya kosong → ditolak dengan pesan jelas. Dugaan "importer melewati
+  baris lama saat kirim ulang" **dibuktikan SALAH** lewat test — upsert
+  `ON CONFLICT` sudah benar sejak awal, akar masalahnya murni `id` kosong.
+  `raw-majoo-direct.json` cabang Refund sekarang mengikuti SEMUA halaman
+  (sebelumnya cuma page=1), dan seluruh workflow ini (+cabang Sales) TIDAK
+  LAGI meneruskan `access_token` sebagai field data antar node (lihat
+  `devops/n8n/README.md` § 13 "Keamanan token"). Spesifikasi lengkap:
+  `docs/integrasi-n8n.md` § 8.4b, prosedur backfill: `devops/n8n/README.md`
+  § 14.
+  - **`GET /api/sales-sync/refund`** (action `refund.lihat`,
+    owner/manajer_ops/supervisor) — gabungan (UNION) sinyal refund dari
+    `salessync_log_penjualan` (item_type='refund', SEMUA platform, PUNYA
+    item/qty TIDAK PERNAH punya nominal) dan `salessync_majoo_refund`
+    (KHUSUS Majoo, PUNYA nominal TIDAK PUNYA breakdown item) — dua sumber
+    sengaja TIDAK simetris, konsumen menangani `itemName`/`qty` dan
+    `refundAmount` sebagai independen. `refundAmount` di-strip untuk role
+    tanpa `hpp.lihat_harga` (pola sama Tahap 1B).
+  - **Riwayat Transaksi** menampilkan refund sebagai baris terpisah
+    berlabel "Refund" di bawah transaksi aslinya (dicocokkan lewat
+    `no_referensi`/`orderId`, panggilan cross-module dari Inventory ke
+    Sales-Sync lewat `authHeader` yang diteruskan apa adanya — stripping
+    biaya otomatis ikut tanpa Inventory perlu cek ulang).
+  - **Laporan Harian & Analitik** (Inventory) dapat kartu baru "Refund
+    hari ini" (`apps/web/src/components/RefundHariIniCard.tsx`, dipakai
+    bersama) — jumlah SELALU tampil, nominal Rupiah cuma untuk
+    owner/manajer_ops (dan cuma untuk refund Majoo, platform lain belum
+    pernah punya nominal di arsip manapun — kartu ini jujur soal
+    keterbatasan itu lewat caption, bukan berpura-pura lengkap).
+    **"Omzet bersih" SENGAJA TIDAK dibangun** di rilis ini (ditunda
+    sengaja) — Inventory belum punya konsep Rupiah penjualan historis
+    sama sekali (Laporan Harian/Analitik murni qty), butuh desain
+    terpisah (mis. snapshot harga jual per transaksi) sebelum bisa
+    dikurangi refund dengan akurat.
+  - Panel "Perlu ditinjau" (halaman Sinkronisasi) dapat keterangan
+    eksplisit: refund tidak pernah mengembalikan stok otomatis, dan kalau
+    pesanan belum sempat dimasak, supervisor memakai Mutasi Lain jenis
+    "Koreksi Tambah Stok" dengan alasan manual.
 
 ---
 

@@ -595,8 +595,45 @@ const SQL_MAJOO = `
   RETURNING id, (xmax = 0) AS was_insert
 `;
 
+// Baris refund dari endpoint TERPISAH (`/v1/refund_sales`, lihat
+// "Petakan Baris Refund" di raw-majoo-direct.json) -- TIDAK PERNAH punya
+// `id` Majoo sendiri, cuma `refund_id`. Conflict target (refund_id) = PK
+// tabel ini, lihat migrasi 0004.
+const SQL_MAJOO_REFUND = `
+  INSERT INTO salessync_majoo_refund
+    (refund_id, refund_no, transaction_no, refund_date, refund_amount, refund_reason, raw_payload)
+  VALUES ($1, $2, $3, $4, $5, $6, $7)
+  ON CONFLICT (refund_id) DO UPDATE SET
+    refund_no = EXCLUDED.refund_no,
+    transaction_no = EXCLUDED.transaction_no,
+    refund_date = EXCLUDED.refund_date,
+    refund_amount = EXCLUDED.refund_amount,
+    refund_reason = EXCLUDED.refund_reason,
+    raw_payload = EXCLUDED.raw_payload
+  WHERE (
+    salessync_majoo_refund.refund_no, salessync_majoo_refund.transaction_no,
+    salessync_majoo_refund.refund_date, salessync_majoo_refund.refund_amount,
+    salessync_majoo_refund.refund_reason
+  ) IS DISTINCT FROM (
+    EXCLUDED.refund_no, EXCLUDED.transaction_no, EXCLUDED.refund_date,
+    EXCLUDED.refund_amount, EXCLUDED.refund_reason
+  )
+  RETURNING (xmax = 0) AS was_insert
+`;
+
 /**
- * Import export transaksi mentah dari API Majoo POS.
+ * Import export transaksi mentah dari API Majoo POS -- DUA bentuk baris
+ * dari sumber CSV yang SAMA (`KOLOM_MAJOO`, 20 kolom):
+ *
+ * 1. Baris TRANSAKSI (`id` terisi) -> `salessync_raw_majoo`, upsert kunci
+ *    `id`, SAMA SEPERTI SEBELUMNYA (lihat `SQL_MAJOO`).
+ * 2. Baris REFUND (`id` KOSONG, `refund_id` terisi) -> tabel BARU
+ *    `salessync_majoo_refund` (migrasi 0004), upsert kunci `refund_id`.
+ *    Diagnosis Tahap 0 (2026-11-07) membuktikan SETIAP baris refund dari
+ *    endpoint `/v1/refund_sales` SELALU gagal sebelum ini -- `id` kosong
+ *    ditolak `bilanganBulatWajib`, tidak ada tempat lain untuk baris jenis
+ *    ini. Baris tanpa `id` MAUPUN `refund_id` ditolak dengan pesan jelas
+ *    (bukan dipaksa masuk salah satu tabel).
  *
  * Nama kolom sumber `hasMore`/`nextPage`/`_empty` dipetakan ke kolom tabel
  * `has_more`/`next_page`/`empty_field` (lihat COMMENT ON COLUMN masing-masing
@@ -612,36 +649,58 @@ export async function importRawMajoo(client: PoolClient, text: string): Promise<
 
   for (let i = 0; i < rows.length; i++) {
     const cols = rows[i]!;
-    await jalankanUpsert(client, hasil, i + 1, () => ({
-      sql: SQL_MAJOO,
-      params: [
-        bilanganBulatWajib(cols, idx.id!, "id"),
-        teksWajib(cols, idx.transaction_no!, "transaction_no"),
-        // transaction_date/payment_date/refund_date di sumber ini diakhiri
-        // "Z" tapi itu SALAH LABEL -- angkanya sebenarnya sudah waktu lokal
-        // Asia/Jakarta, bukan UTC asli. Lihat waktuWajibLokalPaksa() untuk
-        // bukti & penjelasan lengkap -- JANGAN kembalikan ke waktuWajib/
-        // waktuOpsional generic di sini.
-        waktuWajibLokalPaksa(cols, idx.transaction_date!, "transaction_date"),
-        waktuOpsionalLokalPaksa(cols, idx.payment_date!, "payment_date"),
-        teksOpsional(cols, idx.order_type_name!),
-        teksOpsional(cols, idx.payment_method_name!),
-        teksOpsional(cols, idx.payment_cashier_name!),
-        angkaWajib(cols, idx.total_sales!, "total_sales"),
-        angkaWajib(cols, idx.receivables!, "receivables"),
-        angkaWajib(cols, idx.total_discount_amount!, "total_discount_amount"),
-        angkaWajib(cols, idx.refund_amount!, "refund_amount"),
-        ambil(cols, idx.is_paid!) === "1",
-        teksWajib(cols, idx.outlet_id!, "outlet_id"),
-        teksOpsional(cols, idx.hasMore!),
-        teksOpsional(cols, idx.nextPage!),
-        teksOpsional(cols, idx._empty!),
-        teksOpsional(cols, idx.refund_id!),
-        teksOpsional(cols, idx.refund_no!),
-        waktuOpsionalLokalPaksa(cols, idx.refund_date!, "refund_date"),
-        teksOpsional(cols, idx.refund_reason!),
-      ],
-    }));
+    const idMentah = ambil(cols, idx.id!);
+    const refundIdMentah = ambil(cols, idx.refund_id!);
+
+    if (idMentah !== "") {
+      await jalankanUpsert(client, hasil, i + 1, () => ({
+        sql: SQL_MAJOO,
+        params: [
+          bilanganBulatWajib(cols, idx.id!, "id"),
+          teksWajib(cols, idx.transaction_no!, "transaction_no"),
+          // transaction_date/payment_date/refund_date di sumber ini diakhiri
+          // "Z" tapi itu SALAH LABEL -- angkanya sebenarnya sudah waktu lokal
+          // Asia/Jakarta, bukan UTC asli. Lihat waktuWajibLokalPaksa() untuk
+          // bukti & penjelasan lengkap -- JANGAN kembalikan ke waktuWajib/
+          // waktuOpsional generic di sini.
+          waktuWajibLokalPaksa(cols, idx.transaction_date!, "transaction_date"),
+          waktuOpsionalLokalPaksa(cols, idx.payment_date!, "payment_date"),
+          teksOpsional(cols, idx.order_type_name!),
+          teksOpsional(cols, idx.payment_method_name!),
+          teksOpsional(cols, idx.payment_cashier_name!),
+          angkaWajib(cols, idx.total_sales!, "total_sales"),
+          angkaWajib(cols, idx.receivables!, "receivables"),
+          angkaWajib(cols, idx.total_discount_amount!, "total_discount_amount"),
+          angkaWajib(cols, idx.refund_amount!, "refund_amount"),
+          ambil(cols, idx.is_paid!) === "1",
+          teksWajib(cols, idx.outlet_id!, "outlet_id"),
+          teksOpsional(cols, idx.hasMore!),
+          teksOpsional(cols, idx.nextPage!),
+          teksOpsional(cols, idx._empty!),
+          teksOpsional(cols, idx.refund_id!),
+          teksOpsional(cols, idx.refund_no!),
+          waktuOpsionalLokalPaksa(cols, idx.refund_date!, "refund_date"),
+          teksOpsional(cols, idx.refund_reason!),
+        ],
+      }));
+    } else if (refundIdMentah !== "") {
+      await jalankanUpsert(client, hasil, i + 1, () => ({
+        sql: SQL_MAJOO_REFUND,
+        params: [
+          bilanganBulatWajib(cols, idx.refund_id!, "refund_id"),
+          teksOpsional(cols, idx.refund_no!),
+          teksWajib(cols, idx.transaction_no!, "transaction_no"),
+          waktuWajibLokalPaksa(cols, idx.refund_date!, "refund_date"),
+          angkaWajib(cols, idx.refund_amount!, "refund_amount"),
+          teksOpsional(cols, idx.refund_reason!),
+          JSON.stringify(Object.fromEntries(KOLOM_MAJOO.map((nama, kolomIdx) => [nama, ambil(cols, kolomIdx)]))),
+        ],
+      }));
+    } else {
+      await jalankanUpsert(client, hasil, i + 1, () => {
+        throw new Error('Baris tidak punya "id" maupun "refund_id" -- salah satu wajib diisi untuk menentukan jenis barisnya (transaksi atau refund)');
+      });
+    }
   }
 
   return hasil;
