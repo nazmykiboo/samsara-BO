@@ -116,11 +116,22 @@ sungguhan, bukan disalin dari versi dokumen sebelumnya):
   connect Postgres <1 menit, diperbaiki langsung) — detail lengkap dan
   pelajarannya: `devops/README.md` § "Deploy #4".
 
+- **Deploy #5 (2026-11-07): Refund Majoo berdiri sendiri + tampilan
+  refund** — 1 migrasi baru (`sales-sync/0004`), metodologi latihan-dulu
+  yang sama. 58 tabel lama identik, tabel baru `salessync_majoo_refund`
+  muncul kosong (sesuai ekspektasi — belum ada backfill). Pelajaran
+  `.env` dari Deploy #4 diterapkan (`rsync --exclude .env`
+  `--exclude .env.production` eksplisit) — tidak ada insiden kali ini,
+  migrasi production langsung berhasil di percobaan pertama. Smoke test
+  lulus semua, n8n/Postgres/VNC tidak terganggu. `otomatis_aktif` TETAP
+  `true` (nilai sebelum deploy, tidak disentuh). Detail: `devops/README.md`
+  § "Deploy #5".
+
 Ringkasnya: app Samsara Backoffice sudah bisa diakses publik dengan HTTPS
 valid di `burnas-app.duckdns.org`, berjalan berdampingan dengan n8n/VNC yang
 sudah ada tanpa mengganggu satu pun, database production sudah termigrasi
 bersih dari nol DAN data masternya sudah disinkronkan penuh dengan dev, DAN
-sudah melewati tiga siklus deploy lanjutan penuh (Deploy #2, #3 & #4, dengan
+sudah melewati empat siklus deploy lanjutan penuh (Deploy #2-#5, dengan
 latihan di salinan lokal lebih dulu tiap kalinya) tanpa insiden berarti —
 app sudah benar-benar dipakai owner, bukan cuma live secara teknis.
 Production sekarang jadi acuan utama data master ke depan, bukan dev.

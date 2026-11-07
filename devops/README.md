@@ -1,8 +1,54 @@
 # Runbook Deploy Production — Samsara Backoffice
 
-Status per 2026-11-01 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
+Status per 2026-11-07 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
 disalin dari versi dokumen sebelumnya). **App sudah LIVE, dipakai owner
-sungguhan, dan sudah melewati Deploy #4** — lihat § "Deploy #4" di bawah.
+sungguhan, dan sudah melewati Deploy #5** — lihat § "Deploy #5" di bawah.
+
+## Deploy #5: Refund Majoo berdiri sendiri + tampilan refund (2026-11-07)
+
+1 migrasi baru (`sales-sync/0004_tabel_refund_majoo`) berhasil dijalankan ke
+production, container `api`/`web` di-rebuild & restart (n8n/Postgres/VNC
+**tidak disentuh sama sekali** — uptime tetap "Up 2 weeks"/"Up 2 days"
+sebelum & sesudah, dicek eksplisit).
+
+**Metodologi** (sama persis Deploy #2-4): `pg_dump` production → restore ke
+database lokal terpisah (`samsara_prod_rehearsal`) → migrasi dijalankan ke
+salinan itu → 58 tabel lama dibandingkan jumlah barisnya sebelum/sesudah
+(**identik**, cuma `schema_migrations` +1 dan tabel baru `salessync_majoo_refund`
+muncul kosong — sesuai ekspektasi) → migrasi dites idempoten (jalan ke-2
+tidak melakukan apa-apa) → database lokal dihapus → BARU dicoba ke
+production sungguhan.
+
+**Pelajaran dari insiden `.env` Deploy #4 diterapkan**: perintah `rsync`
+kali ini eksplisit `--exclude '.env' --exclude '.env.production'` —
+dikonfirmasi SETELAH rsync kedua file itu tidak ikut terkirim sama sekali
+(bukan cuma "isinya sama", tapi memang tidak ada di daftar transfer), dan
+migrasi production langsung berhasil tanpa error koneksi apa pun di
+percobaan pertama (beda dari Deploy #4 yang sempat ada insiden <1 menit).
+
+**Smoke test production**: HTTPS valid, `/health` OK (3 modul aktif),
+`GET /api/core/lokasi` publik normal, 60 tabel di production (59 lama +
+`salessync_majoo_refund` baru, 0 baris — belum ada backfill, sesuai
+ekspektasi migrasi yang cuma membuat skema), `GET /api/sales-sync/refund`
+tanpa token membalas 401 (endpoint baru ter-mount & ter-gate dengan benar).
+**Status fitur setelah deploy**: `otomatis_aktif` TETAP `true` (nilai yang
+sudah ada SEBELUM deploy ini, owner sendiri yang menyalakannya setelah
+Deploy #3 — migrasi `0004` tidak menyentuh `salessync_settings` sama
+sekali, dicek dan dikonfirmasi tidak berubah ke arah mana pun oleh deploy
+ini).
+
+Backup pra-deploy diverifikasi dulu (permission 600, `gzip -t` valid, ukuran
+2.1MB wajar dibanding backup harian) SEBELUM migrasi dijalankan — tersimpan
+di `/root/samsara-backups/samsara_pre-deploy-refund-majoo_2026-11-07_232227.sql.gz`
+di VPS, ikut rotasi retensi 7 hari otomatis seperti backup harian lainnya.
+Tidak ada kredensial apa pun yang pernah terbaca/tertulis ke chat/log/git
+sepanjang proses.
+
+**Tindak lanjut owner (di luar scope deploy ini)**: tabel
+`salessync_majoo_refund` baru live tapi masih kosong — refund yang sudah
+terjadi sebelum fitur ini (termasuk 2 transaksi pemicu diagnosis sesi ini,
+`CS/29/261107/0011`/`CS/29/261107/0017`) perlu di-backfill manual lewat
+`raw-majoo-direct.json` (prosedur lengkap: § 14 di README ini).
 
 ## Deploy #4: Tipe lokasi jadi sumber kebenaran CK, tutup kebocoran biaya, perbaiki silent-failure n8n (2026-11-01)
 
