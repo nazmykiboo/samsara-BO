@@ -1,6 +1,7 @@
 import "./env.js";
 import { buildRegistry, buildServer } from "@samsara/core";
 import { modules } from "./modules.js";
+import { mulaiSchedulerNotifikasi } from "./scheduler.js";
 
 const ordered = buildRegistry(modules);
 const enabled = ordered.filter((m) => m.manifest.enabled);
@@ -12,3 +13,5 @@ app.listen(port, () => {
   console.log(`[api] listening on http://localhost:${port}`);
   console.log(`[api] modul aktif: ${enabled.map((m) => m.manifest.name).join(", ")}`);
 });
+
+mulaiSchedulerNotifikasi();

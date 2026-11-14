@@ -67,6 +67,8 @@ function useNavGroups(): NavGroup[] {
 
   groups.push({ label: "Tim", items: [{ to: "/jadwal-izin", label: "Jadwal & Izin", icon: "🗓️" }] });
 
+  groups.push({ label: "Akun", items: [{ to: "/akun-saya", label: "Akun Saya", icon: "👤" }] });
+
   if (bisaAksesPengaturan(user.role)) {
     groups.push({ label: "Pengaturan", items: [{ to: "/pengaturan", label: "Pengaturan", icon: "⚙️" }] });
   }

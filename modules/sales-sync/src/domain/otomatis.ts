@@ -1,4 +1,4 @@
-import { pool, signAuthToken, type AuthUser } from "@samsara/core";
+import { pool, signAuthToken, notifyEvent, type AuthUser } from "@samsara/core";
 import { prosesSinkronisasi } from "./proses.js";
 import { getPengaturanOtomatis } from "./settings.js";
 
@@ -69,13 +69,13 @@ async function tulisLogOtomatis(
     gagal: number;
     pesanErrorTerakhir: string | null;
   },
-): Promise<void> {
+): Promise<number> {
   const client = await pool.connect();
   try {
-    await client.query(
+    const { rows } = await client.query<{ id: string }>(
       `INSERT INTO salessync_otomatis_log
          (dipicu_oleh, transaksi_dibuat, baris_diproses, tertahan, perlu_ditinjau, gagal, pesan_error_terakhir)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
       [
         dipicuOleh,
         hasil.transaksiDibuat,
@@ -86,6 +86,24 @@ async function tulisLogOtomatis(
         hasil.pesanErrorTerakhir,
       ],
     );
+    return Number(rows[0].id);
+  } finally {
+    client.release();
+  }
+}
+
+/** Fire-and-forget, dipanggil SETELAH log tersimpan -- kegagalan kirim notifikasi TIDAK PERNAH melempar ke pemanggil (lihat jalankanOtomatisJikaAktif). */
+async function kirimNotifikasiOtomatisError(logId: number, pesanErrorTerakhir: string | null): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await notifyEvent(client, {
+      kejadian: "otomatis_error",
+      judul: "Error pada pemrosesan otomatis sales-sync",
+      pesan: pesanErrorTerakhir ?? "Ada baris yang gagal diproses, lihat log pemrosesan otomatis.",
+      referensiTipe: "otomatis_log",
+      referensiId: logId,
+      dedupKeyBase: `otomatis_error:${logId}`,
+    });
   } finally {
     client.release();
   }
@@ -117,14 +135,20 @@ export async function jalankanOtomatisJikaAktif(dipicuOleh: "impor" | "pemetaan"
         const { token, userId } = await mintTokenSistemOtomatis();
         const hasil = await prosesSinkronisasi(`Bearer ${token}`, userId, pengaturan.tanggalMulai);
 
-        await tulisLogOtomatis(dipicuOleh, {
+        const pesanErrorTerakhir = hasil.gagal[0]?.pesan ?? null;
+        const logId = await tulisLogOtomatis(dipicuOleh, {
           transaksiDibuat: hasil.transaksiDibuat,
           barisDiproses: hasil.barisDiproses,
           tertahan: hasil.dilewatiBelumTerpetakan.length,
           perluDitinjau: hasil.perluDitinjau.length,
           gagal: hasil.gagal.length,
-          pesanErrorTerakhir: hasil.gagal[0]?.pesan ?? null,
+          pesanErrorTerakhir,
         });
+        if (hasil.gagal.length > 0) {
+          kirimNotifikasiOtomatisError(logId, pesanErrorTerakhir).catch((err) =>
+            console.error("[notifikasi] gagal kirim otomatis_error:", err),
+          );
+        }
       } finally {
         await lockClient.query(`SELECT pg_advisory_unlock(hashtext($1))`, [KUNCI_ADVISORY]);
       }
@@ -138,14 +162,18 @@ export async function jalankanOtomatisJikaAktif(dipicuOleh: "impor" | "pemetaan"
     // terpisah) supaya tetap terlihat di `docker logs`/output server.
     console.error("[sales-sync otomatis] gagal:", err);
     try {
-      await tulisLogOtomatis(dipicuOleh, {
+      const pesanErrorTerakhir = err instanceof Error ? err.message : "Gagal menjalankan pemrosesan otomatis";
+      const logId = await tulisLogOtomatis(dipicuOleh, {
         transaksiDibuat: 0,
         barisDiproses: 0,
         tertahan: 0,
         perluDitinjau: 0,
         gagal: 0,
-        pesanErrorTerakhir: err instanceof Error ? err.message : "Gagal menjalankan pemrosesan otomatis",
+        pesanErrorTerakhir,
       });
+      kirimNotifikasiOtomatisError(logId, pesanErrorTerakhir).catch((e) =>
+        console.error("[notifikasi] gagal kirim otomatis_error:", e),
+      );
     } catch {
       // Kalau MENULIS log pun gagal (mis. DB benar-benar tidak terjangkau),
       // tidak ada lagi yang bisa dilakukan di sini -- sudah dicatat ke

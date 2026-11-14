@@ -268,6 +268,84 @@ Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
   `identitas_bisnis.manage`). Dipakai sidebar, halaman login, judul tab —
   menggantikan "Samsara Backoffice" yang sebelumnya hardcode.
 
+### Notifikasi (2026-11-14, BARU) — hidup di `core`, bukan n8n
+
+Modul notifikasi lintas-modul (dipicu dari Inventory/Sales-Sync, dikonsumsi
+lewat Telegram) — **dibangun di dalam `core` (`core/src/notifikasi/`)**,
+bukan workflow n8n, supaya logikanya (dedup, token aksi, permission) satu
+bahasa dengan auth/audit yang sudah ada, dan supaya n8n yang sudah live
+untuk Burnas (`burnas-ops.duckdns.org`, lihat `CLAUDE.md`) tidak disentuh.
+
+- **8 kejadian**: `permintaan_baru_ck`, `jawaban_ck`,
+  `permintaan_belum_dijawab`, `transfer_belum_diterima`,
+  `sumber_data_tidak_masuk`, `otomatis_error`, `stok_minus`,
+  `opname_menunggu_persetujuan` (lihat `core/src/notifikasi/types.ts` §
+  `LABEL_KEJADIAN` untuk label Bahasa Indonesia lengkapnya). 4 kejadian
+  pertama + `opname_menunggu_persetujuan` **event-driven** (dipicu langsung
+  dari handler Inventory/Sales-Sync setelah transaksi commit, fire-and-
+  forget — lihat `modules/inventory/src/notifikasi/hooks.ts` dan
+  `modules/sales-sync/src/domain/otomatis.ts`); 2 kejadian ambang-jam
+  (`permintaan_belum_dijawab`, `transfer_belum_diterima`) dan
+  `sumber_data_tidak_masuk`/`stok_minus` **dicek scheduler berkala**
+  (`apps/api/src/scheduler.ts`, interval 15 menit, `pg_try_advisory_lock`
+  kunci `notifikasi_scheduler` — SENGAJA beda dari kunci
+  `sales_sync_otomatis` supaya dua scheduler ini independen).
+- **Aturan notifikasi** (`core_notifikasi_aturan`, dikelola owner lewat
+  Pengaturan > Notifikasi, permission `notifikasi.manage`): kejadian →
+  penerima (role ATAU satu user spesifik, opsional dipersempit lokasi) →
+  kanal (telegram/email) → aktif/nonaktif → `ambang_jam` (khusus kejadian
+  ambang-jam). **Beberapa aturan aktif untuk kejadian yang sama = eskalasi
+  bertingkat** tanpa kode tambahan (mis. 2 jam → supervisor, 6 jam →
+  owner) — `notifyEvent` mencocokkan `ambang_jam` TIAP aturan secara
+  independen terhadap `event.jamSejak` yang dihitung scheduler.
+- **Anti-double-send di level DATABASE**: `core_notifikasi_log` punya
+  `UNIQUE(dedup_key, user_id)` — `notifyEvent` INSERT dulu (`ON CONFLICT
+  DO NOTHING`), cuma lanjut kirim pesan kalau baris benar-benar baru. Ini
+  yang menjaga "eskalasi tidak terkirim dobel" walau scheduler tick
+  berkali-kali sebelum kejadiannya selesai. Kejadian ambang-jam (sekali
+  per entitas selama belum selesai) dan kejadian periodik seperti
+  `stok_minus`/`sumber_data_tidak_masuk` (dedup key dibubuhi tanggal, jadi
+  re-notify sekali per hari selama kondisinya masih berlangsung) sengaja
+  pakai granularitas dedup yang BEDA — lihat komentar di
+  `modules/inventory/src/notifikasi/hooks.ts` dan `apps/api/src/scheduler.ts`.
+- **Tautan Telegram per user** (`core_users.telegram_chat_id`, diverifikasi
+  lewat kode 6-digit sekali pakai, 15 menit, flow `/link <kode>` ke bot) —
+  halaman "Akun Saya" (baru, semua role) punya tombol "Hubungkan Telegram".
+- **Token aksi sekali pakai** (`core_notifikasi_token_aksi`) untuk tombol
+  Terima/Tolak di pesan Telegram — `UPDATE ... WHERE dipakai_pada IS NULL`
+  atomic jadi idempoten (tombol tidak bisa dipakai dua kali, termasuk
+  terhadap retry/klik ganda Telegram). Callback webhook
+  (`POST /api/telegram/webhook`, header `X-Telegram-Bot-Api-Secret-Token`)
+  verifikasi pengirim (chat id HARUS sama dengan target token) DAN role
+  terkini user di database (bukan snapshot token) sebelum menjalankan apa
+  pun. **"Terima" SENGAJA TIDAK PERNAH menggerakkan stok** (murni
+  pengakuan sosial + audit log `source='telegram'`) — approval sungguhan
+  tetap lewat tombol "Buka di app". "Tolak" (dengan alasan preset) memang
+  menjalankan aksi nyata (`tolakPermintaan`/`decideOpname` 'tolak') lewat
+  pola registry `registerAksiNotifikasi` (modul bisnis mendaftar handler
+  saat boot, core TIDAK PERNAH import modul bisnis — arah dependency
+  tetap modul→core) karena "tolak" tidak pernah menggerakkan stok sama
+  sekali di kedua domain itu, jadi aman dieksekusi dari Telegram.
+- **Kanal email cuma antarmuka** (`core/src/notifikasi/kanal/email.ts`) —
+  implementasi SMTP SENGAJA ditunda (instruksi eksplisit owner), status
+  log `'ditunda'` (beda dari `'gagal'`) sampai diimplementasikan.
+- **Token bot Telegram (`TELEGRAM_BOT_TOKEN`) dan webhook secret
+  (`TELEGRAM_WEBHOOK_SECRET`) WAJIB diisi manual oleh owner** di `.env`
+  (dev) dan `.env.production` (VPS) — Claude Code TIDAK PERNAH
+  membaca/menulis nilai `TELEGRAM_BOT_TOKEN` (instruksi keras owner, lihat
+  `core/src/notifikasi/telegram.ts`); begitu juga pendaftaran webhook ke
+  Telegram (`setWebhook`) tetap langkah manual owner lewat SSH. Selama
+  belum diisi, notifikasi Telegram gagal diam-diam (dicatat status
+  `'gagal'`/log server, TIDAK mengganggu transaksi apa pun) dan server
+  mencetak instruksi setup lengkap sekali ke log.
+- **Keterbatasan yang diketahui** (bukan bug, keputusan desain sadar demi
+  scope): `jawaban_ck` dan `permintaan_baru_ck` dedup SEKALI PER ENTITAS
+  SELAMANYA (kalau permintaan yang sama entah bagaimana "dibuka" ulang,
+  tidak ada eskalasi ulang — skenario ini tidak ada di alur normal
+  aplikasi sekarang); belum ada UI riwayat notifikasi untuk user biasa
+  (cuma data mentah `core_notifikasi_log`, belum ada endpoint/baca untuk
+  ditampilkan).
+
 ### Inventory (v0.10.0) — modul paling matang
 
 - Master data (item, kategori item, satuan, resep produksi 1 level, menu,

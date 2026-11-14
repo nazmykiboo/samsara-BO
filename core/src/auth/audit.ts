@@ -29,13 +29,15 @@ export interface AuditEntry {
   fieldName: string;
   oldValue: unknown;
   newValue: unknown;
+  /** Opsional -- "telegram" kalau aksi ini dipicu dari tombol notifikasi Telegram (lihat modul notifikasi). undefined/omit = jalur app biasa (mayoritas caller lama, TIDAK perlu diubah). */
+  source?: string;
 }
 
 /** Tulis satu baris audit log. Dipanggil dari domain layer modul, bukan router langsung. */
 export async function writeAuditLog(client: PoolClient, entry: AuditEntry): Promise<void> {
   await client.query(
-    `INSERT INTO core_audit_log (user_id, table_name, record_id, field_name, old_value, new_value)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+    `INSERT INTO core_audit_log (user_id, table_name, record_id, field_name, old_value, new_value, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [
       entry.userId,
       entry.tableName,
@@ -43,6 +45,7 @@ export async function writeAuditLog(client: PoolClient, entry: AuditEntry): Prom
       entry.fieldName,
       stringify(entry.oldValue),
       stringify(entry.newValue),
+      entry.source ?? null,
     ],
   );
 }

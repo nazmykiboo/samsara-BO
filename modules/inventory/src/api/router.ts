@@ -90,6 +90,11 @@ import {
   type PermintaanTransferStatus,
 } from "../domain/permintaan-transfer.js";
 import { listRefundViaApi, type RefundViaApi } from "../lib/internal-api.js";
+import {
+  kirimNotifikasiJawabanCk,
+  kirimNotifikasiOpnameMenunggu,
+  kirimNotifikasiPermintaanBaru,
+} from "../notifikasi/hooks.js";
 import { getKartuStok, getRiwayatSemuaJenis, type JenisTransaksiLedger } from "../domain/ledger.js";
 import {
   getAnalitikOperasional,
@@ -494,6 +499,12 @@ export function createRouter(): Router {
       const result = await withTransaction((client) =>
         createTransferKirim(client, { ...req.body, createdByUserId: user.id }),
       );
+      const permintaanId = Number(req.body?.permintaanId);
+      if (Number.isFinite(permintaanId)) {
+        kirimNotifikasiJawabanCk(permintaanId).catch((err) =>
+          console.error("[notifikasi] gagal kirim jawaban_ck:", err),
+        );
+      }
       if (!hasPermission(user, "hpp.lihat_harga")) {
         // `hargaTransferPerSatuan` per baris = harga/HPP item di lokasi asal
         // (Skema A) -- disembunyikan untuk staf/supervisor, qty/item tetap tampil.
@@ -605,6 +616,9 @@ export function createRouter(): Router {
         createPermintaanTransfer(client, { ...req.body, createdByUserId: user.id }),
       );
       res.status(201).json(result);
+      kirimNotifikasiPermintaanBaru(result.baris, req.body.locationAsalId).catch((err) =>
+        console.error("[notifikasi] gagal kirim permintaan_baru_ck:", err),
+      );
     }),
   );
 
@@ -727,6 +741,7 @@ export function createRouter(): Router {
         tolakPermintaan(client, { id, alasanTolak: req.body.alasanTolak, userId: user.id }),
       );
       res.json(result);
+      kirimNotifikasiJawabanCk(result.id).catch((err) => console.error("[notifikasi] gagal kirim jawaban_ck:", err));
     }),
   );
 
@@ -1085,6 +1100,9 @@ export function createRouter(): Router {
         createOpname(client, { ...req.body, createdByUserId: user.id }),
       );
       res.status(201).json(result);
+      kirimNotifikasiOpnameMenunggu(result.headerId, req.body.locationId).catch((err) =>
+        console.error("[notifikasi] gagal kirim opname_menunggu_persetujuan:", err),
+      );
     }),
   );
 

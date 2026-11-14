@@ -12,6 +12,7 @@ import { pool } from "../db/pool.js";
 const CORE_PERMISSIONS: PermissionDef[] = [
   { action: "user.manage", roles: ["owner"] },
   { action: "identitas_bisnis.manage", roles: ["owner"] },
+  { action: "notifikasi.manage", roles: ["owner"] },
 ];
 
 let registry: Map<string, PermissionDef> | null = null;

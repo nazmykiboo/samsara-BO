@@ -3,6 +3,7 @@ import type { LoadedModule } from "../manifest/types.js";
 import { createAuthRouter } from "../auth/router.js";
 import { initPermissionRegistry, requireAuth, requireGantiKredensialDulu } from "../auth/permissions.js";
 import { createPublicCoreRouter } from "../public/router.js";
+import { createTelegramWebhookRouter, createNotifikasiRouter } from "../notifikasi/router.js";
 
 /**
  * @param allModules Semua modul terdaftar (dipakai untuk `/health`, termasuk yang nonaktif).
@@ -42,6 +43,12 @@ export function buildServer(allModules: LoadedModule[], enabledInOrder: LoadedMo
   // tetap memasang requireAuth/requirePermission sendiri (lihat public/router.ts).
   app.use("/api/core", createPublicCoreRouter());
 
+  // Webhook Telegram: Telegram tidak kirim JWT, otorisasinya lewat header
+  // secret sendiri (`X-Telegram-Bot-Api-Secret-Token`, dicek di dalam
+  // router) -- HARUS di-mount sebelum requireAuth global, pola sama seperti
+  // /api/auth dan /api/core di atas.
+  app.use("/api/telegram/webhook", createTelegramWebhookRouter());
+
   // Semua endpoint SETELAH baris ini wajib login (CLAUDE.md/instruksi owner:
   // "semua endpoint wajib login" -- /health dan /api/auth/login adalah
   // pengecualian yang memang perlu tetap terbuka).
@@ -54,6 +61,10 @@ export function buildServer(allModules: LoadedModule[], enabledInOrder: LoadedMo
   // lewat baris ini (lihat komentar di atas) -- masing-masing memasang
   // `requireGantiKredensialDulu` sendiri secara eksplisit di `auth/router.ts`.
   app.use(requireGantiKredensialDulu);
+
+  // Notifikasi: self-service "Hubungkan Telegram" (semua role login) +
+  // CRUD aturan (owner-only lewat requirePermission di dalam router).
+  app.use("/api/notifikasi", createNotifikasiRouter());
 
   for (const mod of enabledInOrder) {
     app.use(mod.manifest.api.basePath, mod.createRouter());

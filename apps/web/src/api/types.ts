@@ -1273,3 +1273,71 @@ export interface ApiErrorBody {
   /** Cuma ada untuk 403 "wajib ganti kredensial" (2026-10-30) -- lihat requireGantiKredensialDulu. */
   code?: string;
 }
+
+// --- Notifikasi (2026-11-14) ------------------------------------------------
+
+/** HARUS persis sama dengan `KEJADIAN_VALID` di `core/src/notifikasi/types.ts`. */
+export type KejadianNotifikasi =
+  | "permintaan_baru_ck"
+  | "jawaban_ck"
+  | "permintaan_belum_dijawab"
+  | "transfer_belum_diterima"
+  | "sumber_data_tidak_masuk"
+  | "otomatis_error"
+  | "stok_minus"
+  | "opname_menunggu_persetujuan";
+
+export const LABEL_KEJADIAN: Record<KejadianNotifikasi, string> = {
+  permintaan_baru_ck: "Permintaan baru ke Central Kitchen",
+  jawaban_ck: "Central Kitchen menjawab permintaan",
+  permintaan_belum_dijawab: "Permintaan belum dijawab (ambang jam)",
+  transfer_belum_diterima: "Transfer belum diterima (ambang jam)",
+  sumber_data_tidak_masuk: "Sumber data sales-sync tidak masuk (merah)",
+  otomatis_error: "Error pada pemrosesan otomatis sales-sync",
+  stok_minus: "Item dengan stok total minus",
+  opname_menunggu_persetujuan: "Opname menunggu persetujuan",
+};
+
+/** Kejadian yang relevan dengan field `ambangJam` -- selain ini, field itu diabaikan. */
+export const KEJADIAN_AMBANG_JAM: KejadianNotifikasi[] = ["permintaan_belum_dijawab", "transfer_belum_diterima"];
+
+export type KanalNotifikasi = "telegram" | "email";
+
+export interface AturanNotifikasi {
+  id: number;
+  kejadian: KejadianNotifikasi;
+  penerimaRole: Role | null;
+  penerimaUserId: number | null;
+  penerimaUserNama: string | null;
+  penerimaLokasiId: number | null;
+  penerimaLokasiNama: string | null;
+  kanal: KanalNotifikasi;
+  aktif: boolean;
+  ambangJam: number | null;
+  createdAt: string;
+}
+
+export interface CreateAturanNotifikasiInput {
+  kejadian: KejadianNotifikasi;
+  penerimaRole?: Role;
+  penerimaUserId?: number;
+  penerimaLokasiId?: number;
+  kanal: KanalNotifikasi;
+  aktif?: boolean;
+  ambangJam?: number;
+}
+
+export interface UpdateAturanNotifikasiInput {
+  aktif?: boolean;
+  ambangJam?: number | null;
+}
+
+export interface TautanTelegramStatus {
+  terhubung: boolean;
+  terhubungPada: string | null;
+}
+
+export interface MulaiTautanTelegramResult {
+  kode: string;
+  kadaluwarsaPada: string;
+}

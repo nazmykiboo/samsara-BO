@@ -3,6 +3,7 @@ import { KelolaUserTab } from "./pengaturan/KelolaUserTab";
 import { ShiftTab } from "./pengaturan/ShiftTab";
 import { OutletKitchenTab } from "./pengaturan/OutletKitchenTab";
 import { IdentitasBisnisTab } from "./pengaturan/IdentitasBisnisTab";
+import { NotifikasiTab } from "./pengaturan/NotifikasiTab";
 import { Card } from "../components/ui/Card";
 import { Field, Input } from "../components/ui/Input";
 import { Button } from "../components/ui/Button";
@@ -11,7 +12,7 @@ import { usePermission } from "../auth/usePermission";
 import { getTargetFoodCostPersen, setTargetFoodCostPersen } from "../api/pengaturan";
 import { ApiError } from "../api/client";
 
-type Tab = "user" | "shift" | "outlet" | "identitas" | "lainnya";
+type Tab = "user" | "shift" | "outlet" | "identitas" | "notifikasi" | "lainnya";
 
 export function PengaturanPage() {
   const canKelolaUser = usePermission("user.manage");
@@ -23,6 +24,7 @@ export function PengaturanPage() {
   // sekali untuk dia.
   const canPengaturanSistem = usePermission("pengaturan.manage");
   const canIdentitasBisnis = usePermission("identitas_bisnis.manage");
+  const canNotifikasi = usePermission("notifikasi.manage");
 
   // Tab "Kelola User" cuma untuk Owner (backend user.manage owner-only) -- Manajer Ops yang masuk ke
   // halaman ini tidak boleh melihat tab-nya sama sekali (bukan cuma kontennya disembunyikan), jadi
@@ -33,9 +35,10 @@ export function PengaturanPage() {
       ...(canKelolaShift ? [{ key: "shift" as const, label: "Shift" }] : []),
       ...(canPengaturanSistem ? [{ key: "outlet" as const, label: "Outlet & Kitchen" }] : []),
       ...(canIdentitasBisnis ? [{ key: "identitas" as const, label: "Identitas Bisnis" }] : []),
+      ...(canNotifikasi ? [{ key: "notifikasi" as const, label: "Notifikasi" }] : []),
       ...(canPengaturanSistem ? [{ key: "lainnya" as const, label: "Lainnya" }] : []),
     ],
-    [canKelolaUser, canKelolaShift, canPengaturanSistem, canIdentitasBisnis],
+    [canKelolaUser, canKelolaShift, canPengaturanSistem, canIdentitasBisnis, canNotifikasi],
   );
   const [tab, setTab] = useState<Tab>(canKelolaUser ? "user" : "shift");
   const tabAktif = tabs.some((t) => t.key === tab) ? tab : tabs[0]?.key;
@@ -65,6 +68,7 @@ export function PengaturanPage() {
       {tabAktif === "shift" && canKelolaShift ? <ShiftTab /> : null}
       {tabAktif === "outlet" && canPengaturanSistem ? <OutletKitchenTab /> : null}
       {tabAktif === "identitas" && canIdentitasBisnis ? <IdentitasBisnisTab /> : null}
+      {tabAktif === "notifikasi" && canNotifikasi ? <NotifikasiTab /> : null}
       {tabAktif === "lainnya" && canPengaturanSistem ? (
         <div className="space-y-4">
           <TargetFoodCostCard />

@@ -13,6 +13,7 @@ import { LaporanHarianPage } from "./pages/LaporanHarianPage";
 import { TransaksiIndexPage } from "./pages/transaksi/TransaksiIndexPage";
 import { MasterIndexPage } from "./pages/master/MasterIndexPage";
 import { PengaturanPage } from "./pages/PengaturanPage";
+import { AkunSayaPage } from "./pages/AkunSayaPage";
 import { JadwalIzinPage } from "./pages/JadwalIzinPage";
 import { PanduanPage } from "./pages/PanduanPage";
 import { SinkronisasiPenjualanPage } from "./pages/sales-sync/SinkronisasiPenjualanPage";
@@ -71,6 +72,7 @@ function AppRoutes() {
         <Route path="/stok" element={<StokPage />} />
         <Route path="/transaksi" element={<TransaksiIndexPage />} />
         <Route path="/jadwal-izin" element={<JadwalIzinPage />} />
+        <Route path="/akun-saya" element={<AkunSayaPage />} />
         <Route path="/panduan" element={<PanduanPage />} />
         <Route
           path="/laporan-harian"

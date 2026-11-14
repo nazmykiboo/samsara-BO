@@ -1001,3 +1001,75 @@ export async function listOpname(
     baris: barisByHeader.get(h.id) ?? [],
   }));
 }
+
+export interface TransferBelumDiterimaRow {
+  transferId: number;
+  locationAsalId: number;
+  locationTujuanId: number;
+  dikirimPada: string;
+}
+
+/**
+ * Header transfer yang masih status 'dikirim' (belum 'diterima') -- dipakai
+ * scheduler notifikasi (kejadian `transfer_belum_diterima`, lihat
+ * `apps/api/src/scheduler.ts`) untuk menghitung sudah berapa jam sejak
+ * dikirim dibandingkan `ambang_jam` aturan.
+ */
+export async function listTransferBelumDiterima(client: PoolClient): Promise<TransferBelumDiterimaRow[]> {
+  const { rows } = await client.query<{
+    id: number;
+    location_asal_id: number;
+    location_tujuan_id: number;
+    created_at: string;
+  }>(`SELECT id, location_asal_id, location_tujuan_id, created_at FROM inventory_transaksi_transfer WHERE status = 'dikirim'`);
+  return rows.map((r) => ({
+    transferId: r.id,
+    locationAsalId: r.location_asal_id,
+    locationTujuanId: r.location_tujuan_id,
+    dikirimPada: r.created_at,
+  }));
+}
+
+export interface StokMinusItem {
+  itemId: number;
+  itemKode: string;
+  itemName: string;
+  locationId: number;
+  locationName: string;
+  qty: number;
+}
+
+/**
+ * Semua baris `inventory_current_stock` yang qty-nya MINUS, lintas lokasi --
+ * dipakai scheduler notifikasi (kejadian `stok_minus`, lihat
+ * `apps/api/src/scheduler.ts`) untuk mendeteksi stok negatif yang biasanya
+ * berarti ada transaksi yang salah urutan/duplikat/terlewat. Belum ada
+ * fungsi ini sebelumnya -- temuan "29 item" sesi sebelumnya cuma lewat SQL
+ * ad-hoc, bukan fungsi reusable.
+ */
+export async function listStokMinus(client: PoolClient): Promise<StokMinusItem[]> {
+  const { rows } = await client.query<{
+    item_id: number;
+    item_kode: string;
+    item_name: string;
+    location_id: number;
+    location_name: string;
+    qty: string;
+  }>(
+    `SELECT cs.item_id, i.kode AS item_kode, i.name AS item_name,
+            cs.location_id, l.name AS location_name, cs.qty
+     FROM inventory_current_stock cs
+     JOIN inventory_items i ON i.id = cs.item_id
+     JOIN core_locations l ON l.id = cs.location_id
+     WHERE cs.qty < 0
+     ORDER BY cs.qty ASC`,
+  );
+  return rows.map((r) => ({
+    itemId: r.item_id,
+    itemKode: r.item_kode,
+    itemName: r.item_name,
+    locationId: r.location_id,
+    locationName: r.location_name,
+    qty: Number(r.qty),
+  }));
+}

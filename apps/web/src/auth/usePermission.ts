@@ -59,6 +59,8 @@ export type PermissionAction =
   | "user.manage"
   // --- core: identitas bisnis (nama + logo tampilan) ---
   | "identitas_bisnis.manage"
+  // --- core: notifikasi (aturan notifikasi, Pengaturan > Notifikasi) ---
+  | "notifikasi.manage"
   // --- modul hr ---
   | "jadwal.lihat"
   | "jadwal.manage"
@@ -146,6 +148,11 @@ export const PERMISSION_ROLES: Record<PermissionAction, Role[]> = {
   // PUT /api/core/identitas-bisnis dan .../logo -- nama tampilan + logo. GET-nya publik
   // (tanpa login), yang digerbang action ini cuma PUT (ubah).
   "identitas_bisnis.manage": ["owner"],
+
+  // CRUD /api/notifikasi/aturan -- OWNER SAJA (instruksi eksplisit owner, Pengaturan
+  // > Notifikasi khusus owner). Endpoint self-service /api/notifikasi/telegram/* (Akun
+  // Saya, Hubungkan Telegram) TIDAK digerbang action ini -- semua role login boleh.
+  "notifikasi.manage": ["owner"],
 
   "jadwal.lihat": SEMUA_ROLE,
   // Buat/ubah/pindah/hapus jadwal shift + salin jadwal satu minggu ke minggu lain.

@@ -14,3 +14,7 @@ const manifest: ModuleManifest = JSON.parse(
 const migrationsPath = path.join(packageRoot, manifest.migrationsDir);
 
 export default { manifest, createRouter, migrationsPath };
+
+// Named export TAMBAHAN -- KHUSUS dipakai `apps/api/src/scheduler.ts`, lihat
+// komentar yang sama di `modules/inventory/src/index.ts`.
+export { getKesegaranSumber } from "./domain/kesegaran.js";

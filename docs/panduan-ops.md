@@ -36,6 +36,7 @@ disesuaikan lagi.
 6. [Halaman Master](#6-halaman-master)
 7. [Halaman Laporan Harian](#7-halaman-laporan-harian)
 8. [Halaman Jadwal & Izin](#8-halaman-jadwal--izin)
+9. [Akun Saya & Notifikasi Telegram](#9-akun-saya--notifikasi-telegram)
 
 ---
 
@@ -892,6 +893,82 @@ sebelum bisa dipilih di sini.
 4. Kalau pengajuan di antrian itu kebetulan milik akunmu sendiri, tombol
    **Setujui**/**Tolak** akan ditolak sistem dengan pesan jelas — pengajuan
    sendiri harus diputuskan oleh Owner/Manajer Ops yang lain.
+
+---
+
+## 9. Akun Saya & Notifikasi Telegram
+
+### Apa gunanya
+
+Mulai 2026-11-14, sistem bisa mengirim pengingat lewat **Telegram**
+(bukan WhatsApp/email) untuk kejadian penting: permintaan baru ke Central
+Kitchen, jawaban CK atas permintaan, permintaan/transfer yang belum
+ditindaklanjuti terlalu lama, sumber data sinkronisasi penjualan yang
+berhenti masuk, error pemrosesan otomatis, stok yang jadi minus, dan
+opname yang menunggu persetujuan. Supaya bisa menerima pesan ini, akun
+kamu harus dihubungkan ke Telegram dulu.
+
+### Siapa boleh apa
+
+- **Hubungkan Telegram (Akun Saya)**: SEMUA role (owner, manajer ops,
+  supervisor, staf) — setiap orang menghubungkan akun Telegram pribadinya
+  sendiri.
+- **Atur siapa dapat notifikasi apa (Pengaturan > Notifikasi)**: HANYA
+  Owner.
+
+### Cara pakai — Menghubungkan Telegram (semua role)
+
+1. Buka menu **Akun Saya** (ada di semua role, biasanya di bagian bawah
+   menu navigasi).
+2. Tekan tombol **Hubungkan Telegram**.
+3. Muncul kode 6 digit dan instruksi. Buka aplikasi Telegram di HP/laptop,
+   cari bot yang namanya diberitahukan owner, lalu kirim pesan
+   `/link <kode yang muncul>` (ganti `<kode yang muncul>` dengan kode
+   sungguhan, misalnya `/link 441034`).
+4. Kode berlaku 15 menit. Kalau kedaluwarsa sebelum sempat dipakai, tekan
+   "Hubungkan Telegram" lagi untuk dapat kode baru.
+5. Setelah bot membalas konfirmasi, buka lagi halaman **Akun Saya** (atau
+   refresh) — statusnya akan berubah jadi "Sudah terhubung".
+6. Sekali terhubung, notifikasi yang relevan untuk role/lokasimu akan
+   otomatis masuk ke chat Telegram itu, lengkap dengan tombol **Terima**,
+   **Tolak**, dan **Buka di app** untuk notifikasi yang butuh tindakan.
+   Pesan Telegram **tidak pernah menampilkan nilai Rupiah/harga apa pun**.
+
+**Penting soal tombol Terima/Tolak di Telegram:**
+- Tombol **Terima** HANYA tanda "sudah dilihat/diketahui" — TIDAK
+  mengubah stok atau menyetujui apa pun secara nyata. Untuk benar-benar
+  menyetujui (misalnya opname), tetap harus buka aplikasi dan proses di
+  sana (pakai tombol "Buka di app").
+- Tombol **Tolak** (dengan pilihan alasan) BENAR-BENAR menolak permintaan/
+  opname itu, sama seperti menolak lewat aplikasi.
+- Setiap tombol hanya bisa ditekan SEKALI — kalau ditekan lagi (atau ada
+  orang lain yang juga menerima pesan yang sama mencoba menekan), sistem
+  akan bilang sudah diproses sebelumnya, tidak ada yang terjadi dua kali.
+
+### Cara pakai — Pengaturan > Notifikasi (hanya Owner)
+
+1. Buka menu **Pengaturan**, pilih tab **Notifikasi**.
+2. Di bagian "Tambah Aturan Notifikasi", isi:
+   - **Kejadian** — kejadian apa yang mau dipantau.
+   - **Kanal** — pilih Telegram (Email belum aktif, masih "ditunda").
+   - **Penerima** — pilih "Semua user dengan role tertentu" (semua owner,
+     atau semua supervisor, dst.) ATAU "Satu user tertentu" (orang
+     spesifik).
+   - **Lokasi** (opsional) — kosongkan kalau mau berlaku di semua
+     lokasi, atau pilih satu lokasi kalau cuma relevan untuk lokasi itu
+     (misalnya permintaan ke Central Kitchen tertentu).
+   - **Ambang jam** — HANYA muncul untuk kejadian "Permintaan belum
+     dijawab" dan "Transfer belum diterima". Isi berapa jam sejak
+     diajukan/dikirim baru dianggap "terlalu lama" dan perlu diingatkan.
+3. Tekan **Tambah Aturan**. Aturan baru langsung aktif dan muncul di
+   daftar "Aturan Aktif" di bawahnya.
+4. Untuk MENGHENTIKAN SEMENTARA satu aturan tanpa menghapusnya, tekan
+   **Nonaktifkan** (bisa diaktifkan lagi kapan saja lewat **Aktifkan**).
+5. Untuk menghapus permanen, tekan **Hapus** lalu konfirmasi.
+6. Bisa buat LEBIH DARI SATU aturan untuk kejadian yang sama — misalnya
+   "Permintaan belum dijawab" dengan ambang 2 jam untuk Supervisor, DAN
+   ambang 6 jam untuk Owner, supaya ada eskalasi bertahap kalau tidak
+   segera ditindaklanjuti.
 
 ---
 
