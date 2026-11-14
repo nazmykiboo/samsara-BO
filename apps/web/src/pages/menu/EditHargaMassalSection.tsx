@@ -640,7 +640,7 @@ const BarisGrid = memo(function BarisGrid({
           <td key={ch} className="px-3 py-2 align-top">
             <input
               type="number"
-              inputMode="numeric"
+              inputMode="decimal"
               min={0}
               step={100}
               value={teks}

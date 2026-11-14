@@ -97,6 +97,18 @@
         "path": "/refund",
         "description": "READ-ONLY (2026-11-07). Gabungan (UNION, bukan JOIN) sinyal refund dari DUA sumber TIDAK SIMETRIS dalam rentang tanggal [tanggal_mulai, tanggal_selesai] WAJIB keduanya (YYYY-MM-DD, inklusif, WIB): salessync_log_penjualan (item_type='refund', SEMUA platform -- punya item/qty, TIDAK PERNAH punya nominal Rupiah) dan salessync_majoo_refund (KHUSUS Majoo, migrasi 0004 -- punya nominal Rupiah, TIDAK PUNYA breakdown item). Dipakai Riwayat Transaksi (cocokkan ke no_referensi via HTTP cross-module dari Inventory) dan kartu 'Refund hari ini' di Laporan Harian/Analitik. Response: array {orderId, platform, itemName: string|null, qty: number|null, refundAmount: number|null, refundDate, refundReason: string|null} -- itemName/qty DAN refundAmount masing-masing bisa null tergantung sumbernya, konsumen wajib menangani keduanya independen. roles supervisor TIDAK menerima field refundAmount (hpp.lihat_harga, pola sama Tahap 1B) -- field lain (termasuk jumlah/qty) tetap tampil.",
         "permission": { "action": "refund.lihat", "roles": ["owner", "manajer_ops", "supervisor"] }
+      },
+      {
+        "method": "GET",
+        "path": "/kesegaran",
+        "description": "READ-ONLY (Tahap 1E, 2026-11-14). Kartu 'baris terakhir masuk' per sumber sales-sync (Shopee/GoFood/GrabFood/Majoo di salessync_log_penjualan, Majoo transaksi langsung di salessync_raw_majoo, Majoo refund langsung di salessync_majoo_refund). Response: array {key, label, terakhirMasuk: string|null, jamSejakTerakhir: number|null, ambangJam: number|null, ambangDiatasManual: boolean, merah: boolean}. ambangJam DEFAULT dihitung otomatis (rata-rata jarak antar baris 7 hari terakhir x 3), override manual lewat PUT /kesegaran/:key/ambang. merah=true kalau: belum pernah ada baris, ATAU ambang tidak bisa dihitung (kurang dari 2 baris di jendela 7 hari), ATAU sudah melewati ambang -- tidak ada field biaya/Rupiah sama sekali di endpoint ini.",
+        "permission": { "action": "kesegaran.lihat", "roles": ["owner", "manajer_ops", "supervisor"] }
+      },
+      {
+        "method": "PUT",
+        "path": "/kesegaran/:key/ambang",
+        "description": "Set/hapus (body {ambangJam: number|null}, null = hapus override balik ke hitung otomatis) ambang kesegaran manual satu sumber (lihat GET /kesegaran untuk daftar key valid). Disimpan di salessync_settings key `ambang_segar_jam_<key>`.",
+        "permission": { "action": "sales_sync.manage", "roles": ["owner", "manajer_ops"] }
       }
     ]
   },

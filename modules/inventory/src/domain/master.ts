@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import { logFieldChanges, writeAuditLog } from "@samsara/core";
 import { kategoriExists, kategoriMenuAktifExists, namaSudahDipakai, satuanExists } from "./referensi.js";
 import { computeBaseMenuHppById, computePaketHppById, isPaketMenu } from "./hpp.js";
+import { kodeOtomatis } from "./kode-generator.js";
 
 /**
  * CRUD master item, resep produksi, dan resep menu. Tanpa hapus permanen
@@ -22,8 +23,40 @@ async function itemIdByKode(client: PoolClient, kode: string): Promise<{ id: num
 // Item
 // ---------------------------------------------------------------------------
 
+/** Prefix kode otomatis per tipe item (Tahap 1C) -- BB-/PK-/OP-/SJ- sudah
+ * dipakai konsisten di data seed sejak awal, cuma sekarang dijamin server,
+ * bukan diketik manual. */
+const PREFIX_KODE_ITEM: Record<CreateItemInput["type"], string> = {
+  bahan_baku: "BB",
+  packaging: "PK",
+  operasional: "OP",
+  setengah_jadi: "SJ",
+};
+
+async function kodeItemOtomatis(client: PoolClient, type: CreateItemInput["type"]): Promise<string> {
+  const prefix = PREFIX_KODE_ITEM[type];
+  return kodeOtomatis(
+    prefix,
+    async () => {
+      const { rows } = await client.query<{ maks: number | null }>(
+        `SELECT MAX(substring(kode from '-(\\d+)$')::int) AS maks FROM inventory_items WHERE kode LIKE $1`,
+        [`${prefix}-%`],
+      );
+      return rows[0]?.maks ?? 0;
+    },
+    async (kode) => {
+      const { rows } = await client.query(`SELECT 1 FROM inventory_items WHERE kode = $1`, [kode]);
+      return rows.length > 0;
+    },
+  );
+}
+
 export interface CreateItemInput {
-  kode: string;
+  /** Opsional -- kalau tidak dikirim (atau kosong), server generate otomatis
+   * dari prefix `type` (lihat PREFIX_KODE_ITEM). Kalau dikirim, dipakai
+   * apa adanya (keunikan dijaga constraint UNIQUE DB seperti sebelumnya) --
+   * jadi TETAP bisa diisi manual/ditimpa kalau user mau. */
+  kode?: string;
   name: string;
   type: "bahan_baku" | "packaging" | "operasional" | "setengah_jadi";
   category?: string;
@@ -36,7 +69,7 @@ export interface CreateItemInput {
   catatan?: string;
 }
 
-export async function createItem(client: PoolClient, input: CreateItemInput, userId?: number): Promise<{ id: number }> {
+export async function createItem(client: PoolClient, input: CreateItemInput, userId?: number): Promise<{ id: number; kode: string }> {
   if (input.category !== undefined && !(await kategoriExists(client, input.category))) {
     throw new Error(`Kategori "${input.category}" tidak ada di master kategori. Tambahkan dulu lewat Master Kategori.`);
   }
@@ -52,13 +85,14 @@ export async function createItem(client: PoolClient, input: CreateItemInput, use
     ? false // setengah_jadi selalu pending sampai resepnya dibuat dengan yield terisi
     : input.purchaseUnit != null && input.hargaMaster != null && input.purchaseToRecipeFactor != null;
   const status = complete ? "active" : "pending_data";
+  const kode = input.kode?.trim() ? input.kode.trim() : await kodeItemOtomatis(client, input.type);
 
   const { rows } = await client.query<{ id: number }>(
     `INSERT INTO inventory_items
       (kode, name, type, status, category, recipe_unit, purchase_unit, purchase_to_recipe_factor, harga_master, min_stok, shelf_life_hari, catatan)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
     [
-      input.kode,
+      kode,
       input.name,
       input.type,
       status,
@@ -79,9 +113,9 @@ export async function createItem(client: PoolClient, input: CreateItemInput, use
     recordId: id,
     fieldName: "created",
     oldValue: null,
-    newValue: input,
+    newValue: { ...input, kode },
   });
-  return { id };
+  return { id, kode };
 }
 
 export interface ItemListRow {
@@ -292,7 +326,10 @@ export interface ResepProduksiBarisInput {
 }
 
 export interface CreateResepProduksiInput {
-  kode: string;
+  /** Opsional -- kalau tidak dikirim (atau kosong), server generate otomatis
+   * prefix RP- (lihat kodeResepProduksiOtomatis). Kalau dikirim, dipakai apa
+   * adanya -- TETAP bisa diisi manual/ditimpa kalau user mau. */
+  kode?: string;
   outputItemKode: string;
   yieldQty?: number;
   yieldUnit?: string;
@@ -300,20 +337,37 @@ export interface CreateResepProduksiInput {
   baris: ResepProduksiBarisInput[];
 }
 
+async function kodeResepProduksiOtomatis(client: PoolClient): Promise<string> {
+  return kodeOtomatis(
+    "RP",
+    async () => {
+      const { rows } = await client.query<{ maks: number | null }>(
+        `SELECT MAX(substring(kode from '-(\\d+)$')::int) AS maks FROM inventory_resep_produksi WHERE kode LIKE 'RP-%'`,
+      );
+      return rows[0]?.maks ?? 0;
+    },
+    async (kode) => {
+      const { rows } = await client.query(`SELECT 1 FROM inventory_resep_produksi WHERE kode = $1`, [kode]);
+      return rows.length > 0;
+    },
+  );
+}
+
 /** Trigger DB (1 level: bahan cuma boleh bahan_baku/packaging) tetap berlaku otomatis lewat INSERT baris di bawah. */
 export async function createResepProduksi(
   client: PoolClient,
   input: CreateResepProduksiInput,
   userId?: number,
-): Promise<{ id: number }> {
+): Promise<{ id: number; kode: string }> {
   if (input.baris.length === 0) throw new Error("Resep produksi harus punya minimal 1 baris bahan");
 
   const output = await itemIdByKode(client, input.outputItemKode);
+  const kode = input.kode?.trim() ? input.kode.trim() : await kodeResepProduksiOtomatis(client);
 
   const { rows } = await client.query<{ id: number }>(
     `INSERT INTO inventory_resep_produksi (kode, output_item_id, yield_qty, yield_unit, catatan)
      VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-    [input.kode, output.id, input.yieldQty ?? null, input.yieldUnit ?? null, input.catatan ?? null],
+    [kode, output.id, input.yieldQty ?? null, input.yieldUnit ?? null, input.catatan ?? null],
   );
   const resepId = rows[0].id;
 
@@ -331,10 +385,10 @@ export async function createResepProduksi(
     recordId: resepId,
     fieldName: "created",
     oldValue: null,
-    newValue: input,
+    newValue: { ...input, kode },
   });
 
-  return { id: resepId };
+  return { id: resepId, kode };
 }
 
 export interface UpdateResepProduksiInput {

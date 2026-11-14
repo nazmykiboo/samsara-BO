@@ -51,6 +51,8 @@ export type PermissionAction =
   | "min_stok.lihat"
   | "laporan_harian.lihat"
   | "analitik.lihat"
+  // Kartu Stok (per item+lokasi) & Riwayat Transaksi semua jenis (Tahap 1D, 2026-11-14).
+  | "kartu_stok.lihat"
   // --- modul inventory: pengaturan sistem ---
   | "pengaturan.manage"
   // --- core: akun login ---
@@ -130,6 +132,10 @@ export const PERMISSION_ROLES: Record<PermissionAction, Role[]> = {
   // GET /analitik/penjualan DAN GET /analitik/operasional. LEBIH SEMPIT dari laporan_harian.lihat:
   // supervisor TIDAK boleh (backend menolak 403) -- jangan "diseragamkan" ke tiga role.
   "analitik.lihat": ["owner", "manajer_ops"],
+  // GET /kartu-stok DAN GET /riwayat-transaksi -- SAMA dengan laporan_harian.lihat
+  // (owner/manajer_ops/supervisor), tapi action/endpoint SENDIRI (403 utuh untuk
+  // staf, bukan cuma field di-strip seperti hpp.lihat_harga).
+  "kartu_stok.lihat": ["owner", "manajer_ops", "supervisor"],
 
   // Metode HPP default, target food cost, kelola lokasi, kelola channel.
   "pengaturan.manage": ["owner"],

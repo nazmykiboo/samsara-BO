@@ -11,7 +11,7 @@ import { PermintaanStatusBadge } from "../../components/ui/Badge";
 import { ErrorBox, ResultBox } from "../../components/ResultBox";
 import { batalkanPermintaanTransfer, createPermintaanTransfer, listPermintaanTransfer } from "../../api/transaksi";
 import { ApiError } from "../../api/client";
-import type { PermintaanTransferListItem } from "../../api/types";
+import type { PermintaanTransferListItem, ShiftDibutuhkan } from "../../api/types";
 import { MOCK_ITEMS, type MockItemRef } from "../../mock/referenceData";
 import { todayIso } from "../../utils/format";
 
@@ -46,6 +46,8 @@ export function PermintaanTransferForm() {
   }, [tujuanOptions, locationTujuanId]);
   const [tanggal, setTanggal] = useState(todayIso());
   const [catatan, setCatatan] = useState("");
+  const [dibutuhkanSebelumTanggal, setDibutuhkanSebelumTanggal] = useState("");
+  const [dibutuhkanSebelumShift, setDibutuhkanSebelumShift] = useState<ShiftDibutuhkan | "">("");
   const [baris, setBaris] = useState<Baris[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,31 +92,27 @@ export function PermintaanTransferForm() {
     }
 
     setSaving(true);
-    const kodeBerhasil: string[] = [];
     try {
-      for (const b of baris) {
-        const res = await createPermintaanTransfer({
-          locationAsalId,
-          locationTujuanId,
-          itemKode: b.item.kode,
-          qtyDiminta: Number(b.qty),
-          tanggalDiminta: tanggal,
-          catatan: catatan || undefined,
-        });
-        kodeBerhasil.push(res.kode);
-      }
-      setHasilKode(kodeBerhasil);
+      // Tahap 1B (2026-11-14): SATU pengajuan multi-item, bukan N panggilan
+      // terpisah -- semua baris berbagi kelompokId (dikembalikan backend)
+      // supaya bisa dikelompokkan jadi satu kartu di riwayat.
+      const res = await createPermintaanTransfer({
+        locationAsalId,
+        locationTujuanId,
+        tanggalDiminta: tanggal,
+        catatan: catatan || undefined,
+        dibutuhkanSebelumTanggal: dibutuhkanSebelumTanggal || undefined,
+        dibutuhkanSebelumShift: dibutuhkanSebelumShift || undefined,
+        baris: baris.map((b) => ({ itemKode: b.item.kode, qtyDiminta: Number(b.qty) })),
+      });
+      setHasilKode(res.baris.map((b) => b.kode));
       setBaris([]);
       setCatatan("");
+      setDibutuhkanSebelumTanggal("");
+      setDibutuhkanSebelumShift("");
       setReloadCounter((n) => n + 1);
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Gagal mengajukan permintaan.";
-      if (kodeBerhasil.length > 0) {
-        setError(`${kodeBerhasil.length} permintaan berhasil diajukan (${kodeBerhasil.join(", ")}), tapi sisanya gagal: ${message}`);
-        setReloadCounter((n) => n + 1);
-      } else {
-        setError(message);
-      }
+      setError(err instanceof ApiError ? err.message : "Gagal mengajukan permintaan.");
     } finally {
       setSaving(false);
     }
@@ -155,9 +153,28 @@ export function PermintaanTransferForm() {
           </Field>
         </div>
 
-        <Field label="Tanggal dibutuhkan">
+        <Field label="Tanggal permintaan">
           <Input type="date" value={tanggal} onChange={(e) => setTanggal(e.target.value)} required />
         </Field>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Dibutuhkan sebelum (opsional)">
+            <Input
+              type="date"
+              value={dibutuhkanSebelumTanggal}
+              onChange={(e) => setDibutuhkanSebelumTanggal(e.target.value)}
+            />
+          </Field>
+          <Field label="Shift (opsional)">
+            <Select value={dibutuhkanSebelumShift} onChange={(e) => setDibutuhkanSebelumShift(e.target.value as ShiftDibutuhkan | "")}>
+              <option value="">- pilih shift -</option>
+              <option value="pagi">Pagi</option>
+              <option value="siang">Siang</option>
+              <option value="sore">Sore</option>
+              <option value="malam">Malam</option>
+            </Select>
+          </Field>
+        </div>
 
         <Card>
           <h2 className="mb-3 text-sm font-semibold text-slate-900">Item yang diminta</h2>
@@ -171,7 +188,7 @@ export function PermintaanTransferForm() {
                   <p className="text-xs text-slate-500">{b.item.recipeUnit}</p>
                 </div>
                 <Input
-                  type="number"
+                  type="number" inputMode="decimal"
                   min={0}
                   step="any"
                   placeholder="Qty"
@@ -210,6 +227,30 @@ export function PermintaanTransferForm() {
   );
 }
 
+/** Label shift Bahasa Indonesia -- sama enum backend (pagi/siang/sore/malam, migrasi 0034). */
+const LABEL_SHIFT: Record<string, string> = { pagi: "Pagi", siang: "Siang", sore: "Sore", malam: "Malam" };
+
+function formatWaktu(iso: string | null): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "-";
+  return d.toLocaleString("id-ID", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+/** Kelompokkan baris (1 baris = 1 item) jadi satu kartu per `kelompokId` (Tahap 1B, 2026-11-14) --
+ * murni pengelompokan tampilan, lihat catatan sama di PermintaanMasukPanel.tsx. */
+function kelompokkan(rows: PermintaanTransferListItem[]): Array<{ kelompokId: number; baris: PermintaanTransferListItem[] }> {
+  const peta = new Map<number, PermintaanTransferListItem[]>();
+  for (const r of rows) {
+    const list = peta.get(r.kelompokId) ?? [];
+    list.push(r);
+    peta.set(r.kelompokId, list);
+  }
+  return [...peta.entries()]
+    .map(([kelompokId, baris]) => ({ kelompokId, baris }))
+    .sort((a, b) => b.baris[0].createdAt.localeCompare(a.baris[0].createdAt));
+}
+
 function RiwayatPermintaanSaya({
   locationTujuanId,
   reloadCounter,
@@ -220,7 +261,7 @@ function RiwayatPermintaanSaya({
   const [rows, setRows] = useState<PermintaanTransferListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [cancelingId, setCancelingId] = useState<string | null>(null);
+  const [cancelingId, setCancelingId] = useState<number | null>(null);
   const [localReload, setLocalReload] = useState(0);
 
   useEffect(() => {
@@ -234,7 +275,7 @@ function RiwayatPermintaanSaya({
     setError(null);
     listPermintaanTransfer({ lokasi: locationTujuanId })
       .then((res) => {
-        if (active) setRows(res.filter((r) => r.locationTujuanId === String(locationTujuanId)));
+        if (active) setRows(res.filter((r) => r.locationTujuanId === locationTujuanId));
       })
       .catch((err) => {
         if (active) setError(err instanceof ApiError ? err.message : "Gagal memuat riwayat permintaan.");
@@ -247,7 +288,7 @@ function RiwayatPermintaanSaya({
     };
   }, [locationTujuanId, reloadCounter, localReload]);
 
-  async function handleBatalkan(id: string) {
+  async function handleBatalkan(id: number) {
     setCancelingId(id);
     setError(null);
     try {
@@ -260,42 +301,62 @@ function RiwayatPermintaanSaya({
     }
   }
 
+  const kelompok = kelompokkan(rows);
+
   return (
     <Card>
       <h2 className="mb-3 text-sm font-semibold text-slate-900">Riwayat permintaan saya</h2>
       {loading ? <Spinner label="Memuat riwayat..." /> : null}
       {error ? <ErrorBox>{error}</ErrorBox> : null}
       {!loading && !error ? (
-        rows.length === 0 ? (
+        kelompok.length === 0 ? (
           <p className="py-4 text-center text-sm text-slate-500">Belum ada permintaan yang diajukan dari lokasi ini.</p>
         ) : (
-          <div className="space-y-2">
-            {rows.map((r) => {
-              const item = MOCK_ITEMS.find((i) => i.kode === r.itemKode);
+          <div className="space-y-3">
+            {kelompok.map(({ kelompokId, baris }) => {
+              const pertama = baris[0];
               return (
-                <div key={r.id} className="rounded-lg border border-slate-200 p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-medium text-slate-900">
-                        {r.itemNama} &middot; {r.qtyDiminta} {item?.recipeUnit ?? ""}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {r.kode} &middot; dibutuhkan {r.tanggalDiminta}
-                        {r.catatan ? ` · ${r.catatan}` : ""}
-                      </p>
-                    </div>
-                    <PermintaanStatusBadge status={r.status} />
+                <div key={kelompokId} className="rounded-lg border border-slate-200 p-3">
+                  <p className="text-xs text-slate-500">
+                    Diminta {formatWaktu(pertama.createdAt)}
+                    {pertama.dibutuhkanSebelumTanggal
+                      ? ` · dibutuhkan sebelum ${pertama.dibutuhkanSebelumTanggal}${pertama.dibutuhkanSebelumShift ? ` (shift ${LABEL_SHIFT[pertama.dibutuhkanSebelumShift]})` : ""}`
+                      : ""}
+                    {pertama.catatan ? ` · ${pertama.catatan}` : ""}
+                  </p>
+                  <div className="mt-2 space-y-2">
+                    {baris.map((r) => {
+                      const item = MOCK_ITEMS.find((i) => i.kode === r.itemKode);
+                      return (
+                        <div key={r.id} className="rounded-lg bg-slate-50 p-2.5">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-sm font-medium text-slate-900">
+                              {r.itemNama} &middot; {r.qtyDiminta} {item?.recipeUnit ?? ""}
+                            </p>
+                            <PermintaanStatusBadge status={r.status} />
+                          </div>
+                          <p className="text-xs text-slate-500">{r.kode}</p>
+                          <p className="mt-1 text-xs text-slate-400">
+                            Diminta {formatWaktu(r.createdAt)} &middot; Dijawab {formatWaktu(r.dijawabPada)} &middot; Dikirim{" "}
+                            {formatWaktu(r.dikirimPada)} &middot; Diterima {formatWaktu(r.diterimaPada)}
+                          </p>
+                          {r.status === "ditolak" && r.alasanTolak ? (
+                            <p className="mt-1 text-xs text-red-600">Alasan ditolak: {r.alasanTolak}</p>
+                          ) : null}
+                          {r.status === "diminta" ? (
+                            <button
+                              type="button"
+                              disabled={cancelingId === r.id}
+                              onClick={() => handleBatalkan(r.id)}
+                              className="mt-2 text-xs font-medium text-red-600 hover:underline disabled:opacity-50"
+                            >
+                              {cancelingId === r.id ? "Membatalkan..." : "Batalkan permintaan"}
+                            </button>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </div>
-                  {r.status === "diminta" ? (
-                    <button
-                      type="button"
-                      disabled={cancelingId === r.id}
-                      onClick={() => handleBatalkan(r.id)}
-                      className="mt-2 text-xs font-medium text-red-600 hover:underline disabled:opacity-50"
-                    >
-                      {cancelingId === r.id ? "Membatalkan..." : "Batalkan permintaan"}
-                    </button>
-                  ) : null}
                 </div>
               );
             })}

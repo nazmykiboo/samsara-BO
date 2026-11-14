@@ -1,6 +1,7 @@
 import type { StatusOtomatis } from "../../api/otomatis";
 import { Badge } from "../../components/ui/Badge";
 import { Card } from "../../components/ui/Card";
+import { KesegaranCard } from "../../components/KesegaranCard";
 
 const LABEL_JENIS: Record<string, string> = {
   "log-penjualan": "Log Penjualan",
@@ -78,6 +79,10 @@ export function DashboardSinkronisasiSection({
       {status ? (
         <Card>
           <h3 className="mb-2 text-sm font-semibold text-slate-900">Impor terakhir per sumber</h3>
+          <p className="mb-2 text-xs text-slate-400">
+            Kapan endpoint impor TERAKHIR DIPANGGIL -- bisa tetap "baru saja" walau 0 baris baru
+            benar-benar masuk (lihat kartu "Kesegaran data" di bawah untuk cek baris sungguhan).
+          </p>
           <div className="space-y-2">
             {JENIS_URUT.map((jenis) => {
               const data = status.imporTerakhir.find((i) => i.jenisImpor === jenis);
@@ -100,6 +105,8 @@ export function DashboardSinkronisasiSection({
           </div>
         </Card>
       ) : null}
+
+      <KesegaranCard />
 
       {status?.otomatisTerakhir ? (
         <Card>

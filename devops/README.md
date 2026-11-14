@@ -1,8 +1,62 @@
 # Runbook Deploy Production — Samsara Backoffice
 
-Status per 2026-11-07 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
+Status per 2026-11-14 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
 disalin dari versi dokumen sebelumnya). **App sudah LIVE, dipakai owner
-sungguhan, dan sudah melewati Deploy #5** — lihat § "Deploy #5" di bawah.
+sungguhan, dan sudah melewati Deploy #6** — lihat § "Deploy #6" di bawah.
+
+## Deploy #6: Mutasi Lain qty positif, kode otomatis, Kartu Stok & Riwayat Semua Jenis, Permintaan ke CK (timeline + Layar CK), perbaikan raw-majoo, kesegaran data (2026-11-14)
+
+2 migrasi baru (`inventory/0033_tambah_kode_vendor_dan_kategori_item`,
+`inventory/0034_permintaan_transfer_timeline_dan_kelompok`), container
+`api`/`web` di-rebuild & restart (n8n/Postgres/VNC **tidak disentuh sama
+sekali** — uptime tetap "Up 3 weeks"/"Up 3 days"/"Up 8 days" sebelum &
+sesudah, dicek eksplisit).
+
+**Metodologi** (sama persis Deploy #2-5): `pg_dump` production (lewat
+`devops/backup-db.sh`, `docker exec` ke `n8n-stack-postgres-1`) → restore ke
+database lokal terpisah (`samsara_prod_rehearsal`) → migrasi dijalankan ke
+salinan itu → 62 tabel dibandingkan jumlah barisnya sebelum/sesudah
+(**identik**, cuma `schema_migrations` +2 sesuai jumlah migrasi baru — TIDAK
+ada tabel baru, kedua migrasi cuma menambah kolom) → migrasi dites idempoten
+(jalan ke-2 tidak melakukan apa-apa) → database lokal dihapus → BARU dicoba
+ke production sungguhan.
+
+**rsync** (pola `--exclude '.env' --exclude '.env.production'` dari pelajaran
+Deploy #4/#5 tetap dipakai) — dikonfirmasi SETELAH rsync `.env.production` di
+VPS checksum-nya tidak berubah sama sekali, migrasi production langsung
+berhasil tanpa error di percobaan pertama.
+
+**Smoke test production**: HTTPS valid, `/health` OK (3 modul aktif), `GET
+/api/core/lokasi` publik normal, 62 tabel (sama dengan rehearsal, tidak ada
+tabel baru), 4 endpoint BARU (`GET /kartu-stok`, `GET /riwayat-transaksi`,
+`GET .../permintaan-transfer/layar-ck`, `GET /sales-sync/kesegaran`) semua
+membalas 401 tanpa token (ter-mount & ter-gate dengan benar), `POST
+/api/auth/login` dengan kredensial SENGAJA SALAH membalas 401 dengan pesan
+yang benar (endpoint auth jalan normal, TANPA pernah menyentuh kredensial
+asli siapa pun). **Status fitur setelah deploy**: backfill data lama
+diverifikasi 100% terisi (15/15 vendor dapat `kode` VN-xxx, 10/10 kategori
+item dapat `kode` KT-xxx, 69/69 baris `inventory_permintaan_transfer` lama
+dapat `kelompok_id` = id-nya sendiri), `otomatis_aktif` TETAP `true` (nilai
+sebelum deploy, tidak disentuh — sesuai instruksi eksplisit owner untuk
+deploy ini).
+
+Backup pra-deploy diverifikasi dulu (permission 600, `gzip -t` valid, ukuran
+2.4MB wajar dibanding backup harian) SEBELUM migrasi dijalankan — tersimpan
+di
+`/root/samsara-backups/samsara_pre-deploy-tahap1-permintaanck-kartustok_2026-11-14_091645.sql.gz`
+di VPS, ikut rotasi retensi 7 hari otomatis seperti backup harian lainnya.
+Tidak ada kredensial apa pun yang pernah terbaca/tertulis ke chat/log/git
+sepanjang proses.
+
+**Catatan penting raw-majoo (BUKAN bagian migrasi DB)**: perbaikan workflow
+n8n (`devops/n8n/raw-majoo-direct.json`) menghapus total pola static-data
+yang terbukti jadi akar masalah pipeline mati 16+ hari — perbaikan ini
+HANYA mengedit file JSON definisi workflow di repo, **TIDAK PERNAH**
+menyentuh instance n8n yang live di VPS. **Owner/operator perlu
+mengimpor ulang file ini secara manual lewat editor n8n** (langkah
+lengkap: `devops/n8n/README.md` § 15) — belum otomatis ter-deploy lewat
+rsync/docker seperti kode aplikasi, karena workflow n8n dikelola terpisah
+dari deployment app ini.
 
 ## Deploy #5: Refund Majoo berdiri sendiri + tampilan refund (2026-11-07)
 

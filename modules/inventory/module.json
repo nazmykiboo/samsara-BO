@@ -172,7 +172,7 @@
       {
         "method": "POST",
         "path": "/transaksi/permintaan-transfer",
-        "description": "Outlet mengajukan permintaan transfer ke lokasi lain (biasanya CK). Body {locationAsalId, locationTujuanId, itemKode, qtyDiminta, tanggalDiminta, catatan?}. Kode human-readable (PT-000123) digenerate otomatis. Staf boleh mengajukan (cuma mengajukan, tidak memindahkan stok) -- beda dari transfer.kirim.",
+        "description": "Tahap 1B (2026-11-14, DEVIASI dari bentuk lama): outlet mengajukan SATU ATAU LEBIH item sekaligus dalam satu pengajuan. Body {locationAsalId, locationTujuanId, tanggalDiminta, catatan?, dibutuhkanSebelumTanggal? (YYYY-MM-DD), dibutuhkanSebelumShift? (pagi|siang|sore|malam), baris: [{itemKode, qtyDiminta}, ...]}. Tabel TETAP 1 baris = 1 item -- baris-baris dalam satu pengajuan berbagi `kelompokId` yang sama (dikembalikan di response) supaya UI bisa mengelompokkannya jadi satu kartu. Kode human-readable (PT-000123) digenerate otomatis PER ITEM. Staf boleh mengajukan (cuma mengajukan, tidak memindahkan stok) -- beda dari transfer.kirim.",
         "permission": {
           "action": "permintaan_transfer.create",
           "roles": ["owner", "manajer_ops", "supervisor", "staf"],
@@ -182,7 +182,7 @@
       {
         "method": "GET",
         "path": "/transaksi/permintaan-transfer",
-        "description": "Daftar permintaan transfer, dilihat dari sisi CK (permintaan masuk) maupun outlet (permintaan yang diajukan) -- query opsional ?lokasi=<id>&status=diminta|dipenuhi|dibatalkan. Filter lokasi mencocokkan lokasi asal ATAU tujuan.",
+        "description": "Daftar permintaan transfer, dilihat dari sisi CK (permintaan masuk) maupun outlet (permintaan yang diajukan) -- query opsional ?lokasi=<id>&status=diminta|dipenuhi|dipenuhi_sebagian|dibatalkan|ditolak. Filter lokasi mencocokkan lokasi asal ATAU tujuan. Tahap 1B (2026-11-14): tiap baris SEKARANG membawa `kelompokId` (grouping tampilan, lihat POST di atas) dan timeline lengkap -- `dibutuhkanSebelumTanggal`/`dibutuhkanSebelumShift` (input saat mengajukan), `dijawabPada`/`dijawabOlehUsername` (keputusan CK: penuhi/penuhi sebagian/tolak), `dikirimPada`/`diterimaPada` (di-JOIN dari inventory_transaksi_transfer yang merujuk balik lewat permintaan_id, BUKAN kolom baru), `alasanTolak`. Semua field timeline BARU ini `null` ('-' di UI) untuk baris lama dari sebelum Tahap 1B ATAU yang belum terjadi tahapnya.",
         "permission": {
           "action": "permintaan_transfer.lihat",
           "roles": ["owner", "manajer_ops", "supervisor", "staf"],
@@ -192,11 +192,31 @@
       {
         "method": "PATCH",
         "path": "/transaksi/permintaan-transfer/:id/batalkan",
-        "description": "Batalkan permintaan transfer yang masih berstatus 'diminta' (ditolak kalau sudah 'dipenuhi'/'dibatalkan'). Lingkup lokasi untuk supervisor/staf dicek manual terhadap location_tujuan_id permintaan yang sudah ada di database.",
+        "description": "Batalkan permintaan transfer yang masih berstatus 'diminta' (ditolak kalau sudah 'dipenuhi'/'dipenuhi_sebagian'/'dibatalkan'/'ditolak'). Lingkup lokasi untuk supervisor/staf dicek manual terhadap location_tujuan_id permintaan yang sudah ada di database.",
         "permission": {
           "action": "permintaan_transfer.create",
           "roles": ["owner", "manajer_ops", "supervisor", "staf"],
           "locationScope": { "supervisor": "own", "staf": "own" }
+        }
+      },
+      {
+        "method": "PATCH",
+        "path": "/transaksi/permintaan-transfer/:id/tolak",
+        "description": "Tahap 1B (2026-11-14, BARU): CK menolak permintaan yang masih 'diminta', dengan alasan WAJIB (body {alasanTolak, locationAsalId? -- opsional, cuma dipakai middleware extractLocationIds; lingkup lokasi sungguhan dicek manual terhadap location_asal_id permintaan yang sudah ada}). Permission SAMA dengan transfer.kirim (sisi CK yang berwenang memenuhi, berwenang juga menolak) -- BUKAN permintaan_transfer.create (itu sisi pengaju/outlet, staf termasuk; staf TIDAK BOLEH menolak).",
+        "permission": {
+          "action": "transfer.kirim",
+          "roles": ["owner", "manajer_ops", "supervisor"],
+          "locationScope": { "supervisor": "own" }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/transaksi/permintaan-transfer/layar-ck",
+        "description": "Tahap 1B (2026-11-14, BARU): \"Layar CK\" -- permintaan masuk status 'diminta' ke lokasi ?lokasi=<id> (WAJIB), tiap baris dilengkapi `stokSaatIni` (stok lokasi INI, bukan stok outlet pemohon), `statusStok` (cukup|kurang|habis, dibandingkan ke qtyDiminta), dan `saran` (produksi|beli, dari inventory_items.type -- setengah_jadi = produksi, selain itu = beli; sekadar hint UI, bukan keputusan otomatis). Permission SAMA dengan transfer.kirim.",
+        "permission": {
+          "action": "transfer.kirim",
+          "roles": ["owner", "manajer_ops", "supervisor"],
+          "locationScope": { "supervisor": "own" }
         }
       },
       {
@@ -215,6 +235,26 @@
         "description": "Daftar DETAIL transaksi penjualan per BARIS menu (satu transaksi 2 baris menu -> 2 objek), bukan ringkasan agregat seperti GET /laporan/harian. Query SEMUA opsional: ?tanggal_mulai=&tanggal_selesai= (YYYY-MM-DD, filter h.tanggal BETWEEN; default 30 hari terakhir -- tanggal_selesai kosong = hari ini (CURRENT_DATE), tanggal_mulai kosong = 30 hari sebelum tanggal_selesai), ?channel= (cocok PERSIS/case-sensitive ke kolom sumber, tidak divalidasi ke inventory_sales_channel karena kolom sumber tidak punya FK ke sana), ?kode_menu= (DEVIASI 2026-10-30: memilih TRANSAKSI yang punya minimal 1 baris menu itu, lalu SELURUH baris transaksi itu ikut dikembalikan -- bukan cuma baris yang cocok filter seperti versi sebelumnya; perubahan ini konsekuensi dari paginasi per-transaksi di bawah, dan sekaligus lebih benar untuk tampilan 'satu kartu = satu order' karena tidak lagi membuat order terlihat cuma berisi 1 menu padahal sebenarnya lebih), ?lokasi=, ?limit= & ?offset= (paginasi, 2026-10-30 -- lihat di bawah). Tiap baris juga membawa `jam` (string 'HH:MM:SS' atau null, kolom TIME migrasi 0026; null untuk baris lama/input tanpa jam, TIDAK PERNAH diperkirakan dari created_at). Field sumberPencatatan ('manual'|'sinkronisasi') DITURUNKAN dari core_audit_log (field_name 'created_via', new_value 'sales-sync' yang ditulis modul sales-sync) lewat subquery EXISTS, default 'manual' kalau tidak ada jejaknya. Response BUKAN array flat lagi (DEVIASI 2026-10-30 dari bentuk sebelumnya): {rows: [...], total}. `total` = jumlah TRANSAKSI (header) yang cocok filter TANPA memperhitungkan limit/offset, BUKAN jumlah baris menu -- dipakai ringkasan 'menampilkan X dari Y' di frontend. PAGINASI DI LEVEL TRANSAKSI, bukan baris menu: `limit`/`offset` membatasi jumlah HEADER yang diambil (default & maksimal `DEFAULT_LIMIT_DETAIL_PENJUALAN`=200 transaksi per halaman), lalu SELURUH baris menu milik transaksi-transaksi itu ikut dikirim tanpa batas -- satu transaksi tidak akan pernah terpotong di tengah hanya karena kebetulan jatuh di batas halaman. Ini pola pagination PERTAMA di repo ini (sebelumnya semua endpoint list cuma pakai LIMIT tetap tanpa offset/total) -- sengaja dibatasi ke endpoint ini dulu (dipicu kebutuhan Riwayat Transaksi menampilkan volume lebih besar setelah pemrosesan otomatis sales-sync), bukan retrofit ke semua endpoint list yang ada; lihat docs/architecture-decisions.md untuk catatan keputusan ini. Permission DIPAKAI ULANG dari GET /laporan/harian (laporan_harian.lihat, staf TIDAK boleh); supervisor selalu dibatasi ke lokasinya sendiri walau ?lokasi= tidak dikirim (dipaksa di domain layer, pola sama dengan listJadwalShift di modul hr). Field hppSaatTransaksi/hppSumber TIDAK ADA di respons (bukan null) untuk role tanpa permission hpp.lihat_harga (Tahap 1B, 2026-11-01). Tiap baris juga membawa field BARU `refund` (2026-11-07, array, bisa kosong) -- refund yang terhubung ke transaksi ini lewat no_referensi, diambil cross-module dari GET /api/sales-sync/refund (authHeader diteruskan apa adanya, jadi field refundAmount di dalamnya otomatis ikut ter-strip untuk role tanpa hpp.lihat_harga tanpa Inventory perlu strip ulang). Kegagalan mengambil refund (mis. modul sales-sync nonaktif) TIDAK menggagalkan request ini -- fallback ke array kosong.",
         "permission": {
           "action": "laporan_harian.lihat",
+          "roles": ["owner", "manajer_ops", "supervisor"],
+          "locationScope": { "supervisor": "own" }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/kartu-stok",
+        "description": "Tahap 1D (2026-11-14). Kartu Stok satu item di satu lokasi: ledger lengkap (waktu, jenis, referensi teks ringkas ke transaksi asal, qtyChange, saldo BERJALAN -- dihitung dari SELURUH histori lalu difilter rentang tanggal, bukan delta dalam jendela, jadi saldo tetap benar walau jendela mulai di tengah histori, olehUsername). Query WAJIB: ?item= (kode item), ?lokasi= (id), ?tanggal_mulai= & ?tanggal_selesai= (YYYY-MM-DD). ?limit=/?offset= opsional (default & maksimal 200 baris). Response {rows, total}. Lingkup lokasi: owner/manajer_ops bebas lokasi apa pun, supervisor dipaksa ke lokasinya sendiri (403 kalau ?lokasi= di luar itu) -- staf TIDAK PUNYA AKSES sama sekali ke endpoint ini (403, bukan cuma field di-strip). Field `hargaPerSatuan` (HANYA terisi untuk jenis pembelian/transfer -- jenis lain null, lihat domain/ledger.ts) hilang dari respons (bukan null) untuk role tanpa hpp.lihat_harga.",
+        "permission": {
+          "action": "kartu_stok.lihat",
+          "roles": ["owner", "manajer_ops", "supervisor"],
+          "locationScope": { "supervisor": "own" }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/riwayat-transaksi",
+        "description": "Tahap 1D (2026-11-14). Riwayat Transaksi LINTAS SEMUA jenis (pembelian/produksi/penjualan/transfer_keluar/transfer_masuk/mutasi_lain/opname) dalam satu daftar, generalisasi dari GET /transaksi/penjualan (yang cuma penjualan) -- TIDAK ada kolom saldo di sini (saldo cuma masuk akal di-scope ke satu item, lihat GET /kartu-stok). Query WAJIB: ?tanggal_mulai= & ?tanggal_selesai= (YYYY-MM-DD). Opsional: ?lokasi= (id), ?jenis= (salah satu dari 7 nilai enum transaction_type), ?limit=/?offset= (default & maksimal 200 baris). Response {rows, total}. Lingkup lokasi & permission SAMA PERSIS GET /kartu-stok (kartu_stok.lihat, supervisor dipaksa lokasi sendiri walau ?lokasi= tidak dikirim, staf 403). Field `hargaPerSatuan` hilang dari respons untuk role tanpa hpp.lihat_harga.",
+        "permission": {
+          "action": "kartu_stok.lihat",
           "roles": ["owner", "manajer_ops", "supervisor"],
           "locationScope": { "supervisor": "own" }
         }

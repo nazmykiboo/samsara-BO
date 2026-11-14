@@ -34,12 +34,17 @@ export function ItemPicker({
   onSelect,
   allowedTypes,
   excludeKodes,
+  onCreateNew,
 }: {
   label?: string;
   value: string | null;
   onSelect: (item: MockItemRef) => void;
   allowedTypes?: MockItemRef["type"][];
   excludeKodes?: string[];
+  /** Opsional -- kalau diisi, tampil tombol "+ Buat item baru" di bawah hasil
+   * pencarian (Tahap 1C, dipakai form Resep Produksi supaya item output bisa
+   * dibuat langsung tanpa pindah ke Master Item dulu). */
+  onCreateNew?: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -113,6 +118,19 @@ export function ItemPicker({
                 </button>
               ))
             )}
+            {onCreateNew ? (
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  onCreateNew();
+                  setOpen(false);
+                }}
+                className="flex w-full items-center gap-1 border-t border-slate-100 px-3 py-2 text-left text-sm font-medium text-blue-600 hover:bg-blue-50"
+              >
+                + Buat item baru
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>

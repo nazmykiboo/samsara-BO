@@ -32,6 +32,7 @@ disesuaikan lagi.
    - [5.4 Cara catat waste / mutasi lain](#54-cara-catat-waste--mutasi-lain)
    - [5.5 Cara opname dua tahap (hitung fisik & persetujuan)](#55-cara-opname-dua-tahap-hitung-fisik--persetujuan)
    - [5.6 Cara minta barang ke Central Kitchen (Permintaan)](#56-cara-minta-barang-ke-central-kitchen-permintaan)
+   - [5.7 Cara lihat Riwayat Semua Jenis dan Kartu Stok](#57-cara-lihat-riwayat-semua-jenis-dan-kartu-stok)
 6. [Halaman Master](#6-halaman-master)
 7. [Halaman Laporan Harian](#7-halaman-laporan-harian)
 8. [Halaman Jadwal & Izin](#8-halaman-jadwal--izin)
@@ -80,11 +81,14 @@ yang muncul dan tombol apa yang bisa kamu tekan:
 - **Staf** — peran paling terbatas. Bisa lihat stok (lokasi sendiri),
   menerima transfer, mencatat waste/mutasi lain **jenis pengurangan
   sehari-hari saja** (rusak, hilang, dipakai makan staf, dipakai sampel —
-  **retur ke supplier dan koreksi tambah stok perlu Supervisor ke atas**),
-  dan input hitungan fisik opname — tapi **tidak bisa** mencatat
-  pembelian/produksi/penjualan, tidak bisa mengirim transfer (cuma bisa
-  terima), tidak bisa lihat Riwayat Transaksi, dan tidak bisa lihat
-  HPP/harga beli/margin.
+  **retur ke supplier dan koreksi tambah stok perlu Supervisor ke atas**;
+  qty yang diketik selalu angka positif, arah tambah/kurang otomatis dari
+  jenis yang dipilih), dan input hitungan fisik opname — tapi **tidak
+  bisa** mencatat pembelian/produksi/penjualan, tidak bisa mengirim
+  transfer (cuma bisa terima), tidak bisa menjawab Permintaan ke CK
+  (penuhi/tolak — walaupun ditugaskan ke Central Kitchen), tidak bisa
+  lihat Riwayat Transaksi/Riwayat Semua Jenis/Kartu Stok sama sekali, dan
+  tidak bisa lihat HPP/harga beli/margin.
 
 Peran ini ditentukan owner saat akun kamu dibuat. Kalau merasa peranmu
 salah atau kamu butuh akses ke lokasi lain, minta owner yang mengubahnya —
@@ -430,12 +434,13 @@ stok Bubur dan Paper Bowl tetap akurat — bukan lewat transaksi Penjualan
 6. Di **"Tambah item"**, cari dan pilih item yang berkurang. Kalau mau
    mencatat rugi bahan mentahnya langsung, tambahkan misalnya **Bubur**
    dan **Paper Bowl 650 ml + tutup**.
-7. Untuk tiap item, isi kolom qty dengan **angka negatif** untuk
-   mengurangi stok (misalnya `-300` untuk Bubur kalau porsi itu berisi
-   300 gr, `-1` untuk Paper Bowl), atau **angka positif** kalau jenisnya
-   koreksi tambah stok. Qty wajib konsisten dengan jenis yang dipilih di
-   langkah 3 (semua baris minus untuk jenis pengurangan, semua plus untuk
-   koreksi tambah).
+7. Untuk tiap item, isi kolom qty dengan **angka positif saja** (misalnya
+   `300` untuk Bubur kalau porsi itu berisi 300 gr, `1` untuk Paper
+   Bowl) — **tidak perlu lagi mengetik tanda minus**. Arah tambah/kurang
+   sekarang otomatis mengikuti **Jenis mutasi** yang dipilih di langkah 3
+   (jenis rusak/hilang/makan staf/sampel/retur selalu MENGURANGI stok,
+   jenis koreksi tambah selalu MENAMBAH) — di bawah dropdown jenis ada
+   teks bantu yang menegaskan arahnya begitu jenis dipilih.
 8. Tekan **Simpan mutasi**.
 9. Muncul konfirmasi "Mutasi lain #... tersimpan." Stok item-item itu di
    lokasi yang dipilih langsung disesuaikan sesuai angka yang diisi.
@@ -521,8 +526,8 @@ riwayat permintaanmu sendiri) dan **Permintaan Masuk (CK)** (khusus kalau
 akunmu ditugaskan ke lokasi Central Kitchen — untuk melihat & memenuhi
 permintaan yang masuk dari outlet-outlet).
 
-**Skenario**: satu outlet kehabisan **Bubur** menjelang sore dan butuh
-kiriman tambahan besok pagi.
+**Skenario**: satu outlet kehabisan **Bubur** dan **Ayam suwir** menjelang
+sore dan butuh kiriman tambahan sebelum besok pagi (shift Pagi).
 
 **Bagian 1 — Ajukan permintaan (dari outlet yang kehabisan):**
 
@@ -534,51 +539,113 @@ kiriman tambahan besok pagi.
 3. Kotak **"Untuk lokasi (outlet saya)"** biasanya sudah otomatis terisi
    lokasimu sendiri (kalau akunmu cuma ditugaskan ke satu lokasi, kotak
    ini terkunci, tidak bisa diubah).
-4. Isi **Tanggal dibutuhkan**.
-5. Di **"Tambah item"**, cari dan pilih **Bubur**. Isi kolom **Qty**
-   dengan jumlah yang dibutuhkan. Bisa menambah lebih dari satu item
-   sebelum mengirim.
-6. (Opsional) Isi **Catatan**, misalnya "butuh sebelum jam makan siang".
-7. Tekan **Ajukan permintaan**.
-8. Muncul konfirmasi "Permintaan berhasil diajukan: PT-..." — belum ada
-   stok yang berpindah, ini baru permintaan. Central Kitchen akan melihat
-   permintaan ini di sub-tab "Permintaan Masuk (CK)" mereka dan mengirim
-   barangnya lewat transfer.
-9. Di bawah form ada **"Riwayat permintaan saya"** — menampilkan semua
-   permintaan yang pernah diajukan dari lokasimu, dengan status
-   (**Diminta**, **Dipenuhi**, atau **Dibatalkan**). Permintaan yang
-   masih berstatus **Diminta** punya tombol **Batalkan permintaan** kalau
-   ternyata tidak dibutuhkan lagi — permintaan yang sudah **Dipenuhi**
-   atau **Dibatalkan** tidak bisa dibatalkan lagi (tombolnya hilang).
+4. Isi **Tanggal permintaan**.
+5. (Opsional) Isi **"Dibutuhkan sebelum"** — tanggal dan shift (Pagi/
+   Siang/Sore/Malam) kapan barangnya harus sudah sampai. Kosongkan kalau
+   tidak ada tenggat khusus.
+6. Di **"Tambah item"**, cari dan tambahkan **Bubur** dan **Ayam suwir**
+   satu per satu — bisa menambah berapa pun item dalam **satu pengajuan
+   yang sama**, isi kolom **Qty** masing-masing.
+7. (Opsional) Isi **Catatan**, misalnya "butuh sebelum jam makan siang".
+8. Tekan **Ajukan permintaan**. Semua item yang ditambahkan dikirim
+   **sekaligus dalam satu pengajuan** (bukan satu-satu).
+9. Muncul konfirmasi "Permintaan berhasil diajukan: PT-..., PT-..." —
+   belum ada stok yang berpindah, ini baru permintaan. Central Kitchen
+   akan melihat permintaan ini di sub-tab "Permintaan Masuk (CK)" mereka.
+10. Di bawah form ada **"Riwayat permintaan saya"** — permintaan yang
+    diajukan bersamaan tampil **dikelompokkan dalam satu kartu** (tanggal,
+    tenggat, dan catatan ditampilkan sekali di bagian atas kartu), dengan
+    setiap item punya baris sendiri lengkap dengan **riwayat waktu**:
+    **Diminta** (kapan diajukan), **Dijawab** (kapan CK memutuskan),
+    **Dikirim** (kapan transfernya dibuat), **Diterima** (kapan sampai di
+    outlet) — kolom yang belum terjadi tampil `-`. Tiap item punya status
+    sendiri (**Diminta**, **Dipenuhi**, **Dipenuhi sebagian**, **Ditolak**,
+    atau **Dibatalkan**) — item lain dalam pengajuan yang sama bisa punya
+    nasib berbeda (misalnya Bubur dipenuhi tapi Ayam suwir ditolak). Kalau
+    ditolak, alasannya ikut ditampilkan. Item yang masih **Diminta** punya
+    tombol **Batalkan permintaan**.
 
-**Bagian 2 — Penuhi permintaan (dari Central Kitchen, hanya Owner/
-Manajer Ops/Supervisor):**
+**Bagian 2 — Layar CK: jawab permintaan (hanya Owner/Manajer Ops/
+Supervisor):**
 
 1. Buka menu **Transaksi**, pilih tab **Permintaan ke CK**, pilih sub-tab
-   **Permintaan Masuk (CK)** (hanya muncul kalau akunmu ditugaskan ke
-   lokasi Central Kitchen).
-2. Di kotak **Status**, defaultnya sudah "Menunggu dipenuhi" — daftar di
-   bawahnya menampilkan semua permintaan dari outlet yang belum
-   ditindaklanjuti, termasuk siapa yang mengajukan.
-3. Cari permintaan **Bubur** dari outlet yang mengajukan, lalu tekan
-   **Penuhi permintaan**.
-4. Akan muncul form kirim yang sebagian sudah otomatis terisi: **Qty
-   kirim** (default sama dengan qty yang diminta, bisa diubah kalau mau
-   mengirim jumlah berbeda), **Satuan**, dan **Harga transfer per satuan**
-   (opsional — kalau dikosongkan, sistem otomatis memakai HPP Bubur di
-   Central Kitchen, sama seperti transfer biasa di 5.3).
-5. Tekan **Kirim transfer**.
-6. Muncul konfirmasi "Transfer #... dikirim untuk memenuhi permintaan
-   PT-...". Di belakang layar ini **persis sama** dengan transfer Tahap 1
-   (Kirim) di bagian 5.3 — stok Bubur di Central Kitchen langsung
-   berkurang, tapi **belum masuk ke stok outlet yang mengajukan** sampai
-   ada yang menekan **Terima** di tab Transfer (lihat 5.3 Tahap 2). Status
-   permintaan otomatis berubah jadi **Dipenuhi**.
+   **Permintaan Masuk (CK)** (cuma muncul kalau akunmu ditugaskan ke
+   lokasi Central Kitchen **dan** role-mu berwenang memenuhi — Staf tidak
+   akan melihat sub-tab ini sama sekali, walaupun ditugaskan ke CK).
+2. Di kotak **Status**, defaultnya "Menunggu dijawab" — permintaan yang
+   diajukan bersamaan tetap dikelompokkan satu kartu seperti di sisi
+   outlet, lengkap dengan info **tenggat kebutuhan** dan siapa yang
+   mengajukan.
+3. Tiap item di dalam kartu menampilkan **status stok** Central Kitchen
+   untuk item itu saat ini — **Stok cukup**, **Stok kurang**, atau **Stok
+   habis** (dibandingkan ke qty yang diminta) — dan **saran** kasar:
+   "Produksi dulu" (untuk item hasil produksi/setengah jadi) atau "Beli
+   dari vendor" (untuk bahan baku/packaging/operasional). Saran ini cuma
+   bantuan, keputusan akhir tetap di tanganmu.
+4. Ada tiga pilihan aksi per item:
+   - **Penuhi** — buka form kirim dengan qty kirim otomatis terisi PENUH
+     sesuai yang diminta (bisa diubah).
+   - **Penuhi sebagian** — buka form kirim yang sama, tapi qty kirim
+     dikosongkan — isi dengan jumlah yang sanggup dikirim sekarang
+     (kurang dari yang diminta).
+   - **Tolak** — buka form alasan (wajib diisi), tanpa transfer sama
+     sekali — pakai ini kalau item itu memang tidak bisa dipenuhi sama
+     sekali (misalnya stok benar-benar habis dan tidak bisa
+     diproduksi/dibeli segera).
+5. Untuk **Penuhi**/**Penuhi sebagian**: lengkapi **Qty kirim**,
+   **Satuan**, dan **Harga transfer per satuan** (opsional — kalau
+   dikosongkan, sistem otomatis memakai HPP item di Central Kitchen, sama
+   seperti transfer biasa di 5.3), lalu tekan **Kirim transfer**. Kirim
+   jumlah **sama/lebih** dari yang diminta → status jadi **Dipenuhi**;
+   kirim **kurang** dari yang diminta → status jadi **Dipenuhi sebagian**.
+   Di belakang layar ini **persis sama** dengan transfer Tahap 1 (Kirim)
+   di bagian 5.3 — stok di Central Kitchen langsung berkurang, tapi
+   **belum masuk ke stok outlet** sampai ada yang menekan **Terima** di
+   tab Transfer (lihat 5.3 Tahap 2).
+6. Untuk **Tolak**: isi alasan singkat (wajib), tekan **Tolak
+   permintaan**. Status item itu langsung jadi **Ditolak**, alasannya
+   tersimpan dan tampil di riwayat — tidak ada stok yang bergerak sama
+   sekali.
 
 Catatan: siapa pun boleh mengajukan permintaan (termasuk Staf), tapi
-**memenuhi** permintaan (mengirim barangnya) tetap mengikuti aturan yang
-sama seperti transfer biasa — Staf tidak bisa melakukannya, walaupun dia
-ditugaskan ke Central Kitchen dan bisa melihat daftar permintaan masuk.
+**menjawab** permintaan (penuhi/penuhi sebagian/tolak) cuma boleh
+Owner/Manajer Ops/Supervisor — Staf tidak bisa melakukannya dan tidak
+akan melihat sub-tab "Permintaan Masuk (CK)" sama sekali, walaupun dia
+ditugaskan ke Central Kitchen.
+
+### 5.7 Cara lihat Riwayat Semua Jenis dan Kartu Stok
+
+**Siapa boleh**: Owner, Manajer Ops, Supervisor. **Staf sama sekali tidak
+punya akses** ke dua tab ini (tidak cuma disembunyikan sebagian datanya —
+tabnya sendiri tidak akan muncul untuk Staf).
+
+**Riwayat Semua Jenis** (tab di menu Transaksi) menampilkan riwayat
+**lintas semua jenis transaksi** (pembelian, produksi, penjualan,
+transfer, mutasi lain, opname) dalam satu daftar — beda dari tab
+**Riwayat Transaksi** yang cuma menampilkan penjualan. Cara pakai:
+
+1. Pilih rentang tanggal (pakai komponen tanggal yang sama dengan halaman
+   lain — Hari ini/Minggu ini/Bulan ini/Bulan lalu, atau isi manual).
+2. (Opsional) Pilih **Lokasi** untuk mempersempit ke satu lokasi, dan/atau
+   **Jenis** untuk melihat satu jenis transaksi saja.
+3. Daftar menampilkan tiap pergerakan stok: tanggal, jenis, nama item,
+   qty (hijau = stok bertambah, merah = berkurang), referensi ke transaksi
+   asalnya, dan siapa yang mencatatnya. Harga per satuan cuma tampil untuk
+   Owner/Manajer Ops (hanya ada untuk transaksi Pembelian dan Transfer —
+   jenis lain memang tidak punya harga per baris).
+
+**Kartu Stok** (tab di menu Transaksi) menampilkan riwayat **satu item di
+satu lokasi** secara detail, lengkap dengan **saldo berjalan** (saldo
+stok setelah tiap transaksi) — berguna untuk menelusuri "kenapa stok item
+ini jadi segini" tanpa perlu membuka banyak laporan terpisah. Cara pakai:
+
+1. Pilih **Item** dan **Lokasi** dulu (wajib keduanya).
+2. Pilih rentang tanggal.
+3. Daftar menampilkan tiap pergerakan: tanggal, jenis, referensi, qty,
+   **saldo** (langsung setelah transaksi itu), dan siapa yang mencatatnya.
+   Saldo tetap benar walau rentang tanggal yang dipilih mulai di tengah
+   riwayat panjang — bukan dihitung ulang dari nol di dalam rentang itu
+   saja.
 
 ---
 
@@ -615,11 +682,15 @@ Halaman ini punya 4 tab: **Item**, **Resep Produksi**, **Resep Menu**,
 **Vendor**.
 
 - **Tab Item**: menampilkan daftar semua item. Tekan **+ Item** untuk
-  menambah item baru (wajib isi Kode unik seperti `BB-058`, Nama yang
-  harus unik juga, Tipe — bahan_baku/packaging/operasional/setengah_jadi,
-  dan Satuan resep; boleh mengosongkan Satuan beli/Konversi/Harga master
-  kalau datanya belum lengkap — item itu otomatis berstatus "Menunggu
-  data" dan tidak akan menghalangi bagian lain sistem berjalan). Tekan
+  menambah item baru (wajib isi Nama yang harus unik, Tipe —
+  bahan_baku/packaging/operasional/setengah_jadi, dan Satuan resep; boleh
+  mengosongkan Satuan beli/Konversi/Harga master kalau datanya belum
+  lengkap — item itu otomatis berstatus "Menunggu data" dan tidak akan
+  menghalangi bagian lain sistem berjalan). **Kolom Kode sekarang
+  opsional** — kosongkan untuk dibuatkan otomatis oleh sistem sesuai
+  Tipe-nya (`BB-` bahan baku, `PK-` packaging, `OP-` operasional, `SJ-`
+  setengah jadi, diikuti nomor urut 3 digit, misalnya `BB-058`), atau
+  tetap bisa diisi manual kalau mau kode tertentu. Tekan
   satu item di daftar untuk mengubah data atau menonaktifkannya (item yang
   masih dipakai di resep/menu aktif akan ditolak dinonaktifkan, sistem
   akan menyebutkan resep/menu mana saja yang masih memakainya). **Nama
@@ -629,7 +700,12 @@ Halaman ini punya 4 tab: **Item**, **Resep Produksi**, **Resep Menu**,
   Tombol **"Ubah nama"** di sebelah dropdown Kategori mengubah nama
   kategori itu sendiri untuk semua item yang memakainya sekaligus.
 - **Tab Resep Produksi**: kelola resep seperti RP-002 (Kuah bubur) —
-  tambah resep baru atau ubah daftar bahan & jumlahnya. Aturan penting:
+  tambah resep baru atau ubah daftar bahan & jumlahnya. **Kode resep
+  opsional** sama seperti item — kosongkan untuk dibuatkan otomatis
+  (prefix `RP-` + nomor urut), atau isi manual. Di form resep baru, item
+  **output (hasil produksi)** sekarang bisa langsung **dibuat baru**
+  lewat tombol **"+ Buat item baru"** di pencarian item — tidak perlu lagi
+  pindah ke tab Item dulu kalau item hasilnya belum ada. Aturan penting:
   bahan di resep produksi **hanya boleh** bahan baku atau kemasan, tidak
   boleh memakai hasil produksi lain — sistem akan menolak otomatis kalau
   dicoba.
@@ -644,9 +720,12 @@ Halaman ini punya 4 tab: **Item**, **Resep Produksi**, **Resep Menu**,
   nyambung karena semuanya merujuk kode, bukan nama. Tombol **"Kelola
   kategori menu"** di atas daftar menu membuka panel untuk mengubah nama
   tiap kategori menu.
-- **Tab Vendor**: daftar vendor/supplier langganan. Tekan **+ Tambah
-  vendor** untuk menambah vendor baru (nama wajib unik, kontak/telepon/
-  alamat/termin pembayaran opsional). Tekan **Lihat katalog** di satu
+- **Tab Vendor**: daftar vendor/supplier langganan. Tiap vendor sekarang
+  punya **kode** singkat (`VN-001`, dst) yang dibuatkan otomatis saat
+  vendor ditambahkan, tampil kecil di depan namanya — murni identifier,
+  tidak perlu diisi manual. Tekan **+ Tambah vendor** untuk menambah
+  vendor baru (nama wajib unik, kontak/telepon/alamat/termin pembayaran
+  opsional). Tekan **Lihat katalog** di satu
   vendor untuk melihat/mencatat harga item yang pernah dibeli darinya —
   tiap kali harga dicatat (manual di sini, atau otomatis lewat Pembelian),
   riwayatnya tersimpan dan bisa dilihat, tidak pernah ditimpa. Harga di

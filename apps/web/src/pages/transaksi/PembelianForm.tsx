@@ -238,7 +238,7 @@ export function PembelianForm() {
                 <div className="grid grid-cols-3 gap-2">
                   <Field label="Qty beli">
                     <Input
-                      type="number"
+                      type="number" inputMode="decimal"
                       min={0}
                       step="any"
                       value={b.qtyBeli}
@@ -250,7 +250,7 @@ export function PembelianForm() {
                   </Field>
                   <Field label="Harga/satuan">
                     <Input
-                      type="number"
+                      type="number" inputMode="decimal"
                       min={0}
                       step="any"
                       value={b.hargaSatuan}

@@ -5,6 +5,7 @@ import type {
   CreatePermintaanTransferResult,
   DecideOpnameResult,
   JenisMutasiLain,
+  LayarCkItem,
   MutasiLainBarisInput,
   OpnameBarisInput,
   OpnameDecision,
@@ -19,6 +20,7 @@ import type {
   PermintaanTransferStatus,
   ProduksiInput,
   ProduksiResult,
+  TolakPermintaanResult,
   TransferKirimBarisInput,
   TransferKirimResult,
   TransferTerimaResult,
@@ -124,4 +126,15 @@ export function listPermintaanTransfer(
 
 export function batalkanPermintaanTransfer(id: number | string): Promise<BatalkanPermintaanResult> {
   return api.patch(`/api/inventory/transaksi/permintaan-transfer/${id}/batalkan`);
+}
+
+/** Tahap 1B (2026-11-14, BARU) -- CK menolak permintaan yang masih 'diminta', alasan WAJIB. */
+export function tolakPermintaanTransfer(id: number | string, alasanTolak: string): Promise<TolakPermintaanResult> {
+  return api.patch(`/api/inventory/transaksi/permintaan-transfer/${id}/tolak`, { alasanTolak });
+}
+
+/** Tahap 1B (2026-11-14, BARU) -- "Layar CK": permintaan masuk + status stok + saran. */
+export function getLayarCk(locationAsalId: number): Promise<LayarCkItem[]> {
+  const params = new URLSearchParams({ lokasi: String(locationAsalId) });
+  return api.get<LayarCkItem[]>(`/api/inventory/transaksi/permintaan-transfer/layar-ck?${params.toString()}`);
 }

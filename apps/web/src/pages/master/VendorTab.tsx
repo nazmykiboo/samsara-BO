@@ -82,7 +82,8 @@ export function VendorTab() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-medium text-slate-900">
-                      {v.name} {!v.isActive ? <Badge tone="neutral">Nonaktif</Badge> : null}
+                      <span className="text-xs font-normal text-slate-400">{v.kode}</span> {v.name}{" "}
+                      {!v.isActive ? <Badge tone="neutral">Nonaktif</Badge> : null}
                     </p>
                     <p className="text-xs text-slate-500">
                       {[v.kontakNama, v.telepon, v.alamat, v.termin ? `Termin: ${v.termin}` : null]
@@ -331,7 +332,7 @@ function KatalogSection({
             />
           </div>
           <Field label="Harga">
-            <Input type="number" min={0} value={harga} onChange={(e) => setHarga(e.target.value)} className="w-32" />
+            <Input type="number" inputMode="decimal" min={0} value={harga} onChange={(e) => setHarga(e.target.value)} className="w-32" />
           </Field>
           <Button type="submit" disabled={saving}>
             {saving ? "Menyimpan..." : "Simpan harga"}

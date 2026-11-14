@@ -443,13 +443,39 @@ export async function createTransferKirim(client: PoolClient, input: TransferKir
   const method: HppMethod = input.method ?? "harga_master";
 
   if (input.permintaanId !== undefined) {
-    const { rowCount } = await client.query(
-      `UPDATE inventory_permintaan_transfer SET status = 'dipenuhi' WHERE id = $1 AND status = 'diminta'`,
+    // Tahap 1B (2026-11-14): "dijawab" = momen keputusan CK, SAMA PERSIS
+    // waktunya dengan transfer kirim ini (tidak ada tahap "sudah diputuskan
+    // tapi belum dikirim" di alur sekarang). Status 'dipenuhi' PENUH kalau
+    // total qty_kirim untuk ITEM permintaan ini (baris lain di transfer yang
+    // sama, item LAIN, tidak dihitung) >= qty_diminta, selain itu
+    // 'dipenuhi_sebagian' -- dibedakan supaya riwayat tidak menyamakan
+    // pemenuhan penuh vs sebagian.
+    const { rows: permintaanRows } = await client.query<{ item_id: number; qty_diminta: string }>(
+      `SELECT item_id, qty_diminta FROM inventory_permintaan_transfer WHERE id = $1 AND status = 'diminta'`,
       [input.permintaanId],
+    );
+    const permintaan = permintaanRows[0];
+    if (!permintaan) {
+      throw new Error(
+        `Permintaan transfer id ${input.permintaanId} tidak ditemukan atau statusnya sudah bukan 'diminta' (mungkin sudah dibatalkan/ditolak/dipenuhi transfer lain) -- tidak bisa dipakai untuk transfer kirim ini`,
+      );
+    }
+    let totalKirimItemIni = 0;
+    for (const baris of input.baris) {
+      const item = await findItemByKode(client, baris.itemKode);
+      if (item.id === permintaan.item_id) totalKirimItemIni += baris.qtyKirim;
+    }
+    const statusBaru = totalKirimItemIni >= Number(permintaan.qty_diminta) ? "dipenuhi" : "dipenuhi_sebagian";
+
+    const { rowCount } = await client.query(
+      `UPDATE inventory_permintaan_transfer
+       SET status = $1, dijawab_pada = now(), dijawab_oleh = $2
+       WHERE id = $3 AND status = 'diminta'`,
+      [statusBaru, input.createdByUserId ?? null, input.permintaanId],
     );
     if (rowCount === 0) {
       throw new Error(
-        `Permintaan transfer id ${input.permintaanId} tidak ditemukan atau statusnya sudah bukan 'diminta' (mungkin sudah dibatalkan/dipenuhi transfer lain) -- tidak bisa dipakai untuk transfer kirim ini`,
+        `Permintaan transfer id ${input.permintaanId} berubah status di tengah proses -- transfer kirim ini dibatalkan, coba ulang`,
       );
     }
   }
@@ -637,8 +663,11 @@ export async function getDalamPerjalanan(
 
 export interface MutasiLainBarisInput {
   itemKode: string;
-  /** Boleh +/- , langsung dipakai sebagai qty_change (arah sudah termasuk). */
-  qtyChange: number;
+  /** WAJIB lebih dari 0 -- arah tambah/kurang TIDAK lagi ditentukan tanda
+   * angka ini, melainkan otomatis dari `jenis` header (lihat
+   * JENIS_MUTASI_LAIN_PENGURANGAN). Client tidak pernah mengirim angka
+   * negatif di sini. */
+  qty: number;
 }
 
 /**
@@ -722,30 +751,17 @@ export async function createMutasiLain(client: PoolClient, input: MutasiLainInpu
     );
   }
 
-  // Arah qty harus konsisten dengan `jenis` (migrasi 0027: `koreksi_tambah`
-  // adalah satu-satunya jenis yang MENAMBAH stok). Ditegakkan di sini, bukan
+  // Qty SELALU positif di input client -- arah tambah/kurang ditentukan di
+  // sini dari `jenis` (migrasi 0027: `koreksi_tambah` satu-satunya jenis yang
+  // MENAMBAH stok), bukan diketik manual oleh user. Ditegakkan di sini, bukan
   // cuma di form frontend -- endpoint ini bisa dipanggil langsung, jadi
   // pengaman integritas data harus ada di level domain/API.
-  //
-  // Dua pengecekan di bawah SEKALIGUS menolak baris bertanda CAMPURAN
-  // (sebagian +, sebagian -) dalam satu panggilan, jadi TIDAK perlu
-  // pengecekan "mixed sign" terpisah: `jenis` cuma satu nilai per header,
-  // jadi kalau jenis-nya pengurangan maka baris positifnya melanggar
-  // `semuaQtyNegatif`, dan kalau jenis-nya `koreksi_tambah` maka baris
-  // negatifnya melanggar `semuaQtyPositif`. Qty 0 juga ikut tertolak (bukan
-  // negatif dan bukan positif) -- memang tidak ada gunanya mencatat mutasi 0.
-  const semuaQtyNegatif = input.baris.every((b) => b.qtyChange < 0);
-  const semuaQtyPositif = input.baris.every((b) => b.qtyChange > 0);
-
-  if (JENIS_MUTASI_LAIN_PENGURANGAN.includes(input.jenis) && !semuaQtyNegatif) {
-    throw new Error(
-      `Jenis "${input.jenis}" untuk pengurangan stok -- semua baris qty harus negatif. ` +
-        `Pakai jenis "koreksi_tambah" kalau mau menambah stok.`,
-    );
+  for (const b of input.baris) {
+    if (!(b.qty > 0)) {
+      throw new Error(`Qty untuk item "${b.itemKode}" wajib lebih dari 0 (arah tambah/kurang otomatis mengikuti jenis mutasi).`);
+    }
   }
-  if (input.jenis === "koreksi_tambah" && !semuaQtyPositif) {
-    throw new Error(`Jenis "koreksi_tambah" untuk penambahan stok -- semua baris qty harus positif.`);
-  }
+  const arahKurang = JENIS_MUTASI_LAIN_PENGURANGAN.includes(input.jenis);
 
   const { rows: headerRows } = await client.query<{ id: number }>(
     `INSERT INTO inventory_transaksi_mutasi_lain (location_id, jenis, alasan, tanggal, dibuat_oleh) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
@@ -755,9 +771,10 @@ export async function createMutasiLain(client: PoolClient, input: MutasiLainInpu
 
   for (const baris of input.baris) {
     const item = await findItemByKode(client, baris.itemKode);
+    const qtyChange = arahKurang ? -baris.qty : baris.qty;
     const { rows: barisRows } = await client.query<{ id: number }>(
       `INSERT INTO inventory_transaksi_mutasi_lain_baris (header_id, item_id, qty_change) VALUES ($1, $2, $3) RETURNING id`,
-      [headerId, item.id, baris.qtyChange],
+      [headerId, item.id, qtyChange],
     );
     await postLedger(client, {
       itemId: item.id,
@@ -765,7 +782,7 @@ export async function createMutasiLain(client: PoolClient, input: MutasiLainInpu
       transactionType: "mutasi_lain",
       referenceTable: "inventory_transaksi_mutasi_lain_baris",
       referenceId: barisRows[0].id,
-      qtyChange: baris.qtyChange,
+      qtyChange,
     });
   }
 

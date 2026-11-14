@@ -184,7 +184,7 @@ function TerimaForm({ group, onBack, onDone }: { group: TransferGroup; onBack: (
                 </Field>
                 <Field label={`Qty diterima (${b.unit})`}>
                   <Input
-                    type="number"
+                    type="number" inputMode="decimal"
                     min={0}
                     step="any"
                     value={qtyTerima[b.itemKode ?? ""] ?? ""}

@@ -115,3 +115,25 @@ export function listRefund(tanggalMulai: string, tanggalSelesai: string): Promis
   const params = new URLSearchParams({ tanggal_mulai: tanggalMulai, tanggal_selesai: tanggalSelesai });
   return api.get<RefundEntry[]>(`/api/sales-sync/refund?${params.toString()}`);
 }
+
+/** GET /api/sales-sync/kesegaran -- kartu "baris terakhir masuk" per sumber (Tahap 1E).
+ * `ambangJam` null = tidak bisa dihitung (kurang dari 2 baris di jendela 7 hari terakhir) --
+ * sumber itu DIPAKSA `merah: true` oleh backend, bukan diam-diam dianggap sehat. */
+export interface KesegaranSumber {
+  key: string;
+  label: string;
+  terakhirMasuk: string | null;
+  jamSejakTerakhir: number | null;
+  ambangJam: number | null;
+  ambangDiatasManual: boolean;
+  merah: boolean;
+}
+
+export function listKesegaran(): Promise<KesegaranSumber[]> {
+  return api.get<KesegaranSumber[]>("/api/sales-sync/kesegaran");
+}
+
+/** PUT /api/sales-sync/kesegaran/:key/ambang -- `ambangJam: null` menghapus override (balik ke hitung otomatis). */
+export function setAmbangKesegaran(key: string, ambangJam: number | null): Promise<KesegaranSumber[]> {
+  return api.put<KesegaranSumber[]>(`/api/sales-sync/kesegaran/${encodeURIComponent(key)}/ambang`, { ambangJam });
+}

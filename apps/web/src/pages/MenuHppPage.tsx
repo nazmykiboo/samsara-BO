@@ -314,7 +314,7 @@ function HargaJualForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-2 rounded-lg border border-slate-200 p-3">
       <Field label="Ubah harga jual">
-        <Input type="number" min={0} step={100} value={value} onChange={(e) => setValue(e.target.value)} />
+        <Input type="number" inputMode="decimal" min={0} step={100} value={value} onChange={(e) => setValue(e.target.value)} />
       </Field>
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
       {success ? <p className="text-sm text-emerald-600">Tersimpan.</p> : null}
@@ -480,7 +480,7 @@ function ChannelHargaRow({
 
       {canEdit ? (
         <Input
-          type="number"
+          type="number" inputMode="decimal"
           min={0}
           step={1}
           value={value}

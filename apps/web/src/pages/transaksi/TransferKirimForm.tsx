@@ -129,7 +129,7 @@ export function TransferKirimForm() {
               <div className="grid grid-cols-3 gap-2">
                 <Field label="Qty kirim">
                   <Input
-                    type="number"
+                    type="number" inputMode="decimal"
                     min={0}
                     step="any"
                     value={b.qtyKirim}
@@ -141,7 +141,7 @@ export function TransferKirimForm() {
                 </Field>
                 <Field label="Harga transfer (opsional)">
                   <Input
-                    type="number"
+                    type="number" inputMode="decimal"
                     min={0}
                     step="any"
                     value={b.hargaTransferPerSatuan}

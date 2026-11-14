@@ -54,6 +54,55 @@ test("createItem: item baru tersimpan dengan status sesuai kelengkapan data", as
   });
 });
 
+// ---------------------------------------------------------------------------
+// Kode otomatis (Tahap 1C) -- Item/Resep Produksi/Vendor/Kategori Item
+// ---------------------------------------------------------------------------
+
+test("createItem: tanpa 'kode' -> server generate otomatis sesuai prefix tipe (BB-/PK-/OP-/SJ-)", async () => {
+  await withRollback(async (client) => {
+    const bb = await createItem(client, { name: "QA Kode Otomatis BB", type: "bahan_baku", recipeUnit: "gr" });
+    assert.match(bb.kode, /^BB-\d{3}$/, "bahan_baku -> prefix BB-");
+
+    const pk = await createItem(client, { name: "QA Kode Otomatis PK", type: "packaging", recipeUnit: "pcs" });
+    assert.match(pk.kode, /^PK-\d{3}$/, "packaging -> prefix PK-");
+
+    const op = await createItem(client, { name: "QA Kode Otomatis OP", type: "operasional", recipeUnit: "pcs" });
+    assert.match(op.kode, /^OP-\d{3}$/, "operasional -> prefix OP-");
+
+    const sj = await createItem(client, { name: "QA Kode Otomatis SJ", type: "setengah_jadi", recipeUnit: "gr" });
+    assert.match(sj.kode, /^SJ-\d{3}$/, "setengah_jadi -> prefix SJ-");
+
+    // Dua item tipe sama berturut-turut -> nomor urut lanjut, tidak bentrok.
+    const bb2 = await createItem(client, { name: "QA Kode Otomatis BB 2", type: "bahan_baku", recipeUnit: "gr" });
+    assert.notEqual(bb2.kode, bb.kode, "nomor urut harus lanjut, bukan bentrok di nomor yang sama");
+  });
+});
+
+test("createItem: 'kode' dikirim manual -> dipakai apa adanya (TETAP bisa diisi manual, bukan dipaksa otomatis)", async () => {
+  await withRollback(async (client) => {
+    const res = await createItem(client, { kode: "BB-MANUAL-QA", name: "QA Kode Manual", type: "bahan_baku", recipeUnit: "gr" });
+    assert.equal(res.kode, "BB-MANUAL-QA");
+  });
+});
+
+test("createResepProduksi: tanpa 'kode' -> server generate otomatis prefix RP-", async () => {
+  await withRollback(async (client) => {
+    const bahan = await createItem(client, { name: "QA Bahan Resep Otomatis", type: "bahan_baku", recipeUnit: "gr" });
+    const output = await createItem(client, { name: "QA Output Resep Otomatis", type: "setengah_jadi", recipeUnit: "gr" });
+
+    const resep = await createResepProduksi(client, {
+      outputItemKode: output.kode,
+      baris: [{ bahanItemKode: bahan.kode, qty: 1, unit: "gr" }],
+    });
+
+    const { rows } = await client.query<{ kode: string }>(`SELECT kode FROM inventory_resep_produksi WHERE id = $1`, [
+      resep.id,
+    ]);
+    assert.match(rows[0].kode, /^RP-\d{3}$/, "resep produksi tanpa kode -> prefix RP-");
+    assert.equal(resep.kode, rows[0].kode);
+  });
+});
+
 test("listItems: item yang baru dibuat langsung muncul di daftar (regresi: dulu tidak ada endpoint list sama sekali, UI pakai data contoh statis)", async () => {
   await withRollback(async (client) => {
     await createItem(client, {

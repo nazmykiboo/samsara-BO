@@ -15,7 +15,7 @@ import { todayIso } from "../../utils/format";
 
 interface Baris {
   item: MockItemRef;
-  qtyChange: string;
+  qty: string;
 }
 
 /** Enam kategori yang diterima backend (body `jenis`, WAJIB) beserta teksnya untuk staf.
@@ -23,10 +23,8 @@ interface Baris {
  * untuk nilai lain. Yang ditampilkan ke user cuma labelnya, kode mentahnya tidak pernah
  * muncul di layar.
  *
- * `arah` dipakai untuk menyaring dropdown ini sesuai tanda qty yang sudah diisi staf
- * (lihat `opsiJenis` di bawah) -- backend (modules/inventory/src/domain/stok.ts) menolak
- * kombinasi jenis & tanda qty yang tidak konsisten, jadi kita cegah dari awal di UI
- * supaya staf tidak sempat pilih kombinasi yang pasti ditolak. */
+ * `arah` cuma dipakai untuk teks bantu ("stok akan berkurang/bertambah") -- qty yang
+ * diinput staf SELALU positif, backend yang menentukan tanda ledger dari `jenis` ini. */
 const JENIS_MUTASI_LAIN: Array<{ value: JenisMutasiLain; label: string; arah: "tambah" | "kurang" }> = [
   { value: "waste_rusak", label: "Rusak / Waste", arah: "kurang" },
   { value: "hilang_tidak_diketahui", label: "Hilang (tidak diketahui sebabnya)", arah: "kurang" },
@@ -72,55 +70,26 @@ export function MutasiLainForm() {
 
   function handleAddItem(item: MockItemRef) {
     if (baris.some((b) => b.item.kode === item.kode)) return;
-    setBaris((prev) => [...prev, { item, qtyChange: "" }]);
+    setBaris((prev) => [...prev, { item, qty: "" }]);
   }
 
-  function updateQty(kode: string, qtyChange: string) {
-    setBaris((prev) => prev.map((b) => (b.item.kode === kode ? { ...b, qtyChange } : b)));
+  function updateQty(kode: string, qty: string) {
+    setBaris((prev) => prev.map((b) => (b.item.kode === kode ? { ...b, qty } : b)));
   }
 
   function removeBaris(kode: string) {
     setBaris((prev) => prev.filter((b) => b.item.kode !== kode));
   }
 
-  // Tanda qty yang SUDAH DIISI staf saat ini (baris kosong/0 diabaikan -- belum
-  // menentukan arah apa pun). Dipakai untuk menyaring dropdown jenis di bawah
-  // supaya staf tidak bisa pilih kombinasi jenis+tanda yang pasti ditolak backend
-  // (lihat JENIS_MUTASI_LAIN_PENGURANGAN di modules/inventory/src/domain/stok.ts).
-  const tandaTerisi = useMemo(() => {
-    const set = new Set<"tambah" | "kurang">();
-    for (const b of baris) {
-      const q = Number(b.qtyChange);
-      if (!Number.isFinite(q) || q === 0) continue;
-      set.add(q > 0 ? "tambah" : "kurang");
-    }
-    return set;
-  }, [baris]);
+  // Opsi dropdown jenis: semua 6 untuk supervisor ke atas, cuma 4 pengurangan
+  // sehari-hari untuk staf (JENIS_MUTASI_LAIN_IZIN_STAF). Qty tidak lagi
+  // menyempitkan daftar ini -- arah ditentukan oleh jenis, bukan sebaliknya.
+  const opsiJenis = useMemo(
+    () => (user?.role === "staf" ? JENIS_MUTASI_LAIN.filter((j) => JENIS_MUTASI_LAIN_IZIN_STAF.includes(j.value)) : JENIS_MUTASI_LAIN),
+    [user?.role],
+  );
 
-  // true kalau ada baris qty positif DAN baris qty negatif pada saat yang sama --
-  // kombinasi ini akan selalu ditolak backend apa pun jenis yang dipilih.
-  const tandaCampur = tandaTerisi.size > 1;
-
-  // Opsi dropdown jenis yang ditampilkan: dasarnya semua 6 (atau cuma 4 untuk
-  // staf, lihat JENIS_MUTASI_LAIN_IZIN_STAF), lalu disempitkan ke 1 arah
-  // begitu tanda qty jelas, kosong total kalau campur.
-  const opsiJenis = useMemo(() => {
-    if (tandaCampur) return [];
-    const dasar =
-      user?.role === "staf" ? JENIS_MUTASI_LAIN.filter((j) => JENIS_MUTASI_LAIN_IZIN_STAF.includes(j.value)) : JENIS_MUTASI_LAIN;
-    if (tandaTerisi.size === 0) return dasar;
-    const arah = tandaTerisi.has("tambah") ? "tambah" : "kurang";
-    return dasar.filter((j) => j.arah === arah);
-  }, [tandaTerisi, tandaCampur, user?.role]);
-
-  // Kalau jenis yang sedang terpilih jadi tidak valid lagi (mis. staf ubah qty
-  // dari negatif ke positif setelah sudah pilih "Rusak/Waste"), reset ke kosong
-  // supaya tidak kebawa submit dengan kombinasi yang pasti ditolak backend.
-  useEffect(() => {
-    if (jenis !== "" && !opsiJenis.some((j) => j.value === jenis)) {
-      setJenis("");
-    }
-  }, [opsiJenis, jenis]);
+  const jenisTerpilih = useMemo(() => JENIS_MUTASI_LAIN.find((j) => j.value === jenis) ?? null, [jenis]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -128,10 +97,6 @@ export function MutasiLainForm() {
     setResult(null);
     if (locationId === null) {
       setError("Pilih lokasi dulu.");
-      return;
-    }
-    if (tandaCampur) {
-      setError("Tidak bisa campur qty tambah dan kurang dalam satu mutasi -- pisahkan jadi dua transaksi terpisah.");
       return;
     }
     if (jenis === "") {
@@ -147,9 +112,9 @@ export function MutasiLainForm() {
       return;
     }
     for (const b of baris) {
-      const q = Number(b.qtyChange);
-      if (!Number.isFinite(q) || q === 0) {
-        setError(`Perubahan qty untuk ${b.item.name} harus angka bukan nol (boleh negatif untuk pengurangan).`);
+      const q = Number(b.qty);
+      if (!Number.isFinite(q) || q <= 0) {
+        setError(`Qty untuk ${b.item.name} wajib diisi angka lebih dari 0.`);
         return;
       }
     }
@@ -160,7 +125,7 @@ export function MutasiLainForm() {
         jenis,
         alasan,
         tanggal,
-        baris: baris.map((b) => ({ itemKode: b.item.kode, qtyChange: Number(b.qtyChange) })),
+        baris: baris.map((b) => ({ itemKode: b.item.kode, qty: Number(b.qty) })),
       });
       setResult(res);
       setBaris([]);
@@ -177,19 +142,14 @@ export function MutasiLainForm() {
     <form onSubmit={handleSubmit} className="space-y-4">
       <p className="text-xs text-slate-500">
         Untuk penyesuaian stok di luar pembelian/produksi/penjualan/transfer -- misalnya barang rusak, hilang, atau
-        koreksi manual. Isi qty negatif untuk mengurangi stok, positif untuk menambah.
+        koreksi manual. Isi qty selalu angka positif -- arah tambah/kurang otomatis mengikuti jenis yang dipilih.
       </p>
 
       <LokasiPicker value={locationId} onChange={setLocationId} />
 
       <div>
         <Field label="Jenis mutasi">
-          <Select
-            value={jenis}
-            onChange={(e) => setJenis(e.target.value as JenisMutasiLain | "")}
-            required
-            disabled={tandaCampur}
-          >
+          <Select value={jenis} onChange={(e) => setJenis(e.target.value as JenisMutasiLain | "")} required>
             <option value="">Pilih jenis...</option>
             {opsiJenis.map((j) => (
               <option key={j.value} value={j.value}>
@@ -198,16 +158,12 @@ export function MutasiLainForm() {
             ))}
           </Select>
         </Field>
-        {tandaCampur ? (
-          <ErrorBox>
-            Tidak bisa campur qty tambah dan kurang dalam satu mutasi -- pisahkan jadi dua transaksi terpisah.
-          </ErrorBox>
-        ) : (
-          <p className="mt-1 text-xs text-slate-500">
-            Wajib dipilih. Pilih yang paling mendekati, lalu jelaskan detailnya di kolom Alasan. Pilihan di atas
-            otomatis menyesuaikan dengan qty yang kamu isi di daftar item di bawah (tambah atau kurang).
-          </p>
-        )}
+        <p className="mt-1 text-xs text-slate-500">
+          Wajib dipilih. Pilih yang paling mendekati, lalu jelaskan detailnya di kolom Alasan.
+          {jenisTerpilih ? (
+            <> Stok akan <strong>{jenisTerpilih.arah === "tambah" ? "BERTAMBAH" : "BERKURANG"}</strong> sesuai qty yang diisi.</>
+          ) : null}
+        </p>
       </div>
 
       <Field label="Alasan">
@@ -231,11 +187,13 @@ export function MutasiLainForm() {
               </div>
               <Input
                 type="number"
+                inputMode="decimal"
                 step="any"
-                value={b.qtyChange}
+                min={0}
+                value={b.qty}
                 onChange={(e) => updateQty(b.item.kode, e.target.value)}
                 className="w-24"
-                placeholder="+/-"
+                placeholder="0"
               />
               <button type="button" onClick={() => removeBaris(b.item.kode)} className="text-slate-400 hover:text-red-600">
                 ✕

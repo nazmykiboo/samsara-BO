@@ -228,7 +228,7 @@ test("createMutasiLain: 'jenis' valid tersimpan, 'alasan' tetap tersimpan terpis
       jenis: "waste_rusak",
       alasan: "tumpah saat dipindah",
       tanggal: "2026-10-15",
-      baris: [{ itemKode: "BB-001", qtyChange: -25 }],
+      baris: [{ itemKode: "BB-001", qty: 25 }],
     });
 
     const { rows } = await client.query<{ jenis: string | null; alasan: string }>(
@@ -239,7 +239,7 @@ test("createMutasiLain: 'jenis' valid tersimpan, 'alasan' tetap tersimpan terpis
     assert.equal(rows[0].alasan, "tumpah saat dipindah", "catatan bebas TETAP tersimpan di kolom alasan, tidak digantikan");
 
     const after = await getCurrentStock(client, bubur, ck);
-    assert.equal(after - before, -25, "stok tetap berubah sesuai qty_change");
+    assert.equal(after - before, -25, "jenis pengurangan -> qty positif yang diinput tetap mengurangi stok");
   });
 });
 
@@ -253,7 +253,7 @@ test("createMutasiLain: tanpa 'jenis' DITOLAK dengan pesan yang menyebut daftar 
           locationId: ck,
           alasan: "lupa pilih jenis",
           tanggal: "2026-10-15",
-          baris: [{ itemKode: "BB-001", qtyChange: -1 }],
+          baris: [{ itemKode: "BB-001", qty: 1 }],
         }),
       (err: Error) => {
         assert.match(err.message, /Jenis mutasi wajib dipilih/i);
@@ -276,7 +276,7 @@ test("createMutasiLain: 'jenis' di luar 6 nilai valid DITOLAK (tidak sampai ke c
           jenis: "waste",
           alasan: "typo jenis",
           tanggal: "2026-10-15",
-          baris: [{ itemKode: "BB-001", qtyChange: -1 }],
+          baris: [{ itemKode: "BB-001", qty: 1 }],
         }),
       /Jenis mutasi wajib dipilih dan harus salah satu dari/i,
     );
@@ -284,10 +284,10 @@ test("createMutasiLain: 'jenis' di luar 6 nilai valid DITOLAK (tidak sampai ke c
 });
 
 // ---------------------------------------------------------------------------
-// Mutasi lain: `koreksi_tambah` + konsistensi `jenis` vs tanda qty (migrasi 0027)
+// Mutasi lain: qty SELALU positif, arah ditentukan dari `jenis` (Tahap 1A)
 // ---------------------------------------------------------------------------
 
-test("createMutasiLain: jenis 'koreksi_tambah' dengan semua qty POSITIF tersimpan dan menambah stok", async () => {
+test("createMutasiLain: jenis 'koreksi_tambah' dengan qty positif MENAMBAH stok", async () => {
   await withRollback(async (client) => {
     const ck = await kitchenLocationId(client);
     const bubur = await itemId(client, "BB-001");
@@ -299,8 +299,8 @@ test("createMutasiLain: jenis 'koreksi_tambah' dengan semua qty POSITIF tersimpa
       alasan: "stok awal saat mulai pakai sistem",
       tanggal: "2026-10-15",
       baris: [
-        { itemKode: "BB-001", qtyChange: 500 },
-        { itemKode: "BB-001", qtyChange: 100 },
+        { itemKode: "BB-001", qty: 500 },
+        { itemKode: "BB-001", qty: 100 },
       ],
     });
 
@@ -312,32 +312,40 @@ test("createMutasiLain: jenis 'koreksi_tambah' dengan semua qty POSITIF tersimpa
     assert.equal(rows[0].alasan, "stok awal saat mulai pakai sistem");
 
     const after = await getCurrentStock(client, bubur, ck);
-    assert.equal(after - before, 600, "stok BERTAMBAH sejumlah total qty_change positif");
+    assert.equal(after - before, 600, "stok BERTAMBAH sejumlah total qty yang diinput (jenis koreksi_tambah)");
   });
 });
 
-test("createMutasiLain: jenis 'koreksi_tambah' dengan qty NEGATIF DITOLAK (arah tidak cocok)", async () => {
+test("createMutasiLain: qty SAMA (10), jenis beda -> arah ledger berlawanan (arah murni dari jenis, bukan tanda input)", async () => {
   await withRollback(async (client) => {
     const ck = await kitchenLocationId(client);
-    await assert.rejects(
-      () =>
-        createMutasiLain(client, {
-          locationId: ck,
-          jenis: "koreksi_tambah",
-          alasan: "salah pilih jenis, ini sebenarnya waste",
-          tanggal: "2026-10-15",
-          baris: [{ itemKode: "BB-001", qtyChange: -10 }],
-        }),
-      (err: Error) => {
-        assert.match(err.message, /koreksi_tambah/);
-        assert.match(err.message, /semua baris qty harus positif/i);
-        return true;
-      },
-    );
+    const bubur = await itemId(client, "BB-001");
+
+    const beforeKurang = await getCurrentStock(client, bubur, ck);
+    await createMutasiLain(client, {
+      locationId: ck,
+      jenis: "waste_rusak",
+      alasan: "waste 10",
+      tanggal: "2026-10-15",
+      baris: [{ itemKode: "BB-001", qty: 10 }],
+    });
+    const afterKurang = await getCurrentStock(client, bubur, ck);
+    assert.equal(afterKurang - beforeKurang, -10, "jenis pengurangan -> stok berkurang walau qty input positif");
+
+    const beforeTambah = afterKurang;
+    await createMutasiLain(client, {
+      locationId: ck,
+      jenis: "koreksi_tambah",
+      alasan: "koreksi tambah 10",
+      tanggal: "2026-10-15",
+      baris: [{ itemKode: "BB-001", qty: 10 }],
+    });
+    const afterTambah = await getCurrentStock(client, bubur, ck);
+    assert.equal(afterTambah - beforeTambah, 10, "jenis koreksi_tambah -> stok bertambah, input qty sama persis (10)");
   });
 });
 
-test("createMutasiLain: jenis pengurangan ('waste_rusak') dengan qty POSITIF DITOLAK, pesannya mengarahkan ke koreksi_tambah", async () => {
+test("createMutasiLain: qty negatif DITOLAK apa pun jenisnya (arah tidak lagi lewat tanda input)", async () => {
   await withRollback(async (client) => {
     const ck = await kitchenLocationId(client);
     const bubur = await itemId(client, "BB-001");
@@ -348,16 +356,11 @@ test("createMutasiLain: jenis pengurangan ('waste_rusak') dengan qty POSITIF DIT
         createMutasiLain(client, {
           locationId: ck,
           jenis: "waste_rusak",
-          alasan: "mau menambah stok tapi pilih jenis waste",
+          alasan: "coba kirim qty negatif",
           tanggal: "2026-10-15",
-          baris: [{ itemKode: "BB-001", qtyChange: 10 }],
+          baris: [{ itemKode: "BB-001", qty: -10 }],
         }),
-      (err: Error) => {
-        assert.match(err.message, /waste_rusak/);
-        assert.match(err.message, /semua baris qty harus negatif/i);
-        assert.match(err.message, /koreksi_tambah/, "pesan harus mengarahkan ke jenis yang benar");
-        return true;
-      },
+      /wajib lebih dari 0/i,
     );
 
     const after = await getCurrentStock(client, bubur, ck);
@@ -365,35 +368,7 @@ test("createMutasiLain: jenis pengurangan ('waste_rusak') dengan qty POSITIF DIT
   });
 });
 
-// Baris bertanda CAMPURAN tidak punya pengecekan "mixed sign" tersendiri di
-// createMutasiLain: `jenis` cuma satu nilai per header, jadi apa pun jenis yang
-// dipilih, salah satu dari dua pengecekan arah pasti melanggar. Dua test di
-// bawah membuktikan itu untuk kedua sisi (jenis pengurangan & penambahan).
-test("createMutasiLain: baris bertanda CAMPURAN dengan jenis 'koreksi_tambah' DITOLAK (baris negatifnya melanggar)", async () => {
-  await withRollback(async (client) => {
-    const ck = await kitchenLocationId(client);
-    await assert.rejects(
-      () =>
-        createMutasiLain(client, {
-          locationId: ck,
-          jenis: "koreksi_tambah",
-          alasan: "campur tambah & kurang dalam satu entri",
-          tanggal: "2026-10-15",
-          baris: [
-            { itemKode: "BB-001", qtyChange: 5 },
-            { itemKode: "BB-005", qtyChange: -3 },
-          ],
-        }),
-      (err: Error) => {
-        assert.match(err.message, /koreksi_tambah/);
-        assert.match(err.message, /semua baris qty harus positif/i, "ditolak karena ada baris NEGATIF");
-        return true;
-      },
-    );
-  });
-});
-
-test("createMutasiLain: baris bertanda CAMPURAN dengan jenis 'waste_rusak' DITOLAK (baris positifnya melanggar)", async () => {
+test("createMutasiLain: qty 0 DITOLAK (tidak ada gunanya mencatat mutasi nol)", async () => {
   await withRollback(async (client) => {
     const ck = await kitchenLocationId(client);
     await assert.rejects(
@@ -401,18 +376,11 @@ test("createMutasiLain: baris bertanda CAMPURAN dengan jenis 'waste_rusak' DITOL
         createMutasiLain(client, {
           locationId: ck,
           jenis: "waste_rusak",
-          alasan: "campur tambah & kurang dalam satu entri",
+          alasan: "qty nol",
           tanggal: "2026-10-15",
-          baris: [
-            { itemKode: "BB-001", qtyChange: 5 },
-            { itemKode: "BB-005", qtyChange: -3 },
-          ],
+          baris: [{ itemKode: "BB-001", qty: 0 }],
         }),
-      (err: Error) => {
-        assert.match(err.message, /waste_rusak/);
-        assert.match(err.message, /semua baris qty harus negatif/i, "ditolak karena ada baris POSITIF");
-        return true;
-      },
+      /wajib lebih dari 0/i,
     );
   });
 });

@@ -127,11 +127,27 @@ sungguhan, bukan disalin dari versi dokumen sebelumnya):
   `true` (nilai sebelum deploy, tidak disentuh). Detail: `devops/README.md`
   § "Deploy #5".
 
+- **Deploy #6 (2026-11-14): Mutasi Lain qty positif, kode otomatis, Kartu
+  Stok & Riwayat Semua Jenis, Permintaan ke CK (timeline + Layar CK),
+  perbaikan raw-majoo, kesegaran data** — 2 migrasi baru
+  (`inventory/0033-0034`), metodologi latihan-dulu yang sama. 62 tabel
+  lama identik (cuma `schema_migrations` +2, TIDAK ada tabel baru — kedua
+  migrasi cuma menambah kolom). Backfill data lama diverifikasi 100%:
+  15/15 vendor & 10/10 kategori item dapat `kode` otomatis, 69/69 baris
+  permintaan transfer lama dapat `kelompok_id`. 4 endpoint baru ter-mount
+  & ter-gate benar (401 tanpa token). Smoke test lulus semua, n8n/Postgres/
+  VNC tidak terganggu (uptime tetap "Up 3 weeks"/"Up 3 days"/"Up 8 days").
+  `otomatis_aktif` TETAP `true` (tidak disentuh, sesuai instruksi eksplisit
+  owner). Perbaikan workflow n8n raw-majoo **cuma mengedit file JSON di
+  repo** — belum otomatis live, owner/operator perlu impor ulang manual di
+  editor n8n (lihat `devops/n8n/README.md` § 15). Detail: `devops/README.md`
+  § "Deploy #6".
+
 Ringkasnya: app Samsara Backoffice sudah bisa diakses publik dengan HTTPS
 valid di `burnas-app.duckdns.org`, berjalan berdampingan dengan n8n/VNC yang
 sudah ada tanpa mengganggu satu pun, database production sudah termigrasi
 bersih dari nol DAN data masternya sudah disinkronkan penuh dengan dev, DAN
-sudah melewati empat siklus deploy lanjutan penuh (Deploy #2-#5, dengan
+sudah melewati lima siklus deploy lanjutan penuh (Deploy #2-#6, dengan
 latihan di salinan lokal lebih dulu tiap kalinya) tanpa insiden berarti —
 app sudah benar-benar dipakai owner, bukan cuma live secara teknis.
 Production sekarang jadi acuan utama data master ke depan, bukan dev.
@@ -278,8 +294,13 @@ Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
   boleh dipakai staf dibatasi** (2026-10-30, 4 jenis pengurangan standar;
   `retur_supplier`/`koreksi_tambah` ditolak 403 untuk staf, lihat § 2),
   Opname 2 tahap draft→keputusan ✅ (staf SELALU draft, finalisasi
-  terpisah total ke `opname.approve`) — **semuanya teruji** (172 test
-  domain + test regresi permission di `apps/api`).
+  terpisah total ke `opname.approve`) — **semuanya teruji**. **Mutasi
+  Lain: qty SELALU positif (2026-11-14, Tahap 1)** — arah tambah/kurang
+  sekarang murni ditentukan oleh `jenis` (bukan tanda angka yang diketik
+  user lagi), backend menolak 400 kalau qty ≤ 0; data lama (qty_change
+  signed) tidak diubah, cuma cara INPUT baru yang berubah. `inputMode=
+  "decimal"` juga ditambahkan di 27 titik input angka di seluruh app
+  (keyboard numerik lebih baik di HP, murni UX).
 - Channel penjualan & harga per channel (termasuk komisi channel, saran
   harga otomatis berdasar target food cost, export/import CSV harga massal)
   — ✅
@@ -328,7 +349,81 @@ Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
     endpoint berkembang.
 - Laporan harian per lokasi — ✅ (owner/manajer_ops/supervisor; staf tidak
   boleh)
-- Permintaan transfer (outlet minta stok ke Central Kitchen) — ✅
+- **Permintaan transfer (outlet minta stok ke Central Kitchen) — ✅,
+  dirombak signifikan 2026-11-14 (Tahap 1):**
+  - **Multi-item satu pengajuan**: satu form sekarang mengirim banyak item
+    sekaligus dalam SATU panggilan (bukan N panggilan terpisah seperti
+    sebelumnya) — tabel `inventory_permintaan_transfer` TETAP 1 baris = 1
+    item (tidak direstrukturisasi jadi header+baris), tapi baris-baris
+    dari satu pengajuan sekarang berbagi `kelompok_id` (kolom baru) supaya
+    bisa dikelompokkan jadi satu kartu di tampilan — granularitas
+    keputusan/pemenuhan TETAP per item.
+  - **"Dibutuhkan sebelum"** (tanggal + shift generik pagi/siang/sore/
+    malam, kolom baru, keduanya opsional) — murni hint perencanaan untuk
+    CK, bukan constraint jadwal keras, dan SENGAJA tidak terikat ke
+    `hr_shift_template` modul HR (isolasi antar modul).
+  - **Timeline lengkap**: diminta (sudah ada), **dijawab** (kolom baru,
+    momen CK memutuskan — sama waktunya dengan dikirim untuk jalur
+    penuhi/sebagian, beda untuk jalur tolak), **dikirim** & **diterima**
+    (di-JOIN dari `inventory_transaksi_transfer` yang sudah merujuk balik
+    lewat `permintaan_id` sejak sebelumnya — bukan kolom baru). Baris lama
+    sebelum fitur ini tampil `-` untuk kolom yang baru.
+  - **"Layar CK"** (endpoint & tampilan baru, `GET
+    .../permintaan-transfer/layar-ck`): tiap permintaan masuk yang masih
+    `diminta` dilengkapi status stok CK sendiri untuk item itu (**cukup/
+    kurang/habis**, dibanding qty diminta) dan saran kasar **produksi**
+    (item `setengah_jadi`) atau **beli** (jenis lain) — murni hint UI.
+  - **CK sekarang bisa menolak** (status baru `ditolak`, alasan WAJIB) —
+    sebelumnya TIDAK ADA jalur tolak sama sekali, cuma bisa "penuhi" lewat
+    transfer kirim. Status `dipenuhi_sebagian` (baru) dibedakan dari
+    `dipenuhi` (penuh) berdasar total qty yang benar-benar dikirim vs yang
+    diminta.
+  - Permission BARU untuk "jawab" (tolak/lihat Layar CK): pakai ulang
+    `transfer.kirim` (owner/manajer_ops/supervisor) — BUKAN
+    `permintaan_transfer.create` (itu sisi pengaju/outlet, staf termasuk).
+    Tab "Permintaan Masuk (CK)" ikut disembunyikan total untuk staf
+    walaupun ditugaskan ke lokasi CK (sebelumnya cuma dicek "ditugaskan ke
+    CK", sekarang ikut dicek role-nya juga).
+  - **9 test domain baru** (`permintaan-transfer.test.ts`) + 1 test
+    cost-leak baru untuk Kartu Stok/Riwayat Semua Jenis (lihat di bawah).
+- **Kartu Stok & Riwayat Transaksi semua jenis (2026-11-14, Tahap 1,
+  endpoint & tab baru)** — generalisasi dari Riwayat Transaksi yang
+  sebelumnya cuma Penjualan:
+  - **Kartu Stok** (`GET /kartu-stok`): ledger satu item di satu lokasi
+    (waktu, jenis, referensi, qty, **saldo berjalan**, oleh siapa) — saldo
+    dihitung dari SELURUH histori item+lokasi itu (window function SQL),
+    lalu difilter ke rentang tanggal yang diminta, jadi tetap benar walau
+    jendela mulai di tengah histori panjang (bukan delta dalam jendela).
+  - **Riwayat Semua Jenis** (`GET /riwayat-transaksi`): lintas ketujuh
+    jenis transaksi (`inventory_transaction_type`), filter opsional per
+    jenis/lokasi, TANPA kolom saldo (saldo cuma masuk akal per item).
+  - Keduanya dibangun di atas UNION ALL 7 cabang yang menyatukan
+    `inventory_stock_ledger` dengan tabel header/baris masing-masing jenis
+    transaksi (`modules/inventory/src/domain/ledger.ts`) — `referensi`
+    (teks ringkas) dan `olehUsername` (join `core_users` lewat
+    `dibuat_oleh`) dihitung per jenis karena `reference_table` kadang
+    tabel baris, kadang tabel header langsung.
+  - `hargaPerSatuan` cuma terisi untuk jenis **pembelian** (`harga_satuan`)
+    dan **transfer** (`harga_transfer_per_satuan`) — jenis lain (produksi/
+    penjualan/mutasi_lain/opname) SENGAJA `null`, tidak ditebak dari HPP
+    karena tidak ada satu angka yang valid per baris ledger untuk jenis
+    itu (penjualan misalnya memposting pemakaian bahan yang diagregasi
+    lintas baris menu).
+  - Permission BARU `kartu_stok.lihat` (owner/manajer_ops/supervisor) —
+    **staf 403 di endpoint itu sendiri**, bukan cuma field di-strip.
+  - 12 test domain baru (`ledger.test.ts`) + test cost-leak.
+- **Kode otomatis: Item, Resep Produksi, Vendor, Kategori Item (2026-11-14,
+  Tahap 1)** — server men-generate kode berprefix (`BB-`/`PK-`/`OP-`/`SJ-`
+  sesuai tipe item, `RP-` resep produksi, `VN-` vendor BARU, `KT-` kategori
+  item BARU) + nomor urut, lewat `kodeOtomatis()`
+  (`modules/inventory/src/domain/kode-generator.ts`) — dipakai Item/Resep
+  Produksi/Vendor (TETAP bisa diisi manual kalau client mengirim kode
+  sendiri) dan Kategori Item (SELALU server-generated, tidak ada input
+  kode di UI-nya). Vendor & Kategori Item BARU dapat kolom `kode` (migrasi
+  0033, backfill retroaktif baris lama). Kode yang sudah tersimpan TETAP
+  tidak bisa diedit (aturan lama "rename, kode TETAP"). Form Resep Produksi
+  sekarang punya "+ Buat item baru" inline untuk item output. Aturan
+  lengkap: `CLAUDE.md` § 3.
 - Min stok per lokasi (ambang notifikasi menipis) — ✅
 - **Modifier menu** (`inventory_modifier_grup`, `inventory_modifier_opsi`,
   `inventory_menu_modifier_grup`, dibuat migrasi 0024) — **⚪ dibangun tapi
@@ -428,6 +523,46 @@ Sejak Tahap 1 "Outlet & Kitchen + Identitas Bisnis" (2026-10-25/26):
   backfill ini). (4 workflow LAMA berbasis Google Sheets,
   `devops/n8n/*.json` tanpa akhiran `-direct`, masih ada di repo tapi
   sudah digantikan, tidak diimpor lagi.)
+- **KOREKSI (2026-11-14, Tahap 1F): perbaikan di atas TIDAK menyelesaikan
+  akar masalah raw-majoo** — audit baca-saja 2026-11-13 membuktikan
+  `raw-majoo-direct.json` TETAP 0 baris selama 16+ hari berturut-turut
+  SETELAH perbaikan 2026-11-01 di atas. Akar masalah sebenarnya:
+  akumulator baris dibangun lewat `$getWorkflowStaticData('node')`,
+  ditulis di SATU node (`Petakan Baris Sales`/`Refund`, jalan tiap
+  halaman) dan dibaca balik di node LAIN (`Ambil Baris ... Terkumpul`,
+  jalan sekali di akhir) -- scope `'node'` di n8n TERIKAT KE NODE
+  PEMANGGIL SENDIRI, TIDAK dibagi ke node lain dalam workflow yang sama
+  (beda dari scope `'global'`), jadi pembaca SELALU mendapat array
+  kosong, apa pun hasil panggilan API Majoo-nya -- dibuktikan murni dari
+  membaca kode (3 node dengan `id` berbeda memanggil scope yang sama
+  tapi terisolasi), TANPA perlu data eksekusi mentah. Baris sukses
+  terakhir (28 Okt 13:06 UTC) berasal dari workflow LAMA yang digantikan
+  file ini, BUKAN dari file ini sendiri -- sejak digantikan, file ini
+  tidak pernah benar-benar mengirim satu baris pun. **Diperbaiki**:
+  static data dihapus TOTAL, akumulator sekarang dibawa lewat field di
+  DATA ITEM itu sendiri, mengalir eksplisit lewat edge yang sudah ada
+  (`Petakan Baris X` -> `Loop Control X` -> `Increment Page X` -> balik
+  ke iterasi berikutnya) -- dibuktikan benar lewat simulasi Node.js
+  terpisah (3 halaman mock, 240 baris, urut, tanpa duplikat) sebelum
+  diterapkan ke file workflow. **Deteksi pipeline mati ditambahkan**:
+  jendela 7 hari yang menghasilkan 0 baris SEKARANG throw eksplisit
+  (cabang Sales saja -- Refund wajar 0 di banyak jendela), jadi kalau
+  mati lagi, eksekusi n8n akan tercatat error, bukan "success" semu.
+  Detail lengkap & langkah impor ulang: `devops/n8n/README.md` § 15.
+- **Kesegaran data sales-sync (2026-11-14, kartu baru, halaman
+  Sinkronisasi)** -- kartu "baris terakhir masuk" PER SUMBER (Shopee/
+  GoFood/GrabFood/Majoo di `salessync_log_penjualan`, Majoo transaksi
+  langsung di `salessync_raw_majoo`, Majoo refund di
+  `salessync_majoo_refund`), beda dari kartu "Impor terakhir per sumber"
+  yang sudah ada (itu cuma catat kapan ENDPOINT IMPOR terakhir DIPANGGIL
+  -- bisa tetap "baru saja" walau 0 baris baru benar-benar masuk, persis
+  kondisi raw-majoo di atas sebelum ditemukan). Ambang merah DEFAULT
+  dihitung otomatis per sumber (rata-rata jarak antar baris 7 hari
+  terakhir x3), bisa di-override manual per sumber (`PUT
+  .../kesegaran/:key/ambang`, disimpan di `salessync_settings`). Sumber
+  dengan kurang dari 2 baris di jendela 7 hari (termasuk 0 baris sama
+  sekali) DIPAKSA merah -- tidak ada cukup data untuk membuktikan sumber
+  itu sehat. Permission `kesegaran.lihat` (owner/manajer_ops/supervisor).
 - Item mapping: pemetaan kode eksternal platform → kode menu internal
   Samsara, antrian disegarkan otomatis dari arsip log — ✅
 - Proses sinkronisasi (`POST /proses`): ubah arsip log jadi transaksi

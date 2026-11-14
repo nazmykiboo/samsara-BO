@@ -474,7 +474,7 @@ test("getAnalitikOperasional: wasteTren 8 titik data, nilai = ABS(qty_change) x 
       jenis: "waste_rusak",
       alasan: "QA waste",
       tanggal: geser(senin, 1),
-      baris: [{ itemKode: "BB-005", qtyChange: -2 }],
+      baris: [{ itemKode: "BB-005", qty: 2 }],
     });
     // Baris qty POSITIF dengan jenis waste_rusak di-INSERT LANGSUNG, bukan
     // lewat createMutasiLain: sejak migrasi 0027 domain menolak kombinasi itu
@@ -523,35 +523,35 @@ test("getAnalitikOperasional: wasteTren CUMA jenis waste_rusak + hilang_tidak_di
       jenis: "staff_meal",
       alasan: "QA makan staf",
       tanggal: geser(senin, 1),
-      baris: [{ itemKode: "BB-005", qtyChange: -50 }],
+      baris: [{ itemKode: "BB-005", qty: 50 }],
     });
     await createMutasiLain(client, {
       locationId: lokasi,
       jenis: "sampel",
       alasan: "QA sampel",
       tanggal: geser(senin, 1),
-      baris: [{ itemKode: "BB-005", qtyChange: -20 }],
+      baris: [{ itemKode: "BB-005", qty: 20 }],
     });
     await createMutasiLain(client, {
       locationId: lokasi,
       jenis: "retur_supplier",
       alasan: "QA retur",
       tanggal: geser(senin, 2),
-      baris: [{ itemKode: "BB-005", qtyChange: -10 }],
+      baris: [{ itemKode: "BB-005", qty: 10 }],
     });
     await createMutasiLain(client, {
       locationId: lokasi,
       jenis: "waste_rusak",
       alasan: "QA rusak",
       tanggal: geser(senin, 2),
-      baris: [{ itemKode: "BB-005", qtyChange: -1 }],
+      baris: [{ itemKode: "BB-005", qty: 1 }],
     });
     await createMutasiLain(client, {
       locationId: lokasi,
       jenis: "hilang_tidak_diketahui",
       alasan: "QA hilang",
       tanggal: geser(senin, 3),
-      baris: [{ itemKode: "BB-005", qtyChange: -2 }],
+      baris: [{ itemKode: "BB-005", qty: 2 }],
     });
 
     const hasil = await getAnalitikOperasional(client, { lokasiId: lokasi });
@@ -602,7 +602,7 @@ test("getAnalitikOperasional: insight waste streak TIDAK muncul kalau yang naik 
         jenis: "staff_meal",
         alasan: "QA staff meal naik",
         tanggal: geser(mingguMulai, 1),
-        baris: [{ itemKode: "BB-005", qtyChange: -(i + 1) }],
+        baris: [{ itemKode: "BB-005", qty: (i + 1) }],
       });
     }
 
@@ -632,7 +632,7 @@ test("getAnalitikOperasional: item harga_master NULL (pending_data) dihitung 0, 
       jenis: "waste_rusak",
       alasan: "QA waste pending_data",
       tanggal: geser(senin, 1),
-      baris: [{ itemKode: rows[0].kode, qtyChange: -4 }],
+      baris: [{ itemKode: rows[0].kode, qty: 4 }],
     });
 
     const hasil = await getAnalitikOperasional(client, { lokasiId: lokasi });
@@ -662,7 +662,7 @@ test("getAnalitikOperasional: insight waste streak muncul kalau nilai naik N min
         jenis: "waste_rusak",
         alasan: "QA waste streak",
         tanggal: geser(mingguMulai, 1),
-        baris: [{ itemKode: "BB-005", qtyChange: -(i + 1) }],
+        baris: [{ itemKode: "BB-005", qty: (i + 1) }],
       });
     }
 
@@ -694,7 +694,7 @@ test("getAnalitikOperasional: waste DATAR (tidak naik) tidak memunculkan insight
         jenis: "waste_rusak",
         alasan: "QA waste datar",
         tanggal: geser(geser(senin, -7 * i), 1),
-        baris: [{ itemKode: "BB-005", qtyChange: -2 }],
+        baris: [{ itemKode: "BB-005", qty: 2 }],
       });
     }
 
@@ -721,7 +721,7 @@ test("getAnalitikOperasional: waste naik tapi putus di minggu terakhir -> tidak 
         jenis: "waste_rusak",
         alasan: "QA waste putus",
         tanggal: geser(geser(senin, -7 * (qty.length - 1 - i)), 1),
-        baris: [{ itemKode: "BB-005", qtyChange: -qty[i] }],
+        baris: [{ itemKode: "BB-005", qty: qty[i] }],
       });
     }
 
@@ -764,7 +764,7 @@ test("getAnalitikOperasional: insight opname streak muncul kalau N siklus terakh
       jenis: "koreksi_tambah",
       alasan: "QA stok awal",
       tanggal: geser(senin, -7),
-      baris: [{ itemKode: "BB-005", qtyChange: 100 }],
+      baris: [{ itemKode: "BB-005", qty: 100 }],
     });
 
     // Siklus 1: sistem 100, fisik 90 -> selisih -10 (setelah disetujui stok jadi 90).
@@ -806,7 +806,7 @@ test("getAnalitikOperasional: opname status draft/ditolak TIDAK ikut (cuma 'dise
       jenis: "koreksi_tambah",
       alasan: "QA stok awal",
       tanggal: geser(senin, -7),
-      baris: [{ itemKode: "BB-005", qtyChange: 100 }],
+      baris: [{ itemKode: "BB-005", qty: 100 }],
     });
 
     // Draft (tidak diputuskan sama sekali).
@@ -848,7 +848,7 @@ test("getAnalitikOperasional: siklus opname kurang dari ambang -> dilewati (buka
       jenis: "koreksi_tambah",
       alasan: "QA stok awal",
       tanggal: geser(senin, -7),
-      baris: [{ itemKode: "BB-005", qtyChange: 100 }],
+      baris: [{ itemKode: "BB-005", qty: 100 }],
     });
     // CUMA satu siklus negatif, sedangkan ambangnya 2.
     await siklusOpnameDisetujui(client, lokasi, geser(senin, -6), "BB-005", 90);
@@ -874,7 +874,7 @@ test("getAnalitikOperasional: selisih opname POSITIF tidak memicu insight susut"
       jenis: "koreksi_tambah",
       alasan: "QA stok awal",
       tanggal: geser(senin, -7),
-      baris: [{ itemKode: "BB-005", qtyChange: 100 }],
+      baris: [{ itemKode: "BB-005", qty: 100 }],
     });
     // Fisik LEBIH BANYAK dari sistem dua siklus berturut-turut (selisih +).
     await siklusOpnameDisetujui(client, lokasi, geser(senin, -6), "BB-005", 110);
@@ -955,7 +955,7 @@ test("getAnalitikOperasional: periode eksplisit menggeser seluruh jendela 8 ming
       jenis: "waste_rusak",
       alasan: "QA periode",
       tanggal: geser(senin, -16),
-      baris: [{ itemKode: "BB-005", qtyChange: -1 }],
+      baris: [{ itemKode: "BB-005", qty: 1 }],
     });
 
     // periode = tanggal di minggu itu -> minggu itu jadi titik TERAKHIR jendela.

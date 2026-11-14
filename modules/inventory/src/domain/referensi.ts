@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { writeAuditLog, logFieldChanges } from "@samsara/core";
+import { kodeOtomatis } from "./kode-generator.js";
 
 /**
  * Master kategori item & satuan (dipakai untuk satuan resep MAUPUN satuan
@@ -59,10 +60,31 @@ export async function listKategori(client: PoolClient): Promise<RefItem[]> {
   return rows.map((r) => ({ id: r.id, name: r.name, isActive: r.is_active }));
 }
 
+/** Kode otomatis prefix KT- (Tahap 1C) -- tidak ada UI untuk mengetik kode
+ * kategori item manual sampai saat ini (RefSelect cuma create-by-name), jadi
+ * SELALU server-generated, tidak ada jalur override dari client seperti
+ * item/resep produksi/vendor. */
+async function kodeKategoriOtomatis(client: PoolClient): Promise<string> {
+  return kodeOtomatis(
+    "KT",
+    async () => {
+      const { rows } = await client.query<{ maks: number | null }>(
+        `SELECT MAX(substring(kode from '-(\\d+)$')::int) AS maks FROM inventory_kategori_item WHERE kode LIKE 'KT-%'`,
+      );
+      return rows[0]?.maks ?? 0;
+    },
+    async (kode) => {
+      const { rows } = await client.query(`SELECT 1 FROM inventory_kategori_item WHERE kode = $1`, [kode]);
+      return rows.length > 0;
+    },
+  );
+}
+
 export async function createKategori(client: PoolClient, name: string, userId?: number): Promise<{ id: number }> {
+  const kode = await kodeKategoriOtomatis(client);
   const { rows } = await client.query<{ id: number }>(
-    `INSERT INTO inventory_kategori_item (name) VALUES ($1) RETURNING id`,
-    [name],
+    `INSERT INTO inventory_kategori_item (kode, name) VALUES ($1, $2) RETURNING id`,
+    [kode, name],
   );
   const id = rows[0].id;
   await writeAuditLog(client, {
@@ -71,7 +93,7 @@ export async function createKategori(client: PoolClient, name: string, userId?: 
     recordId: id,
     fieldName: "created",
     oldValue: null,
-    newValue: { name },
+    newValue: { name, kode },
   });
   return { id };
 }

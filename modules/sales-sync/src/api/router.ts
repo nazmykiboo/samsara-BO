@@ -16,6 +16,7 @@ import { pratinjauProses } from "../domain/pratinjau.js";
 import { getPengaturanOtomatis, setPengaturanOtomatis } from "../domain/settings.js";
 import { getImporLogTerakhirPerJenis, getOtomatisLogTerakhir } from "../domain/status.js";
 import { listRefundRange } from "../domain/refund.js";
+import { getKesegaranSumber, setAmbangSegarManual } from "../domain/kesegaran.js";
 
 async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
@@ -323,6 +324,44 @@ export function createRouter(): Router {
           return;
         }
         res.json(rows);
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  // Tahap 1E (2026-11-14): kartu "baris terakhir masuk" per sumber, murni
+  // baca (tidak ada side-effect) -- tidak ada field biaya/Rupiah di sini
+  // sama sekali, jadi tidak perlu strip apa pun berdasarkan hpp.lihat_harga.
+  router.get(
+    "/kesegaran",
+    requirePermission("kesegaran.lihat"),
+    asyncHandler(async (_req, res) => {
+      const client = await pool.connect();
+      try {
+        res.json(await getKesegaranSumber(client));
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  // Ubah/hapus ambang manual satu sumber -- permission sama dengan
+  // endpoint pengaturan otomatis lain (owner/manajer_ops saja, lihat
+  // PUT /otomatis/pengaturan di atas).
+  router.put(
+    "/kesegaran/:key/ambang",
+    requirePermission("sales_sync.manage"),
+    asyncHandler(async (req, res) => {
+      const ambangJam = req.body?.ambangJam === null ? null : Number(req.body?.ambangJam);
+      if (ambangJam !== null && !Number.isFinite(ambangJam)) {
+        res.status(400).json({ error: "Body 'ambangJam' wajib angka (jam) atau null (hapus override, pakai otomatis lagi)" });
+        return;
+      }
+      await withTransaction((client) => setAmbangSegarManual(client, req.params.key, ambangJam));
+      const client = await pool.connect();
+      try {
+        res.json(await getKesegaranSumber(client));
       } finally {
         client.release();
       }

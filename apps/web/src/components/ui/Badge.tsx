@@ -30,10 +30,18 @@ export function StatusPendingBadge({ status }: { status: "ok" | "pending_data" }
   return <Badge tone="warning">Menunggu data</Badge>;
 }
 
-/** Badge status permintaan transfer (outlet <-> CK) -- dipakai di tab Permintaan dan Laporan Harian. */
-export function PermintaanStatusBadge({ status }: { status: "diminta" | "dipenuhi" | "dibatalkan" }) {
+/** Badge status permintaan transfer (outlet <-> CK) -- dipakai di tab Permintaan dan Laporan Harian.
+ * `dipenuhi_sebagian`/`ditolak` BARU Tahap 1B (2026-11-14, "Layar CK": CK sekarang bisa menolak
+ * atau memenuhi sebagian, bukan cuma penuhi/batal). */
+export function PermintaanStatusBadge({
+  status,
+}: {
+  status: "diminta" | "dipenuhi" | "dipenuhi_sebagian" | "dibatalkan" | "ditolak";
+}) {
   if (status === "diminta") return <Badge tone="warning">Menunggu dipenuhi</Badge>;
   if (status === "dipenuhi") return <Badge tone="success">Dipenuhi</Badge>;
+  if (status === "dipenuhi_sebagian") return <Badge tone="orange">Dipenuhi sebagian</Badge>;
+  if (status === "ditolak") return <Badge tone="danger">Ditolak</Badge>;
   return <Badge tone="neutral">Dibatalkan</Badge>;
 }
 

@@ -169,6 +169,8 @@ export interface ItemListItem {
 
 export interface Vendor {
   id: number;
+  /** Kode otomatis prefix VN- (Tahap 1C) -- selalu ada, dibuat server saat createVendor. */
+  kode: string;
   name: string;
   kontakNama: string | null;
   telepon: string | null;
@@ -450,7 +452,9 @@ export interface TransferTerimaResult {
 
 export interface MutasiLainBarisInput {
   itemKode: string;
-  qtyChange: number;
+  /** WAJIB lebih dari 0 -- arah tambah/kurang otomatis dari `jenis` header,
+   * bukan tanda angka ini. Backend menolak 400 kalau <= 0. */
+  qty: number;
 }
 
 /** Kategori terstruktur mutasi lain (body `jenis` POST /transaksi/mutasi-lain, WAJIB).
@@ -459,9 +463,9 @@ export interface MutasiLainBarisInput {
  * `retur_supplier`) saat menghitung insight waste di /analitik/operasional.
  *
  * `koreksi_tambah` adalah satu-satunya kategori PENAMBAHAN stok (stok awal, temuan lebih
- * opname, dll) -- 5 kategori lainnya semuanya untuk PENGURANGAN stok. Backend menolak 400
- * kalau tanda qtyChange di baris tidak konsisten dengan kategori yang dipilih (lihat
- * JENIS_MUTASI_LAIN_VALID / JENIS_MUTASI_LAIN_PENGURANGAN di modules/inventory/src/domain/stok.ts).
+ * opname, dll) -- 5 kategori lainnya semuanya untuk PENGURANGAN stok. `qty` di baris
+ * SELALU positif; backend yang menentukan tandanya dari `jenis`
+ * (lihat JENIS_MUTASI_LAIN_VALID / JENIS_MUTASI_LAIN_PENGURANGAN di modules/inventory/src/domain/stok.ts).
  *
  * Kolom `alasan` (teks bebas) TETAP WAJIB dan dikirim BERDAMPINGAN dengan ini -- `jenis`
  * kategorinya, `alasan` detailnya. Nilai di luar 6 ini ditolak 400. Jangan pernah
@@ -475,34 +479,42 @@ export type JenisMutasiLain =
   | "retur_supplier"
   | "koreksi_tambah";
 
-export type PermintaanTransferStatus = "diminta" | "dipenuhi" | "dibatalkan";
+export type PermintaanTransferStatus = "diminta" | "dipenuhi" | "dipenuhi_sebagian" | "dibatalkan" | "ditolak";
 
+export type ShiftDibutuhkan = "pagi" | "siang" | "sore" | "malam";
+
+/** Tahap 1B (2026-11-14, DEVIASI dari bentuk lama): `baris` -- satu ATAU lebih item dalam SATU
+ * pengajuan, berbagi `kelompokId` yang sama di response (lihat CreatePermintaanTransferResult). */
 export interface CreatePermintaanTransferInput {
   locationAsalId: number;
   locationTujuanId: number;
-  itemKode: string;
-  qtyDiminta: number;
   tanggalDiminta: string;
   catatan?: string;
+  dibutuhkanSebelumTanggal?: string;
+  dibutuhkanSebelumShift?: ShiftDibutuhkan;
+  baris: Array<{ itemKode: string; qtyDiminta: number }>;
 }
 
-/** POST /transaksi/permintaan-transfer -- headerId string karena kolomnya BIGINT (lihat catatan headerId di atas). */
 export interface CreatePermintaanTransferResult {
-  headerId: string;
-  kode: string;
-  status: "diminta";
+  kelompokId: number;
+  baris: Array<{ headerId: number; kode: string; itemKode: string; status: "diminta" }>;
 }
 
-/** GET /transaksi/permintaan-transfer -- id/locationAsalId/locationTujuanId string karena BIGINT.
- * Baris yang sama dipakai dua arah: CK melihat permintaan masuk (filter lokasi = id CK, match ke
- * locationAsalId) dan outlet melihat permintaan yang mereka ajukan (filter lokasi = id outlet,
- * match ke locationTujuanId). */
+/** GET /transaksi/permintaan-transfer. Baris yang sama dipakai dua arah: CK melihat permintaan
+ * masuk (filter lokasi = id CK, match ke locationAsalId) dan outlet melihat permintaan yang
+ * mereka ajukan (filter lokasi = id outlet, match ke locationTujuanId).
+ *
+ * Tahap 1B (2026-11-14): `kelompokId` (grouping tampilan multi-item, tabel TETAP 1 baris = 1
+ * item) + timeline lengkap -- field BARU bernilai `null` ("-" di UI) untuk baris lama ATAU
+ * tahap yang belum terjadi. `dikirimPada`/`diterimaPada` di-JOIN dari transfer kirim yang
+ * memenuhinya (lihat backend domain/ledger.ts), BUKAN diinput manual. */
 export interface PermintaanTransferListItem {
-  id: string;
+  id: number;
+  kelompokId: number;
   kode: string;
-  locationAsalId: string;
+  locationAsalId: number;
   locationAsalNama: string;
-  locationTujuanId: string;
+  locationTujuanId: number;
   locationTujuanNama: string;
   itemKode: string;
   itemNama: string;
@@ -511,12 +523,34 @@ export interface PermintaanTransferListItem {
   tanggalDiminta: string;
   catatan: string | null;
   dimintaOlehUsername: string | null;
+  dibutuhkanSebelumTanggal: string | null;
+  dibutuhkanSebelumShift: ShiftDibutuhkan | null;
+  dijawabPada: string | null;
+  dijawabOlehUsername: string | null;
+  dikirimPada: string | null;
+  diterimaPada: string | null;
+  alasanTolak: string | null;
   createdAt: string;
 }
 
-/** PATCH /transaksi/permintaan-transfer/:id/batalkan -- id string karena BIGINT. */
+export type StatusStokPermintaan = "cukup" | "kurang" | "habis";
+export type SaranPemenuhan = "produksi" | "beli";
+
+/** GET /transaksi/permintaan-transfer/layar-ck?lokasi= -- "Layar CK" (Tahap 1B, BARU). */
+export interface LayarCkItem extends PermintaanTransferListItem {
+  stokSaatIni: number;
+  statusStok: StatusStokPermintaan;
+  saran: SaranPemenuhan;
+}
+
+export interface TolakPermintaanResult {
+  id: number;
+  kode: string;
+  status: "ditolak";
+}
+
 export interface BatalkanPermintaanResult {
-  id: string;
+  id: number;
   kode: string;
   status: "dibatalkan";
 }
@@ -645,6 +679,36 @@ export interface DetailTransaksiPenjualanFilter {
   limit?: number;
   /** Jumlah TRANSAKSI yang dilewati dari awal (paginasi). Kosong = halaman pertama. */
   offset?: number;
+}
+
+// --- Kartu Stok & Riwayat Transaksi semua jenis (Tahap 1D, 2026-11-14) -----
+
+export type JenisTransaksiLedger =
+  | "pembelian"
+  | "produksi"
+  | "penjualan"
+  | "transfer_keluar"
+  | "transfer_masuk"
+  | "mutasi_lain"
+  | "opname";
+
+/** `hargaPerSatuan` HANYA terisi untuk jenis pembelian/transfer_keluar/transfer_masuk (lihan domain/ledger.ts
+ * di backend) -- jenis lain selalu null. Field ini HILANG SAMA SEKALI (bukan null) untuk role tanpa
+ * hpp.lihat_harga (supervisor). */
+export interface LedgerBaris {
+  waktu: string;
+  jenis: JenisTransaksiLedger;
+  referensi: string;
+  itemKode: string;
+  itemNama: string;
+  locationId: number;
+  qtyChange: number;
+  hargaPerSatuan?: number | null;
+  olehUsername: string | null;
+}
+
+export interface KartuStokBaris extends LedgerBaris {
+  saldo: number;
 }
 
 export interface OpnameBarisInput {

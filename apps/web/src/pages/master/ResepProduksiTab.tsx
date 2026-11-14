@@ -8,6 +8,7 @@ import { Spinner } from "../../components/ui/Spinner";
 import { BarisEditor, type BarisRow } from "../../components/BarisEditor";
 import { ItemPicker } from "../../components/pickers/ItemPicker";
 import {
+  createItem,
   createResepProduksi,
   deactivateResepProduksi,
   getResepProduksiBaris,
@@ -227,7 +228,7 @@ function ResepDetailSheet({
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="grid grid-cols-2 gap-2">
             <Field label="Yield qty">
-              <Input type="number" min={0} step="any" value={yieldQty} onChange={(e) => setYieldQty(e.target.value)} />
+              <Input type="number" inputMode="decimal" min={0} step="any" value={yieldQty} onChange={(e) => setYieldQty(e.target.value)} />
             </Field>
             <Field label="Yield unit">
               <Input value={yieldUnit} onChange={(e) => setYieldUnit(e.target.value)} />
@@ -302,13 +303,46 @@ function ResepCreateSheet({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // "Buat item baru" inline (Tahap 1C) -- supaya item output tidak wajib
+  // dibuat dulu lewat Master Item sebelum resepnya bisa dibuat. itemPickerKey
+  // dipakai untuk REMOUNT ItemPicker setelah item baru dibuat -- ItemPicker
+  // memuat daftar itemnya sendiri sekali saat mount, jadi item yang baru saja
+  // dibuat tidak akan muncul di pool lama tanpa remount.
+  const [showCreateItem, setShowCreateItem] = useState(false);
+  const [newItemName, setNewItemName] = useState("");
+  const [newItemRecipeUnit, setNewItemRecipeUnit] = useState("");
+  const [creatingItem, setCreatingItem] = useState(false);
+  const [createItemError, setCreateItemError] = useState<string | null>(null);
+  const [itemPickerKey, setItemPickerKey] = useState(0);
+
   const outputTypes = useMemo<Array<"setengah_jadi">>(() => ["setengah_jadi"], []);
+
+  async function handleCreateOutputItem() {
+    setCreateItemError(null);
+    if (!newItemName.trim() || !newItemRecipeUnit.trim()) {
+      setCreateItemError("Nama dan satuan resep item baru wajib diisi.");
+      return;
+    }
+    setCreatingItem(true);
+    try {
+      const res = await createItem({ name: newItemName.trim(), type: "setengah_jadi", recipeUnit: newItemRecipeUnit.trim() });
+      setOutputItemKode(res.kode);
+      setItemPickerKey((k) => k + 1);
+      setShowCreateItem(false);
+      setNewItemName("");
+      setNewItemRecipeUnit("");
+    } catch (err) {
+      setCreateItemError(err instanceof ApiError ? err.message : "Gagal membuat item baru.");
+    } finally {
+      setCreatingItem(false);
+    }
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!kode.trim() || !outputItemKode) {
-      setError("Kode resep dan item output wajib diisi.");
+    if (!outputItemKode) {
+      setError("Item output wajib dipilih (atau dibuat baru).");
       return;
     }
     if (rows.length === 0 || rows.some((r) => !r.qty || !r.unit)) {
@@ -318,7 +352,7 @@ function ResepCreateSheet({
     setSaving(true);
     try {
       await createResepProduksi({
-        kode: kode.trim(),
+        kode: kode.trim() || undefined,
         outputItemKode,
         yieldQty: yieldQty ? Number(yieldQty) : undefined,
         yieldUnit: yieldUnit || undefined,
@@ -346,20 +380,46 @@ function ResepCreateSheet({
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-3">
-          <Field label="Kode resep">
-            <Input value={kode} onChange={(e) => setKode(e.target.value)} placeholder="Misal: RP-013" required />
+          <Field label="Kode resep (opsional)">
+            <Input value={kode} onChange={(e) => setKode(e.target.value)} placeholder="Otomatis kalau dikosongkan (RP-xxx)" />
           </Field>
 
           <ItemPicker
+            key={itemPickerKey}
             label="Item output (hasil produksi)"
             value={outputItemKode}
             allowedTypes={outputTypes}
             onSelect={(item) => setOutputItemKode(item.kode)}
+            onCreateNew={() => setShowCreateItem(true)}
           />
+          {showCreateItem ? (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="mb-2 text-xs font-medium text-slate-600">
+                Item baru (tipe otomatis "setengah_jadi", kode otomatis prefix SJ-)
+              </p>
+              <div className="space-y-2">
+                <Field label="Nama item">
+                  <Input value={newItemName} onChange={(e) => setNewItemName(e.target.value)} placeholder="Misal: Kuah Kaldu" />
+                </Field>
+                <Field label="Satuan resep">
+                  <Input value={newItemRecipeUnit} onChange={(e) => setNewItemRecipeUnit(e.target.value)} placeholder="Misal: ml, gram" />
+                </Field>
+                {createItemError ? <ErrorBox>{createItemError}</ErrorBox> : null}
+                <div className="flex gap-2">
+                  <Button type="button" onClick={handleCreateOutputItem} disabled={creatingItem} className="flex-1">
+                    {creatingItem ? "Membuat..." : "Buat & pilih"}
+                  </Button>
+                  <Button type="button" variant="secondary" onClick={() => setShowCreateItem(false)}>
+                    Batal
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           <div className="grid grid-cols-2 gap-2">
             <Field label="Yield qty">
-              <Input type="number" min={0} step="any" value={yieldQty} onChange={(e) => setYieldQty(e.target.value)} />
+              <Input type="number" inputMode="decimal" min={0} step="any" value={yieldQty} onChange={(e) => setYieldQty(e.target.value)} />
             </Field>
             <Field label="Yield unit">
               <Input value={yieldUnit} onChange={(e) => setYieldUnit(e.target.value)} />

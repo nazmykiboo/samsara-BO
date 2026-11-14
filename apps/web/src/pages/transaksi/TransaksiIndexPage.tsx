@@ -10,6 +10,8 @@ import { PermintaanTab } from "./PermintaanTab";
 import { MutasiLainForm } from "./MutasiLainForm";
 import { OpnameTab } from "./OpnameTab";
 import { RiwayatTransaksiTab } from "./RiwayatTransaksiTab";
+import { RiwayatSemuaJenisTab } from "./RiwayatSemuaJenisTab";
+import { KartuStokTab } from "./KartuStokTab";
 
 type Tab =
   | "pembelian"
@@ -19,7 +21,9 @@ type Tab =
   | "permintaan"
   | "mutasi_lain"
   | "opname"
-  | "riwayat";
+  | "riwayat"
+  | "riwayat_semua_jenis"
+  | "kartu_stok";
 
 export function TransaksiIndexPage() {
   const { user } = useAuth();
@@ -27,6 +31,10 @@ export function TransaksiIndexPage() {
   // GET /transaksi/penjualan memakai ULANG permission laporan_harian.lihat (owner/manajer_ops/
   // supervisor; staf TIDAK boleh) -- lihat modules/inventory/module.json.
   const bisaLihatRiwayat = usePermission("laporan_harian.lihat");
+  // Tahap 1D (2026-11-14): Kartu Stok & Riwayat Transaksi semua jenis -- permission BARU
+  // kartu_stok.lihat, role SAMA (owner/manajer_ops/supervisor), tapi endpoint SENDIRI (403
+  // untuk staf, bukan cuma field di-strip) -- lihat modules/inventory/module.json.
+  const bisaLihatKartuStok = usePermission("kartu_stok.lihat");
 
   const tabs = useMemo(() => {
     const list: { key: Tab; label: string }[] = [];
@@ -42,8 +50,14 @@ export function TransaksiIndexPage() {
     if (bisaLihatRiwayat) {
       list.push({ key: "riwayat", label: "Riwayat Transaksi" });
     }
+    if (bisaLihatKartuStok) {
+      list.push(
+        { key: "riwayat_semua_jenis", label: "Riwayat Semua Jenis" },
+        { key: "kartu_stok", label: "Kartu Stok" },
+      );
+    }
     return list;
-  }, [canCoreTransaksi, bisaLihatRiwayat]);
+  }, [canCoreTransaksi, bisaLihatRiwayat, bisaLihatKartuStok]);
 
   const [tab, setTab] = useState<Tab>(tabs[0]?.key ?? "transfer");
   const activeTab = tabs.some((t) => t.key === tab) ? tab : tabs[0]?.key;
@@ -79,6 +93,8 @@ export function TransaksiIndexPage() {
       {activeTab === "mutasi_lain" ? <MutasiLainForm /> : null}
       {activeTab === "opname" ? <OpnameTab /> : null}
       {activeTab === "riwayat" ? <RiwayatTransaksiTab /> : null}
+      {activeTab === "riwayat_semua_jenis" ? <RiwayatSemuaJenisTab /> : null}
+      {activeTab === "kartu_stok" ? <KartuStokTab /> : null}
     </div>
   );
 }

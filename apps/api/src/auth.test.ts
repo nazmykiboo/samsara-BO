@@ -1382,12 +1382,12 @@ test("POST /transaksi/mutasi-lain: staf DITOLAK 403 untuk jenis retur_supplier/k
         jenis,
         alasan: "test otomatis",
         tanggal: "2026-01-15",
-        baris: [{ itemKode: "BB-001", qtyChange: qty }],
+        baris: [{ itemKode: "BB-001", qty }],
       }),
     });
   }
 
-  const stafDitolak = await postMutasi(stafToken, "retur_supplier", -1);
+  const stafDitolak = await postMutasi(stafToken, "retur_supplier", 1);
   assert.equal(stafDitolak.status, 403, "staf DITOLAK 403 untuk jenis retur_supplier");
   const stafDitolakBody = (await stafDitolak.json()) as { error: string };
   assert.match(stafDitolakBody.error, /supervisor/i, "pesan 403 menyebut perlu supervisor ke atas");
@@ -1395,11 +1395,11 @@ test("POST /transaksi/mutasi-lain: staf DITOLAK 403 untuk jenis retur_supplier/k
   const stafDitolakTambah = await postMutasi(stafToken, "koreksi_tambah", 1);
   assert.equal(stafDitolakTambah.status, 403, "staf DITOLAK 403 untuk jenis koreksi_tambah");
 
-  const stafBoleh = await postMutasi(stafToken, "waste_rusak", -1);
+  const stafBoleh = await postMutasi(stafToken, "waste_rusak", 1);
   assert.equal(stafBoleh.status, 201, "staf BOLEH jenis pengurangan standar (waste_rusak)");
   const stafBolehBody = (await stafBoleh.json()) as { headerId: number };
 
-  const supervisorBoleh = await postMutasi(supervisorToken, "retur_supplier", -1);
+  const supervisorBoleh = await postMutasi(supervisorToken, "retur_supplier", 1);
   assert.equal(supervisorBoleh.status, 201, "supervisor BOLEH jenis retur_supplier");
   const supervisorBolehBody = (await supervisorBoleh.json()) as { headerId: number };
 

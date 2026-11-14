@@ -105,7 +105,7 @@ export function OpnameInputForm() {
                 <p className="text-xs text-slate-500">{b.item.recipeUnit}</p>
               </div>
               <Input
-                type="number"
+                type="number" inputMode="decimal"
                 min={0}
                 step="any"
                 value={b.qtyFisik}

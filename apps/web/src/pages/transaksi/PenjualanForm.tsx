@@ -139,7 +139,7 @@ export function PenjualanForm() {
             <div key={b.menu.kode} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3">
               <p className="flex-1 text-sm font-medium text-slate-900">{b.menu.name}</p>
               <Input
-                type="number"
+                type="number" inputMode="decimal"
                 min={1}
                 step={1}
                 value={b.qty}

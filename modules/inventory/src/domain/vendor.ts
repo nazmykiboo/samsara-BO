@@ -1,4 +1,5 @@
 import type { PoolClient } from "pg";
+import { kodeOtomatis } from "./kode-generator.js";
 
 /**
  * Vendor & katalog harga per item -- Tahap 3. SENGAJA SEMPIT: vendor,
@@ -13,6 +14,7 @@ import type { PoolClient } from "pg";
 
 export interface VendorRow {
   id: number;
+  kode: string;
   name: string;
   kontakNama: string | null;
   telepon: string | null;
@@ -24,6 +26,7 @@ export interface VendorRow {
 
 function toVendorRow(row: {
   id: number;
+  kode: string;
   name: string;
   kontak_nama: string | null;
   telepon: string | null;
@@ -33,6 +36,7 @@ function toVendorRow(row: {
 }): VendorRow {
   return {
     id: row.id,
+    kode: row.kode,
     name: row.name,
     kontakNama: row.kontak_nama,
     telepon: row.telepon,
@@ -51,13 +55,32 @@ export async function listVendor(client: PoolClient, search?: string): Promise<V
     where = `WHERE name ILIKE $1`;
   }
   const { rows } = await client.query(
-    `SELECT id, name, kontak_nama, telepon, alamat, termin, is_active FROM inventory_vendor ${where} ORDER BY name`,
+    `SELECT id, kode, name, kontak_nama, telepon, alamat, termin, is_active FROM inventory_vendor ${where} ORDER BY name`,
     params,
   );
   return rows.map(toVendorRow);
 }
 
+/** Kode otomatis prefix VN- (Tahap 1C) -- lihat kode-generator.ts. */
+async function kodeVendorOtomatis(client: PoolClient): Promise<string> {
+  return kodeOtomatis(
+    "VN",
+    async () => {
+      const { rows } = await client.query<{ maks: number | null }>(
+        `SELECT MAX(substring(kode from '-(\\d+)$')::int) AS maks FROM inventory_vendor WHERE kode LIKE 'VN-%'`,
+      );
+      return rows[0]?.maks ?? 0;
+    },
+    async (kode) => {
+      const { rows } = await client.query(`SELECT 1 FROM inventory_vendor WHERE kode = $1`, [kode]);
+      return rows.length > 0;
+    },
+  );
+}
+
 export interface VendorInput {
+  /** Opsional -- server generate otomatis (prefix VN-) kalau tidak dikirim/kosong. TETAP bisa diisi manual. */
+  kode?: string;
   name: string;
   kontakNama?: string | null;
   telepon?: string | null;
@@ -65,13 +88,14 @@ export interface VendorInput {
   termin?: string | null;
 }
 
-export async function createVendor(client: PoolClient, input: VendorInput): Promise<{ id: number }> {
+export async function createVendor(client: PoolClient, input: VendorInput): Promise<{ id: number; kode: string }> {
   if (!input.name.trim()) throw new Error("Nama vendor wajib diisi");
+  const kode = input.kode?.trim() ? input.kode.trim() : await kodeVendorOtomatis(client);
   const { rows } = await client.query<{ id: number }>(
-    `INSERT INTO inventory_vendor (name, kontak_nama, telepon, alamat, termin) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-    [input.name.trim(), input.kontakNama ?? null, input.telepon ?? null, input.alamat ?? null, input.termin ?? null],
+    `INSERT INTO inventory_vendor (kode, name, kontak_nama, telepon, alamat, termin) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [kode, input.name.trim(), input.kontakNama ?? null, input.telepon ?? null, input.alamat ?? null, input.termin ?? null],
   );
-  return { id: rows[0].id };
+  return { id: rows[0].id, kode };
 }
 
 export interface UpdateVendorInput {

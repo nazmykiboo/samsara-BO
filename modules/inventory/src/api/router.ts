@@ -84,10 +84,13 @@ import { listMinStokByLocation, upsertMinStok } from "../domain/min-stok.js";
 import {
   batalkanPermintaan,
   createPermintaanTransfer,
+  getLayarCk,
   listPermintaanTransfer,
+  tolakPermintaan,
   type PermintaanTransferStatus,
 } from "../domain/permintaan-transfer.js";
 import { listRefundViaApi, type RefundViaApi } from "../lib/internal-api.js";
+import { getKartuStok, getRiwayatSemuaJenis, type JenisTransaksiLedger } from "../domain/ledger.js";
 import {
   getAnalitikOperasional,
   getAnalitikPenjualan,
@@ -584,7 +587,7 @@ export function createRouter(): Router {
   // POST /transaksi/transfer yang sudah ada (body {..., permintaanId}) --
   // lihat domain/permintaan-transfer.ts & createTransferKirim di stok.ts.
 
-  const PERMINTAAN_STATUSES = new Set(["diminta", "dipenuhi", "dibatalkan"]);
+  const PERMINTAAN_STATUSES = new Set(["diminta", "dipenuhi", "dipenuhi_sebagian", "dibatalkan", "ditolak"]);
 
   router.post(
     "/transaksi/permintaan-transfer",
@@ -669,6 +672,88 @@ export function createRouter(): Router {
 
       const result = await withTransaction((client) => batalkanPermintaan(client, { id, userId: user.id }));
       res.json(result);
+    }),
+  );
+
+  // Tahap 1B (2026-11-14): CK menolak permintaan (BARU -- sebelumnya CK cuma
+  // bisa "penuhi" lewat POST /transaksi/transfer, tidak ada jalur tolak).
+  // Permission SAMA dengan transfer.kirim (yang berwenang memenuhi, yang
+  // sama juga berwenang menolak) -- BUKAN permintaan_transfer.create (itu
+  // untuk SISI PENGAJU/outlet, staf termasuk; tolak adalah keputusan SISI CK).
+  router.patch(
+    "/transaksi/permintaan-transfer/:id/tolak",
+    requirePermission("transfer.kirim", {
+      extractLocationIds: (req) => {
+        const id = Number(req.body?.locationAsalId);
+        return Number.isFinite(id) ? [id] : [];
+      },
+    }),
+    asyncHandler(async (req, res) => {
+      const user = getAuthUser(req);
+      const id = Number(req.params.id);
+      if (typeof req.body?.alasanTolak !== "string" || !req.body.alasanTolak.trim()) {
+        res.status(400).json({ error: "Body 'alasanTolak' wajib diisi" });
+        return;
+      }
+
+      // Lingkup lokasi untuk supervisor dicek terhadap location_asal_id (CK)
+      // permintaan yang SUDAH ADA -- extractLocationIds di atas cuma baca
+      // body.locationAsalId (klien TIDAK WAJIB mengirimnya), jadi pengecekan
+      // "walau tidak dikirim" ditegakkan manual di sini, pola sama persis
+      // PATCH .../batalkan di atas (yang mengecek location_tujuan_id).
+      if (!user.allLocations) {
+        const client = await pool.connect();
+        try {
+          const { rows } = await client.query<{ location_asal_id: number }>(
+            `SELECT location_asal_id FROM inventory_permintaan_transfer WHERE id = $1`,
+            [id],
+          );
+          if (!rows[0]) {
+            res.status(404).json({ error: `Permintaan transfer id ${id} tidak ditemukan` });
+            return;
+          }
+          if (!user.locationIds.includes(rows[0].location_asal_id)) {
+            res.status(403).json({
+              error: `Role "${user.role}" cuma boleh menolak permintaan yang ditujukan ke lokasinya sendiri`,
+            });
+            return;
+          }
+        } finally {
+          client.release();
+        }
+      }
+
+      const result = await withTransaction((client) =>
+        tolakPermintaan(client, { id, alasanTolak: req.body.alasanTolak, userId: user.id }),
+      );
+      res.json(result);
+    }),
+  );
+
+  // Tahap 1B (2026-11-14): "Layar CK" -- permintaan masuk yang MASIH
+  // 'diminta' ke lokasi ini, dilengkapi status stok (cukup/kurang/habis) dan
+  // saran produksi/beli. Permission SAMA dengan transfer.kirim (yang
+  // berwenang memenuhi, yang berwenang lihat layar ini).
+  router.get(
+    "/transaksi/permintaan-transfer/layar-ck",
+    requirePermission("transfer.kirim", {
+      extractLocationIds: (req) => {
+        const id = Number(req.query.lokasi);
+        return Number.isFinite(id) ? [id] : [];
+      },
+    }),
+    asyncHandler(async (req, res) => {
+      const locationId = Number(req.query.lokasi);
+      if (!Number.isFinite(locationId)) {
+        res.status(400).json({ error: "Query param 'lokasi' (id) wajib diisi" });
+        return;
+      }
+      const client = await pool.connect();
+      try {
+        res.json(await getLayarCk(client, locationId));
+      } finally {
+        client.release();
+      }
     }),
   );
 
@@ -794,6 +879,98 @@ export function createRouter(): Router {
           return;
         }
         res.json({ rows: rowsDenganRefund, total: hasil.totalTransaksi });
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  // Tahap 1D (2026-11-14): Kartu Stok per item+lokasi (waktu, jenis,
+  // referensi, qty, saldo, oleh siapa) dan Riwayat Transaksi lintas SEMUA
+  // jenis (bukan cuma penjualan). Permission BARU `kartu_stok.lihat`,
+  // role SAMA dengan laporan_harian.lihat (owner/manajer_ops/supervisor,
+  // staf TIDAK PUNYA AKSES SAMA SEKALI ke kedua endpoint ini -- bukan cuma
+  // field biaya yang di-strip, tapi 403 di endpoint itu sendiri).
+  router.get(
+    "/kartu-stok",
+    requirePermission("kartu_stok.lihat", {
+      extractLocationIds: (req) => {
+        const id = Number(req.query.lokasi);
+        return Number.isFinite(id) ? [id] : [];
+      },
+    }),
+    asyncHandler(async (req, res) => {
+      const tanggalMulai = optionalTanggal(req.query.tanggal_mulai);
+      const tanggalSelesai = optionalTanggal(req.query.tanggal_selesai);
+      const itemKode = optionalString(req.query.item);
+      const lokasiId = Number(req.query.lokasi);
+      if (!itemKode || !Number.isFinite(lokasiId)) {
+        res.status(400).json({ error: "Query param 'item' (kode) dan 'lokasi' (id) wajib diisi" });
+        return;
+      }
+      if (!tanggalMulai || !tanggalSelesai || tanggalMulai === INVALID_TANGGAL || tanggalSelesai === INVALID_TANGGAL) {
+        res.status(400).json({ error: "Query param 'tanggal_mulai'/'tanggal_selesai' (YYYY-MM-DD) wajib diisi" });
+        return;
+      }
+      const limit = Number(req.query.limit);
+      const offset = Number(req.query.offset);
+      const user = getAuthUser(req);
+      const client = await pool.connect();
+      try {
+        const hasil = await getKartuStok(client, user, {
+          itemKode,
+          locationId: lokasiId,
+          tanggalMulai,
+          tanggalSelesai,
+          limit: Number.isFinite(limit) ? limit : undefined,
+          offset: Number.isFinite(offset) ? offset : undefined,
+        });
+        if (!hasPermission(user, "hpp.lihat_harga")) {
+          res.json({ rows: hasil.rows.map(({ hargaPerSatuan, ...rest }) => rest), total: hasil.total });
+          return;
+        }
+        res.json(hasil);
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  router.get(
+    "/riwayat-transaksi",
+    requirePermission("kartu_stok.lihat", {
+      extractLocationIds: (req) => {
+        const id = Number(req.query.lokasi);
+        return Number.isFinite(id) ? [id] : [];
+      },
+    }),
+    asyncHandler(async (req, res) => {
+      const tanggalMulai = optionalTanggal(req.query.tanggal_mulai);
+      const tanggalSelesai = optionalTanggal(req.query.tanggal_selesai);
+      if (!tanggalMulai || !tanggalSelesai || tanggalMulai === INVALID_TANGGAL || tanggalSelesai === INVALID_TANGGAL) {
+        res.status(400).json({ error: "Query param 'tanggal_mulai'/'tanggal_selesai' (YYYY-MM-DD) wajib diisi" });
+        return;
+      }
+      const lokasiId = Number(req.query.lokasi);
+      const limit = Number(req.query.limit);
+      const offset = Number(req.query.offset);
+      const jenis = optionalString(req.query.jenis) as JenisTransaksiLedger | undefined;
+      const user = getAuthUser(req);
+      const client = await pool.connect();
+      try {
+        const hasil = await getRiwayatSemuaJenis(client, user, {
+          tanggalMulai,
+          tanggalSelesai,
+          locationId: Number.isFinite(lokasiId) ? lokasiId : undefined,
+          jenis,
+          limit: Number.isFinite(limit) ? limit : undefined,
+          offset: Number.isFinite(offset) ? offset : undefined,
+        });
+        if (!hasPermission(user, "hpp.lihat_harga")) {
+          res.json({ rows: hasil.rows.map(({ hargaPerSatuan, ...rest }) => rest), total: hasil.total });
+          return;
+        }
+        res.json(hasil);
       } finally {
         client.release();
       }

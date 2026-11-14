@@ -41,6 +41,14 @@ test("createKategori + kategoriExists: kategori baru langsung valid dipakai", as
   });
 });
 
+test("createKategori: kode otomatis prefix KT- (Tahap 1C) -- selalu server-generated, tidak ada field kode di input", async () => {
+  await withRollback(async (client) => {
+    const { id } = await createKategori(client, "Kategori Kode Otomatis QA");
+    const { rows } = await client.query<{ kode: string }>(`SELECT kode FROM inventory_kategori_item WHERE id = $1`, [id]);
+    assert.match(rows[0].kode, /^KT-\d{3}$/);
+  });
+});
+
 test("updateKategori: nonaktifkan kategori -> kategoriExists jadi false lagi (item lama tidak otomatis tervalidasi ulang)", async () => {
   await withRollback(async (client) => {
     const { id } = await createKategori(client, "Kategori Dinonaktifkan");

@@ -121,10 +121,10 @@ export function ProduksiForm() {
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Qty batch">
-          <Input type="number" min={0} step="any" value={qtyBatch} onChange={(e) => setQtyBatch(e.target.value)} required />
+          <Input type="number" inputMode="decimal" min={0} step="any" value={qtyBatch} onChange={(e) => setQtyBatch(e.target.value)} required />
         </Field>
         <Field label={`Hasil aktual (${resep?.yieldUnit ?? "satuan resep"})`}>
-          <Input type="number" min={0} step="any" value={hasilAktual} onChange={(e) => setHasilAktual(e.target.value)} required />
+          <Input type="number" inputMode="decimal" min={0} step="any" value={hasilAktual} onChange={(e) => setHasilAktual(e.target.value)} required />
         </Field>
       </div>
 

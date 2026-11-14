@@ -510,7 +510,7 @@ function MinStokModal({
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <Field label="Stok minimum (ambang status &quot;Menipis&quot;)">
-            <Input type="number" min={0} step="any" value={value} onChange={(e) => setValue(e.target.value)} autoFocus />
+            <Input type="number" inputMode="decimal" min={0} step="any" value={value} onChange={(e) => setValue(e.target.value)} autoFocus />
           </Field>
           <p className="text-xs text-slate-500">
             Kalau stok item ini di lokasi yang sedang dipilih turun sampai angka ini atau di bawahnya, statusnya berubah jadi "Menipis"

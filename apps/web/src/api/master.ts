@@ -13,7 +13,8 @@ export function listItems(): Promise<ItemListItem[]> {
 }
 
 export interface CreateItemInput {
-  kode: string;
+  /** Opsional -- kosongkan untuk kode otomatis dari server (prefix sesuai `type`, Tahap 1C). */
+  kode?: string;
   name: string;
   type: "bahan_baku" | "packaging" | "operasional" | "setengah_jadi";
   recipeUnit: string;
@@ -26,7 +27,7 @@ export interface CreateItemInput {
   catatan?: string;
 }
 
-export function createItem(input: CreateItemInput): Promise<{ id: string }> {
+export function createItem(input: CreateItemInput): Promise<{ id: string; kode: string }> {
   return api.post("/api/inventory/items", input);
 }
 
@@ -53,13 +54,14 @@ export function getResepProduksiBaris(kode: string): Promise<ResepProduksiBarisI
 }
 
 export function createResepProduksi(input: {
-  kode: string;
+  /** Opsional -- kosongkan untuk kode otomatis prefix RP- (Tahap 1C). */
+  kode?: string;
   outputItemKode: string;
   yieldQty?: number;
   yieldUnit?: string;
   catatan?: string;
   baris: ResepProduksiBarisInput[];
-}): Promise<{ id: string }> {
+}): Promise<{ id: string; kode: string }> {
   return api.post("/api/inventory/resep-produksi", input);
 }
 

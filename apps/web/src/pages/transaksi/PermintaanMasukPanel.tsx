@@ -2,20 +2,47 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../../auth/AuthContext";
 import { bisaMemenuhiPermintaan } from "../../auth/permissions";
 import { useLokasiOptions } from "../../components/pickers/LokasiPicker";
+import { Badge, PermintaanStatusBadge } from "../../components/ui/Badge";
 import { Card } from "../../components/ui/Card";
 import { Field, Input } from "../../components/ui/Input";
 import { Select } from "../../components/ui/Select";
 import { Button } from "../../components/ui/Button";
 import { Spinner } from "../../components/ui/Spinner";
-import { PermintaanStatusBadge } from "../../components/ui/Badge";
 import { ErrorBox, ResultBox } from "../../components/ResultBox";
-import { createTransferKirim, listPermintaanTransfer } from "../../api/transaksi";
+import { createTransferKirim, getLayarCk, listPermintaanTransfer, tolakPermintaanTransfer } from "../../api/transaksi";
 import { ApiError } from "../../api/client";
-import type { PermintaanTransferListItem, PermintaanTransferStatus, TransferKirimResult } from "../../api/types";
+import type { LayarCkItem, PermintaanTransferListItem, PermintaanTransferStatus, TransferKirimResult } from "../../api/types";
 import { MOCK_ITEMS } from "../../mock/referenceData";
 import { todayIso } from "../../utils/format";
 
 type StatusFilter = PermintaanTransferStatus | "semua";
+
+/** Label shift Bahasa Indonesia -- sama dengan enum backend (pagi/siang/sore/malam, lihat
+ * migrasi 0034), murni display, tidak ada logika di sini. */
+const LABEL_SHIFT: Record<string, string> = { pagi: "Pagi", siang: "Siang", sore: "Sore", malam: "Malam" };
+
+function formatWaktu(iso: string | null): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "-";
+  return d.toLocaleString("id-ID", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+/** Kelompokkan baris (1 baris = 1 item) jadi satu kartu per `kelompokId` (Tahap 1B, 2026-11-14)
+ * -- tabel backend TETAP 1 baris = 1 item, ini murni pengelompokan TAMPILAN. Field yang sama
+ * untuk semua baris dalam satu kelompok (tanggal/catatan/dibutuhkan-sebelum) diambil dari baris
+ * PERTAMA; status/aksi tetap per-baris (item berbeda bisa dipenuhi/ditolak berbeda). */
+function kelompokkan<T extends PermintaanTransferListItem>(rows: T[]): Array<{ kelompokId: number; baris: T[] }> {
+  const peta = new Map<number, T[]>();
+  for (const r of rows) {
+    const list = peta.get(r.kelompokId) ?? [];
+    list.push(r);
+    peta.set(r.kelompokId, list);
+  }
+  return [...peta.entries()]
+    .map(([kelompokId, baris]) => ({ kelompokId, baris }))
+    .sort((a, b) => b.baris[0].createdAt.localeCompare(a.baris[0].createdAt));
+}
 
 export function PermintaanMasukPanel() {
   const { user } = useAuth();
@@ -32,13 +59,12 @@ export function PermintaanMasukPanel() {
   const [rows, setRows] = useState<PermintaanTransferListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<PermintaanTransferListItem | null>(null);
+  const [penuhiTarget, setPenuhiTarget] = useState<{ permintaan: PermintaanTransferListItem; mode: "penuh" | "sebagian" } | null>(
+    null,
+  );
+  const [tolakTarget, setTolakTarget] = useState<PermintaanTransferListItem | null>(null);
   const [reloadCounter, setReloadCounter] = useState(0);
 
-  // Daftar lokasi dimuat async (lihat LokasiContext) -- `ckOptions` masih
-  // kosong di render pertama, jadi default "lokasi CK = yang pertama" tidak
-  // bisa lagi diisi langsung di useState initializer. Cuma mengisi SEKALI
-  // kalau belum pernah dipilih.
   useEffect(() => {
     if (locationId === null && ckOptions.length > 0) setLocationId(ckOptions[0].id);
   }, [ckOptions, locationId]);
@@ -52,9 +78,14 @@ export function PermintaanMasukPanel() {
     let active = true;
     setLoading(true);
     setError(null);
-    listPermintaanTransfer({ lokasi: locationId, status: statusFilter === "semua" ? undefined : statusFilter })
+    // "Layar CK" (status stok + saran) HANYA berlaku untuk permintaan yang
+    // MASIH 'diminta' (lihat getLayarCk backend) -- status lain (riwayat
+    // keputusan) pakai listPermintaanTransfer biasa, tidak perlu status stok.
+    const permintaan =
+      statusFilter === "diminta" ? getLayarCk(locationId) : listPermintaanTransfer({ lokasi: locationId, status: statusFilter === "semua" ? undefined : statusFilter });
+    permintaan
       .then((res) => {
-        if (active) setRows(res.filter((r) => r.locationAsalId === String(locationId)));
+        if (active) setRows(res.filter((r) => r.locationAsalId === locationId));
       })
       .catch((err) => {
         if (active) setError(err instanceof ApiError ? err.message : "Gagal memuat permintaan masuk.");
@@ -67,6 +98,12 @@ export function PermintaanMasukPanel() {
     };
   }, [locationId, statusFilter, reloadCounter]);
 
+  async function handleTolak(id: number, alasanTolak: string) {
+    await tolakPermintaanTransfer(id, alasanTolak);
+    setTolakTarget(null);
+    setReloadCounter((n) => n + 1);
+  }
+
   if (ckOptions.length === 0) {
     return (
       <Card>
@@ -77,6 +114,8 @@ export function PermintaanMasukPanel() {
       </Card>
     );
   }
+
+  const kelompok = kelompokkan(rows);
 
   return (
     <div className="space-y-4">
@@ -92,8 +131,10 @@ export function PermintaanMasukPanel() {
         </Field>
         <Field label="Status">
           <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}>
-            <option value="diminta">Menunggu dipenuhi</option>
-            <option value="dipenuhi">Sudah dipenuhi</option>
+            <option value="diminta">Menunggu dijawab</option>
+            <option value="dipenuhi">Dipenuhi</option>
+            <option value="dipenuhi_sebagian">Dipenuhi sebagian</option>
+            <option value="ditolak">Ditolak</option>
             <option value="dibatalkan">Dibatalkan</option>
             <option value="semua">Semua status</option>
           </Select>
@@ -104,34 +145,87 @@ export function PermintaanMasukPanel() {
       {error ? <ErrorBox>{error}</ErrorBox> : null}
 
       {!loading && !error ? (
-        rows.length === 0 ? (
+        kelompok.length === 0 ? (
           <p className="py-6 text-center text-sm text-slate-500">Tidak ada permintaan dengan status ini.</p>
         ) : (
-          <div className="space-y-2">
-            {rows.map((r) => {
-              const item = MOCK_ITEMS.find((i) => i.kode === r.itemKode);
+          <div className="space-y-3">
+            {kelompok.map(({ kelompokId, baris }) => {
+              const pertama = baris[0];
               return (
-                <Card key={r.id}>
-                  <div className="flex items-start justify-between gap-2">
+                <Card key={kelompokId}>
+                  <div className="mb-2 flex items-start justify-between gap-2 border-b border-slate-100 pb-2">
                     <div>
                       <p className="text-sm font-medium text-slate-900">
-                        {r.itemNama} &middot; {r.qtyDiminta} {item?.recipeUnit ?? ""}
+                        Dari {pertama.locationTujuanNama} &middot; diminta {formatWaktu(pertama.createdAt)}
                       </p>
-                      <p className="text-xs text-slate-500">
-                        {r.kode} &middot; dari {r.locationTujuanNama} &middot; dibutuhkan {r.tanggalDiminta}
-                      </p>
-                      {r.catatan ? <p className="mt-1 text-xs text-slate-600">Catatan: {r.catatan}</p> : null}
-                      {r.dimintaOlehUsername ? (
-                        <p className="mt-0.5 text-xs text-slate-400">Diajukan oleh {r.dimintaOlehUsername}</p>
+                      {pertama.dibutuhkanSebelumTanggal ? (
+                        <p className="text-xs text-slate-500">
+                          Dibutuhkan sebelum {pertama.dibutuhkanSebelumTanggal}
+                          {pertama.dibutuhkanSebelumShift ? ` (shift ${LABEL_SHIFT[pertama.dibutuhkanSebelumShift]})` : ""}
+                        </p>
+                      ) : null}
+                      {pertama.catatan ? <p className="mt-0.5 text-xs text-slate-600">Catatan: {pertama.catatan}</p> : null}
+                      {pertama.dimintaOlehUsername ? (
+                        <p className="mt-0.5 text-xs text-slate-400">Diajukan oleh {pertama.dimintaOlehUsername}</p>
                       ) : null}
                     </div>
-                    <PermintaanStatusBadge status={r.status} />
                   </div>
-                  {r.status === "diminta" && canPenuhi ? (
-                    <Button className="mt-3 w-full" onClick={() => setSelected(r)}>
-                      Penuhi permintaan
-                    </Button>
-                  ) : null}
+
+                  <div className="space-y-2">
+                    {baris.map((r) => {
+                      const item = MOCK_ITEMS.find((i) => i.kode === r.itemKode);
+                      const layarItem = "statusStok" in r ? (r as LayarCkItem) : null;
+                      return (
+                        <div key={r.id} className="rounded-lg border border-slate-200 p-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-sm font-medium text-slate-900">
+                              {r.itemNama} &middot; {r.qtyDiminta} {item?.recipeUnit ?? ""}
+                            </p>
+                            <PermintaanStatusBadge status={r.status} />
+                          </div>
+                          <p className="text-xs text-slate-500">{r.kode}</p>
+
+                          {layarItem ? (
+                            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                              <StatusStokBadge statusStok={layarItem.statusStok} stokSaatIni={layarItem.stokSaatIni} />
+                              <span className="text-slate-500">
+                                Saran: {layarItem.saran === "produksi" ? "Produksi dulu" : "Beli dari vendor"}
+                              </span>
+                            </div>
+                          ) : null}
+
+                          {r.status === "ditolak" && r.alasanTolak ? (
+                            <p className="mt-1 text-xs text-red-600">Alasan ditolak: {r.alasanTolak}</p>
+                          ) : null}
+                          {r.status !== "diminta" ? (
+                            <p className="mt-1 text-xs text-slate-400">
+                              {r.dijawabPada ? `Dijawab ${formatWaktu(r.dijawabPada)}${r.dijawabOlehUsername ? ` oleh ${r.dijawabOlehUsername}` : ""}` : null}
+                              {r.dikirimPada ? ` · Dikirim ${formatWaktu(r.dikirimPada)}` : ""}
+                              {r.diterimaPada ? ` · Diterima ${formatWaktu(r.diterimaPada)}` : ""}
+                            </p>
+                          ) : null}
+
+                          {r.status === "diminta" && canPenuhi ? (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <Button className="flex-1" onClick={() => setPenuhiTarget({ permintaan: r, mode: "penuh" })}>
+                                Penuhi
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                className="flex-1"
+                                onClick={() => setPenuhiTarget({ permintaan: r, mode: "sebagian" })}
+                              >
+                                Penuhi sebagian
+                              </Button>
+                              <Button variant="danger" className="flex-1" onClick={() => setTolakTarget(r)}>
+                                Tolak
+                              </Button>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </Card>
               );
             })}
@@ -139,32 +233,45 @@ export function PermintaanMasukPanel() {
         )
       ) : null}
 
-      {selected ? (
+      {penuhiTarget ? (
         <PenuhiPermintaanModal
-          permintaan={selected}
-          onClose={() => setSelected(null)}
+          permintaan={penuhiTarget.permintaan}
+          mode={penuhiTarget.mode}
+          onClose={() => setPenuhiTarget(null)}
           onDone={() => {
-            setSelected(null);
+            setPenuhiTarget(null);
             setReloadCounter((n) => n + 1);
           }}
         />
+      ) : null}
+
+      {tolakTarget ? (
+        <TolakPermintaanModal permintaan={tolakTarget} onClose={() => setTolakTarget(null)} onTolak={handleTolak} />
       ) : null}
     </div>
   );
 }
 
+function StatusStokBadge({ statusStok, stokSaatIni }: { statusStok: LayarCkItem["statusStok"]; stokSaatIni: number }) {
+  if (statusStok === "cukup") return <Badge tone="success">Stok cukup ({stokSaatIni})</Badge>;
+  if (statusStok === "kurang") return <Badge tone="warning">Stok kurang ({stokSaatIni})</Badge>;
+  return <Badge tone="danger">Stok habis ({stokSaatIni})</Badge>;
+}
+
 function PenuhiPermintaanModal({
   permintaan,
+  mode,
   onClose,
   onDone,
 }: {
   permintaan: PermintaanTransferListItem;
+  mode: "penuh" | "sebagian";
   onClose: () => void;
   onDone: () => void;
 }) {
   const item = MOCK_ITEMS.find((i) => i.kode === permintaan.itemKode);
   const [tanggal, setTanggal] = useState(todayIso());
-  const [qtyKirim, setQtyKirim] = useState(String(permintaan.qtyDiminta));
+  const [qtyKirim, setQtyKirim] = useState(mode === "penuh" ? String(permintaan.qtyDiminta) : "");
   const [unit, setUnit] = useState(item?.recipeUnit ?? "");
   const [hargaTransferPerSatuan, setHargaTransferPerSatuan] = useState("");
   const [saving, setSaving] = useState(false);
@@ -185,8 +292,8 @@ function PenuhiPermintaanModal({
     setSaving(true);
     try {
       const res = await createTransferKirim({
-        locationAsalId: Number(permintaan.locationAsalId),
-        locationTujuanId: Number(permintaan.locationTujuanId),
+        locationAsalId: permintaan.locationAsalId,
+        locationTujuanId: permintaan.locationTujuanId,
         tanggal,
         baris: [
           {
@@ -196,7 +303,7 @@ function PenuhiPermintaanModal({
             hargaTransferPerSatuan: hargaTransferPerSatuan ? Number(hargaTransferPerSatuan) : undefined,
           },
         ],
-        permintaanId: Number(permintaan.id),
+        permintaanId: permintaan.id,
       });
       setResult(res);
     } catch (err) {
@@ -226,7 +333,9 @@ function PenuhiPermintaanModal({
           <>
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
-                <h2 className="text-base font-semibold text-slate-900">Penuhi permintaan {permintaan.kode}</h2>
+                <h2 className="text-base font-semibold text-slate-900">
+                  {mode === "penuh" ? "Penuhi" : "Penuhi sebagian"} {permintaan.kode}
+                </h2>
                 <p className="text-xs text-slate-500">
                   {permintaan.itemNama} untuk {permintaan.locationTujuanNama}
                 </p>
@@ -242,7 +351,15 @@ function PenuhiPermintaanModal({
               </Field>
               <div className="grid grid-cols-2 gap-2">
                 <Field label="Qty kirim">
-                  <Input type="number" min={0} step="any" value={qtyKirim} onChange={(e) => setQtyKirim(e.target.value)} />
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    step="any"
+                    value={qtyKirim}
+                    onChange={(e) => setQtyKirim(e.target.value)}
+                    placeholder={mode === "sebagian" ? `Kurang dari ${permintaan.qtyDiminta}` : undefined}
+                  />
                 </Field>
                 <Field label="Satuan">
                   <Input value={unit} onChange={(e) => setUnit(e.target.value)} />
@@ -251,6 +368,7 @@ function PenuhiPermintaanModal({
               <Field label="Harga transfer per satuan (opsional)">
                 <Input
                   type="number"
+                  inputMode="decimal"
                   min={0}
                   step="any"
                   value={hargaTransferPerSatuan}
@@ -259,8 +377,8 @@ function PenuhiPermintaanModal({
                 />
               </Field>
               <p className="text-xs text-slate-500">
-                Diminta sebelumnya: {permintaan.qtyDiminta} {item?.recipeUnit ?? ""} -- qty kirim bisa diubah kalau mau mengirim
-                jumlah berbeda.
+                Diminta sebelumnya: {permintaan.qtyDiminta} {item?.recipeUnit ?? ""} -- kirim kurang dari ini akan tercatat
+                sebagai "Dipenuhi sebagian", kirim sama/lebih tercatat "Dipenuhi".
               </p>
             </div>
 
@@ -275,6 +393,74 @@ function PenuhiPermintaanModal({
             </Button>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+function TolakPermintaanModal({
+  permintaan,
+  onClose,
+  onTolak,
+}: {
+  permintaan: PermintaanTransferListItem;
+  onClose: () => void;
+  onTolak: (id: number, alasanTolak: string) => Promise<void>;
+}) {
+  const [alasan, setAlasan] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit() {
+    setError(null);
+    if (!alasan.trim()) {
+      setError("Alasan tolak wajib diisi.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await onTolak(permintaan.id, alasan.trim());
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Gagal menolak permintaan.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-20 flex items-end justify-center bg-slate-900/40 sm:items-center" onClick={onClose}>
+      <div
+        className="w-full max-w-sm overflow-y-auto rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">Tolak {permintaan.kode}</h2>
+            <p className="text-xs text-slate-500">
+              {permintaan.itemNama} untuk {permintaan.locationTujuanNama}
+            </p>
+          </div>
+          <button onClick={onClose} aria-label="Tutup" className="text-lg text-slate-400 hover:text-slate-600">
+            ✕
+          </button>
+        </div>
+
+        <Field label="Alasan tolak (wajib)">
+          <Input
+            value={alasan}
+            onChange={(e) => setAlasan(e.target.value)}
+            placeholder="Contoh: stok bahan baku di CK juga sedang kosong"
+          />
+        </Field>
+
+        {error ? (
+          <div className="mt-3">
+            <ErrorBox>{error}</ErrorBox>
+          </div>
+        ) : null}
+
+        <Button variant="danger" className="mt-4 w-full" disabled={saving} onClick={handleSubmit}>
+          {saving ? "Menolak..." : "Tolak permintaan"}
+        </Button>
       </div>
     </div>
   );

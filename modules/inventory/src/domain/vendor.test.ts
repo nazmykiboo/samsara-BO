@@ -34,6 +34,16 @@ test("createVendor + listVendor: dibuat, muncul di daftar, pencarian ILIKE case-
   });
 });
 
+test("createVendor: tanpa 'kode' -> server generate otomatis prefix VN- (Tahap 1C), 'kode' manual tetap dipakai apa adanya", async () => {
+  await withRollback(async (client) => {
+    const otomatis = await createVendor(client, { name: `${PREFIX}Kode Otomatis` });
+    assert.match(otomatis.kode, /^VN-\d{3}$/);
+
+    const manual = await createVendor(client, { kode: "VN-MANUAL-QA", name: `${PREFIX}Kode Manual` });
+    assert.equal(manual.kode, "VN-MANUAL-QA");
+  });
+});
+
 test("createVendor: nama kosong ditolak", async () => {
   await withRollback(async (client) => {
     await assert.rejects(() => createVendor(client, { name: "   " }), /nama vendor wajib/i);

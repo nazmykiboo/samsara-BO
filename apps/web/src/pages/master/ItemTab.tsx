@@ -275,10 +275,10 @@ function ItemDetailSheet({
           </div>
           <div className="grid grid-cols-2 gap-2">
             <Field label="Konversi beli->resep">
-              <Input type="number" min={0} step="any" value={purchaseToRecipeFactor} onChange={(e) => setPurchaseToRecipeFactor(e.target.value)} />
+              <Input type="number" inputMode="decimal" min={0} step="any" value={purchaseToRecipeFactor} onChange={(e) => setPurchaseToRecipeFactor(e.target.value)} />
             </Field>
             <Field label="Harga master">
-              <Input type="number" min={0} step="any" value={hargaMaster} onChange={(e) => setHargaMaster(e.target.value)} />
+              <Input type="number" inputMode="decimal" min={0} step="any" value={hargaMaster} onChange={(e) => setHargaMaster(e.target.value)} />
             </Field>
           </div>
 
@@ -352,13 +352,13 @@ function ItemCreateSheet({
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!kode.trim() || !name.trim() || !recipeUnit.trim()) {
-      setError("Kode, nama, dan satuan resep wajib diisi.");
+    if (!name.trim() || !recipeUnit.trim()) {
+      setError("Nama dan satuan resep wajib diisi.");
       return;
     }
     setSaving(true);
     const input: CreateItemInput = {
-      kode: kode.trim(),
+      kode: kode.trim() || undefined,
       name: name.trim(),
       type,
       recipeUnit: recipeUnit.trim(),
@@ -392,8 +392,8 @@ function ItemCreateSheet({
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="grid grid-cols-2 gap-2">
-            <Field label="Kode">
-              <Input value={kode} onChange={(e) => setKode(e.target.value)} placeholder="Misal: BB-058" required />
+            <Field label="Kode (opsional)">
+              <Input value={kode} onChange={(e) => setKode(e.target.value)} placeholder="Otomatis kalau dikosongkan" />
             </Field>
             <Field label="Tipe">
               <Select value={type} onChange={(e) => setType(e.target.value as ItemType)}>
@@ -415,10 +415,10 @@ function ItemCreateSheet({
           </div>
           <div className="grid grid-cols-2 gap-2">
             <Field label="Konversi beli->resep">
-              <Input type="number" min={0} step="any" value={purchaseToRecipeFactor} onChange={(e) => setPurchaseToRecipeFactor(e.target.value)} />
+              <Input type="number" inputMode="decimal" min={0} step="any" value={purchaseToRecipeFactor} onChange={(e) => setPurchaseToRecipeFactor(e.target.value)} />
             </Field>
             <Field label="Harga master">
-              <Input type="number" min={0} step="any" value={hargaMaster} onChange={(e) => setHargaMaster(e.target.value)} />
+              <Input type="number" inputMode="decimal" min={0} step="any" value={hargaMaster} onChange={(e) => setHargaMaster(e.target.value)} />
             </Field>
           </div>
           <p className="text-xs text-slate-500">

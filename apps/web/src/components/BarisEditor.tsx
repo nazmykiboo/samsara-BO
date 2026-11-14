@@ -49,7 +49,7 @@ export function BarisEditor({
             </div>
             <div className="grid grid-cols-2 gap-2">
               <Field label="Qty">
-                <Input type="number" min={0} step="any" value={r.qty} onChange={(e) => updateRow(r.itemKode, { qty: e.target.value })} />
+                <Input type="number" inputMode="decimal" min={0} step="any" value={r.qty} onChange={(e) => updateRow(r.itemKode, { qty: e.target.value })} />
               </Field>
               <Field label="Satuan">
                 <Input value={r.unit} onChange={(e) => updateRow(r.itemKode, { unit: e.target.value })} />

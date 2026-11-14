@@ -140,7 +140,7 @@ function TargetFoodCostForm() {
     <form onSubmit={handleSubmit} className="space-y-2">
       <Field label="Target food cost (%)">
         <Input
-          type="number"
+          type="number" inputMode="decimal"
           min={0}
           max={100}
           step={0.1}

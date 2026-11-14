@@ -177,7 +177,7 @@ function ShiftTemplateCreateSheet({ onClose, onCreated }: { onClose: () => void;
           </div>
           <Field label="Urutan tampil (opsional)">
             <Input
-              type="number"
+              type="number" inputMode="decimal"
               min={0}
               step={1}
               value={urutanTampil}
@@ -293,7 +293,7 @@ function ShiftTemplateEditSheet({
             </Field>
           </div>
           <Field label="Urutan tampil">
-            <Input type="number" min={0} step={1} value={urutanTampil} onChange={(e) => setUrutanTampil(e.target.value)} />
+            <Input type="number" inputMode="decimal" min={0} step={1} value={urutanTampil} onChange={(e) => setUrutanTampil(e.target.value)} />
           </Field>
 
           {error ? <ErrorBox>{error}</ErrorBox> : null}

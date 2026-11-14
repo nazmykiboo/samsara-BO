@@ -822,3 +822,119 @@ saat ini. Untuk menangkapnya:
 4. Verifikasi lewat Riwayat Transaksi (baris "Refund" muncul terhubung ke
    transaksi asal) atau query langsung `salessync_majoo_refund WHERE
    transaction_no = '...'`.
+
+## 15. Akar masalah SEBENARNYA raw-majoo: bug scope static data (Tahap 1F, 2026-11-14)
+
+### Apa yang ditemukan
+
+Audit Tahap 0 (baca-saja, 2026-11-14) membuktikan `raw-majoo-direct.json`
+**TIDAK PERNAH menghasilkan satu baris pun lewat mekanismenya sendiri**
+sejak file ini dibuat (commit pertama 2026-10-28 14:20 UTC) — bukan soal
+API Majoo, token, atau jendela tanggal. Workflow ini tetap "success" di
+setiap eksekusi karena errornya tidak kelihatan: akumulator baris dibangun
+lewat `$getWorkflowStaticData('node')` yang DITULIS di satu node
+(`Petakan Baris Sales`/`Petakan Baris Refund`, jalan tiap iterasi
+halaman) dan DIBACA BALIK di node LAIN (`Ambil Baris Sales/Refund
+Terkumpul`, jalan sekali di akhir). **Scope `'node'` di n8n terikat ke
+NODE PEMANGGIL sendiri — setiap node yang memanggil
+`$getWorkflowStaticData('node')` mendapat bucket data TERPISAH,
+TIDAK dibagi ke node lain dalam workflow yang sama** (beda dari scope
+`'global'` yang memang dibagi semua node). Karena penulis dan pembaca di
+sini adalah node yang berbeda, `Ambil Baris X Terkumpul` SELALU membaca
+bucket miliknya sendiri yang tidak pernah diisi siapa pun — `sd.barisX ||
+[]` SELALU jatuh ke array kosong, apa pun yang terjadi di panggilan API
+Majoo. Ini dibuktikan murni dari membaca kode (3 node dengan `id` field
+berbeda memanggil scope yang sama tapi terisolasi satu sama lain), TANPA
+perlu membaca data eksekusi n8n mentah.
+
+Baris sukses TERAKHIR (28 Okt 2026 13:06 UTC, ±1 jam 14 menit SEBELUM
+`raw-majoo-direct.json` dibuat) berasal dari workflow LAMA yang digantikan
+file ini, bukan dari file ini. Sejak digantikan, cabang Sales maupun
+Refund keduanya mati total — konsisten dengan temuan "0 baris raw-majoo
+selama 16+ hari berturut-turut" di audit Tahap 0.
+
+### Apa yang diperbaiki
+
+**Static data DIHAPUS TOTAL** dari `raw-majoo-direct.json` (tidak ada lagi
+panggilan `$getWorkflowStaticData` fungsional di file ini — sisa yang
+muncul kalau di-grep cuma di KOMENTAR yang menjelaskan sejarah bug ini).
+Akumulator sekarang dibawa LEWAT DATA ITEM ITU SENDIRI, mengalir eksplisit
+lewat edge yang sudah ada di loop:
+
+```
+Gabung Konteks Halaman -> Petakan Baris Sales (hitung ulang akumulasi =
+                              akumulasi lama (dari input) + baris halaman
+                              ini, taruh di field `akumulasiBarisSales`)
+                         -> Loop Control Sales (teruskan field itu APA
+                              ADANYA di return-nya, plus hasMore/nextPage)
+                         -> Ada Halaman Lagi? (If node, lewatkan semua
+                              field tanpa diubah -- tidak perlu disentuh)
+                         -> [ya] Tunggu 2 Detik -> Increment Page Sales
+                              (Set node, TAMBAH assignment baru supaya
+                              `akumulasiBarisSales` ikut diteruskan --
+                              Set node v3.4 TIDAK meneruskan field yang
+                              tidak di-assign ulang secara eksplisit)
+                              -> balik ke Get Detail Sales/Gabung Konteks
+                                 Halaman (iterasi berikutnya)
+                         -> [tidak] Ambil Baris Sales Terkumpul (baca
+                              `akumulasiBarisSales` dari item yang masuk,
+                              BUKAN static data lagi) -> Gabung Semua Baris
+```
+
+Field refund dinamai `akumulasiBarisRefund` (nama berbeda dari
+`akumulasiBarisSales`), pola IDENTIK, cabang Sales dan Refund diperbaiki
+simetris. Sudah disimulasikan dengan skrip Node.js lepas (3 halaman mock,
+100+100+40 baris) membuktikan akumulasi akhir benar (240 baris, urut,
+tanpa duplikat/kehilangan) sebelum diterapkan ke file workflow.
+
+**Deteksi pipeline mati ditambahkan** di `Loop Control Sales`: begitu
+halaman TERAKHIR selesai (`hasMore=false`) dan akumulasi akhir tetap 0
+baris, node ini `throw` dengan pesan yang menyebut rentang tanggal yang
+dicoba — SEKARANG kalau pipeline mati lagi, eksekusi n8n akan tercatat
+"error" (bukan "success" semu seperti sebelumnya), terlihat langsung di
+dashboard n8n tanpa perlu audit manual lagi. **Cabang Refund SENGAJA
+TIDAK diberi pengecekan ini** — refund Majoo wajar 0 di banyak jendela
+7 hari (tidak setiap outlet selalu ada refund), jadi 0 baris refund bukan
+sinyal pipeline mati.
+
+`windowDays` di node "Atur Mode" **TETAP 7** untuk jadwal otomatis (belum
+dikembalikan ke 2, lihat § 13) — TIDAK disentuh oleh perbaikan ini, dan
+sengaja dibiarkan karena gap akibat bug ini sendiri (16+ hari) masih perlu
+ditutup lewat backfill di bawah sebelum window ini direvert.
+
+### Kalau raw-majoo masih 0 baris SETELAH perbaikan ini
+
+Perbaikan di atas menghapus bug workflow yang TERBUKTI ada di kode. Kalau
+setelah diimpor ulang dan dijalankan, eksekusi tetap gagal dengan error
+"0 baris untuk rentang ..." atau error bentuk respons dari "Petakan Baris
+Sales"/"Loop Control Sales", itu **bukan bug workflow lagi** — kemungkinan
+penyebabnya di sisi API Majoo (token revoked, kredensial berubah, API
+berubah bentuk respons, dsb). **Laporkan error-nya apa adanya (pesan
+`throw` sudah menyebut rentang tanggal/halaman yang gagal) — JANGAN
+ditebak atau "diperbaiki" lagi dengan asumsi baru tanpa konfirmasi**,
+sesuai batasan kerja yang berlaku untuk pekerjaan ini.
+
+### Langkah impor ulang
+
+1. Buka n8n, **hapus/nonaktifkan versi LAMA** `raw-majoo-direct.json` yang
+   sedang aktif (kalau ada) supaya tidak ada dua versi yang sama-sama
+   mencoba jalan.
+2. Import file `devops/n8n/raw-majoo-direct.json` versi BARU ini (menu
+   Import from File di editor n8n) sebagai workflow baru atau timpa versi
+   lama lewat Import — pilih sesuai kebiasaan tim, bukan keharusan teknis.
+3. Pilih ulang credential yang bertanda merah (lihat § 5) — import file
+   JSON TIDAK membawa credential.
+4. **Dry-run dulu** (§ 6, trigger manual — `windowDays` otomatis jadi `1`
+   lewat node "Atur Mode" untuk mode manual) — cek tab Output tiap node,
+   pastikan `Loop Control Sales`/`Loop Control Refund` menunjukkan
+   `hasMore`/`akumulasiBarisSales.length` yang masuk akal naik tiap
+   halaman, dan node terakhir sebelum "Susun CSV & Pecah Batch" menghasilkan
+   JUMLAH ITEM (bukan satu item berisi array) sesuai ekspektasi.
+5. Setelah dry-run meyakinkan, aktifkan jadwal otomatis (§ 7) seperti
+   biasa. Backfill gap 28 Okt–13 Nov akan otomatis tertangkap pada
+   eksekusi pertama setelah aktivasi (window masih 7 hari, lihat § 13) --
+   TIDAK perlu langkah backfill manual tambahan khusus untuk bug ini,
+   cukup pastikan eksekusi pertama setelah impor ulang ini BERHASIL (status
+   hijau DAN baris benar-benar bertambah di `salessync_raw_majoo`/
+   `salessync_majoo_refund` -- cek keduanya, jangan cuma percaya status
+   hijau seperti kasus yang baru diperbaiki ini).

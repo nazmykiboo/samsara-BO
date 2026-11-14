@@ -73,6 +73,8 @@ const FIELD_BIAYA_TERLARANG = new Set([
   "harga_satuan",
   "hargatransferpersatuan",
   "harga_transfer_per_satuan",
+  "hargapersatuan",
+  "harga_per_satuan",
   "hargadasar",
   "harga_dasar",
   "hargalama",
@@ -468,4 +470,48 @@ test("GET /sales-sync/refund: refundAmount bocor ke supervisor, tetap tampil unt
     await client.query(`DELETE FROM salessync_majoo_refund WHERE refund_id = $1`, [refundId]);
     client.release();
   }
+});
+
+// ---------------------------------------------------------------------------
+// 9. GET /kartu-stok dan GET /riwayat-transaksi (Tahap 1D, 2026-11-14)
+// ---------------------------------------------------------------------------
+
+test("GET /kartu-stok & GET /riwayat-transaksi: hargaPerSatuan bocor ke supervisor, tetap tampil untuk owner; staf 403 (bukan cuma field di-strip)", async () => {
+  const tanggal = await query<{ t: string }>(`SELECT to_char(CURRENT_DATE, 'YYYY-MM-DD') AS t`).then((r) => r[0].t);
+  const body = {
+    locationId: outletId,
+    vendorId: vendorUmumId,
+    tanggal,
+    baris: [{ itemKode: "BB-001", qtyBeli: 1, satuanBeli: "kg", hargaSatuan: 4200 }],
+  };
+  const owner = await postJson(`/api/inventory/transaksi/pembelian`, body, ownerToken);
+  assert.equal(owner.status, 201, JSON.stringify(owner.body));
+  pembelianHeaderIds.push(Number((owner.body as { headerId: number }).headerId));
+
+  const qs = `item=BB-001&lokasi=${outletId}&tanggal_mulai=${tanggal}&tanggal_selesai=${tanggal}`;
+
+  const ownerKartu = await getJson(`/api/inventory/kartu-stok?${qs}`, ownerToken);
+  assert.equal(ownerKartu.status, 200, JSON.stringify(ownerKartu.body));
+  const ownerKartuRows = (ownerKartu.body as { rows: Array<Record<string, unknown>> }).rows;
+  assert.ok(ownerKartuRows.some((r) => "hargaPerSatuan" in r && r.hargaPerSatuan === 4200), "owner HARUS tetap melihat hargaPerSatuan di kartu stok");
+
+  const supervisorKartu = await getJson(`/api/inventory/kartu-stok?${qs}`, supervisorToken);
+  assert.equal(supervisorKartu.status, 200, JSON.stringify(supervisorKartu.body));
+  assertNoCostFields(supervisorKartu.body, "kartu-stok (supervisor)");
+
+  const stafKartu = await getJson(`/api/inventory/kartu-stok?${qs}`, stafToken);
+  assert.equal(stafKartu.status, 403, "staf TIDAK PUNYA AKSES sama sekali ke Kartu Stok");
+
+  const qsRiwayat = `tanggal_mulai=${tanggal}&tanggal_selesai=${tanggal}&lokasi=${outletId}`;
+  const ownerRiwayat = await getJson(`/api/inventory/riwayat-transaksi?${qsRiwayat}`, ownerToken);
+  assert.equal(ownerRiwayat.status, 200, JSON.stringify(ownerRiwayat.body));
+  const ownerRiwayatRows = (ownerRiwayat.body as { rows: Array<Record<string, unknown>> }).rows;
+  assert.ok(ownerRiwayatRows.some((r) => r.hargaPerSatuan === 4200), "owner HARUS tetap melihat hargaPerSatuan di riwayat transaksi");
+
+  const supervisorRiwayat = await getJson(`/api/inventory/riwayat-transaksi?${qsRiwayat}`, supervisorToken);
+  assert.equal(supervisorRiwayat.status, 200, JSON.stringify(supervisorRiwayat.body));
+  assertNoCostFields(supervisorRiwayat.body, "riwayat-transaksi (supervisor)");
+
+  const stafRiwayat = await getJson(`/api/inventory/riwayat-transaksi?${qsRiwayat}`, stafToken);
+  assert.equal(stafRiwayat.status, 403, "staf TIDAK PUNYA AKSES sama sekali ke Riwayat Transaksi semua jenis");
 });

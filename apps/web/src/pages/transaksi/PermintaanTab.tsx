@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { useAuth } from "../../auth/AuthContext";
+import { bisaMemenuhiPermintaan } from "../../auth/permissions";
 import { useLokasiOptions } from "../../components/pickers/LokasiPicker";
 import { PermintaanTransferForm } from "./PermintaanTransferForm";
 import { PermintaanMasukPanel } from "./PermintaanMasukPanel";
@@ -6,8 +8,17 @@ import { PermintaanMasukPanel } from "./PermintaanMasukPanel";
 type SubTab = "ajukan" | "masuk";
 
 export function PermintaanTab() {
+  const { user } = useAuth();
   const options = useLokasiOptions();
-  const punyaLokasiCk = useMemo(() => options.some((l) => l.tipe === "kitchen"), [options]);
+  // "Permintaan Masuk (CK)" (Layar CK) butuh DUA syarat: akun ditugaskan ke
+  // lokasi Kitchen DAN role-nya berwenang memenuhi (transfer.kirim, lihat
+  // GET .../layar-ck di backend) -- staf yang kebetulan ditugaskan ke CK
+  // TETAP tidak boleh (backend selalu 403), jadi tab ini harus ikut
+  // disembunyikan untuknya, bukan cuma menampilkan error 403 saat diklik.
+  const punyaLokasiCk = useMemo(
+    () => options.some((l) => l.tipe === "kitchen") && (user ? bisaMemenuhiPermintaan(user.role) : false),
+    [options, user],
+  );
 
   const [subTab, setSubTab] = useState<SubTab>("ajukan");
 
