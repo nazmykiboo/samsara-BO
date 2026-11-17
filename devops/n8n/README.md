@@ -902,6 +902,51 @@ dikembalikan ke 2, lihat § 13) — TIDAK disentuh oleh perbaikan ini, dan
 sengaja dibiarkan karena gap akibat bug ini sendiri (16+ hari) masih perlu
 ditutup lewat backfill di bawah sebelum window ini direvert.
 
+### Perbaikan LANJUTAN (2026-11-17): koneksi graf TIDAK PERNAH diperbarui sesuai desain di atas
+
+Operator menjalankan workflow setelah perbaikan 2026-11-14 di atas dan
+TETAP mendapat error di `Loop Control Sales`: `"0 baris untuk rentang
+2026-11-10 00:00 s.d. 2026-11-17 23:59"`. Dicek ulang (baca-saja, cuma
+file JSON ini + tabel `salessync_raw_majoo`/`salessync_log_penjualan` milik
+app sendiri, BUKAN data eksekusi n8n) — **TERBUKTI bukan masalah API
+Majoo**: `salessync_log_penjualan` platform Majoo (hasil
+`log-penjualan-direct.json`, endpoint `detail_sales` yang SAMA PERSIS
+— endpoint, `is_payment`, `template_id`, `min_total_sales`,
+`min_gross_sales`, dan sumber token Postgres-nya semua identik) tetap
+dapat baris baru sampai H-1, dan `salessync_raw_majoo` sendiri total 6076
+baris historis (bukan tabel baru/salah skema).
+
+**Akar masalahnya**: deskripsi alur di atas (`Gabung Konteks Halaman ->
+Petakan Baris Sales -> Loop Control Sales -> ...`) memang BENAR sebagai
+DESAIN, tapi field `"connections"` di file JSON-nya **TIDAK PERNAH
+benar-benar diubah mengikuti desain itu** saat perbaikan 2026-11-14
+dikerjakan — `Petakan Baris Sales`/`Petakan Baris Refund` TERBUKTI (dicek
+langsung field `connections` di JSON) **TIDAK PUNYA KONEKSI KELUAR SAMA
+SEKALI** (dead-end), sementara `Loop Control Sales`/`Loop Control Refund`
+tetap terhubung LANGSUNG dari `Gabung Konteks Halaman`/`Gabung Konteks
+Halaman Refund` (melompati node `Petakan Baris *` yang menghitung
+`akumulasiBarisSales`/`akumulasiBarisRefund`). Akibatnya `Loop Control
+Sales` SELALU membaca akumulator dari item yang TIDAK PERNAH memilikinya
+(default ke array kosong), **seberapa pun banyak baris sales yang
+sebenarnya berhasil diambil dari Majoo** — begitu halaman pertama saja
+sudah kurang dari 100 baris (`hasMore=false`, lazim untuk satu outlet),
+guard "0 baris -> throw" di `Loop Control Sales` PASTI menyala. Cabang
+Refund bernasib sama (TANPA guard throw, jadi cuma diam-diam selalu
+kosong, bukan error).
+
+**Sudah diperbaiki** (2026-11-17, di file `raw-majoo-direct.json` ini) --
+`"connections"` untuk `Gabung Konteks Halaman`/`Gabung Konteks Halaman
+Refund` sekarang HANYA mengarah ke `Petakan Baris Sales`/`Petakan Baris
+Refund`, dan node itu yang diberi koneksi keluar baru ke `Loop Control
+Sales`/`Loop Control Refund` -- PERSIS mengikuti desain yang sudah
+dijabarkan di atas, tidak ada perubahan kode JS satu baris pun, murni
+perbaikan koneksi graf. **File di repo SUDAH diperbaiki, tapi instance n8n
+LIVE belum ikut berubah** -- WAJIB impor ulang (lihat § "Langkah impor
+ulang" di bawah) sebelum dijalankan lagi, dan WAJIB dry-run dulu (langkah
+4 di bawah) untuk memastikan `akumulasiBarisSales.length` di tab Output
+`Loop Control Sales` benar-benar naik tiap halaman sebelum diaktifkan
+jadwal otomatis.
+
 ### Kalau raw-majoo masih 0 baris SETELAH perbaikan ini
 
 Perbaikan di atas menghapus bug workflow yang TERBUKTI ada di kode. Kalau

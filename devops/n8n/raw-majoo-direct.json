@@ -948,7 +948,13 @@
             "node": "Petakan Baris Sales",
             "type": "main",
             "index": 0
-          },
+          }
+        ]
+      ]
+    },
+    "Petakan Baris Sales": {
+      "main": [
+        [
           {
             "node": "Loop Control Sales",
             "type": "main",
@@ -1133,7 +1139,13 @@
             "node": "Petakan Baris Refund",
             "type": "main",
             "index": 0
-          },
+          }
+        ]
+      ]
+    },
+    "Petakan Baris Refund": {
+      "main": [
+        [
           {
             "node": "Loop Control Refund",
             "type": "main",
