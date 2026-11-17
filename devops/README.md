@@ -1,8 +1,144 @@
 # Runbook Deploy Production — Samsara Backoffice
 
-Status per 2026-11-14 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
+Status per 2026-11-17 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
 disalin dari versi dokumen sebelumnya). **App sudah LIVE, dipakai owner
-sungguhan, dan sudah melewati Deploy #6** — lihat § "Deploy #6" di bawah.
+sungguhan, dan sudah melewati Deploy #7** — lihat § "Deploy #7" di bawah.
+
+## Deploy #7: Modul Notifikasi Telegram di core (aturan, log dedup, token aksi, webhook, scheduler) (2026-11-17)
+
+3 migrasi baru di `core` (`0014_add_telegram_dan_source_audit`,
+`0015_create_notifikasi_aturan_log_token`, `0016_add_alasan_preset_tolak_token_aksi`),
+container `api`/`web` di-rebuild & restart (n8n/Postgres/VNC **tidak
+disentuh sama sekali** — uptime tetap "Up 4 weeks"/"Up 6 hari"/"Up 11 hari"
+sebelum & sesudah, dicek eksplisit).
+
+**Metodologi** (sama persis Deploy #2-6): `pg_dump` production → restore ke
+`samsara_prod_rehearsal` lokal → migrasi dijalankan ke salinan itu → 58
+tabel lama dibandingkan jumlah barisnya sebelum/sesudah (**identik**, cuma
+3 tabel BARU kosong + `schema_migrations` +3) → migrasi dites idempoten
+(jalan ke-2 tidak melakukan apa-apa) → database lokal dihapus → commit lokal
+→ BARU dicoba ke production sungguhan via `rsync` (`--exclude '.env'
+--exclude '.env.production'`, TANPA `--delete`) → `docker compose build`
+→ restart HANYA `api`+`web`.
+
+**Pengecekan pra-deploy khusus fitur ini**: tidak ada migrasi/seed yang
+mengisi `core_notifikasi_aturan` dengan baris apa pun — tabel itu kosong
+0 baris begitu dibuat, jadi "semua aturan default nonaktif" terpenuhi
+secara struktural (tidak ada aturan sama sekali, apalagi yang aktif).
+Dicek juga di database dev lokal (0 baris) sebelum deploy.
+
+**Smoke test production**: HTTPS valid, `/health` OK (3 modul aktif), `GET
+/api/core/lokasi` publik normal, 2 endpoint BARU (`GET
+/api/notifikasi/aturan`, `GET /api/notifikasi/telegram/status`) membalas
+401 tanpa token (ter-mount & ter-gate dengan benar), webhook BARU (`POST
+/api/telegram/webhook`) membalas **503** tanpa `TELEGRAM_WEBHOOK_SECRET`
+terisi (perilaku yang DIHARAPKAN — lihat § "Setup Manual" di bawah, belum
+dikonfigurasi owner), `POST /api/auth/login` dengan kredensial SENGAJA
+SALAH membalas 401 (endpoint auth jalan normal, TANPA pernah menyentuh
+kredensial asli siapa pun). Baris 3 tabel baru dicek langsung di production
+lewat `psql` read-only: `core_notifikasi_aturan`/`_log`/`_token_aksi`
+ketiganya 0 baris (sesuai ekspektasi, belum ada aturan dibuat owner).
+
+Backup pra-deploy diverifikasi dulu (permission 600, `gzip -t` valid, ukuran
+2.5MB wajar dibanding backup harian) SEBELUM migrasi dijalankan — tersimpan
+di
+`/root/samsara-backups/samsara_pre-deploy-notifikasi-telegram-final_2026-11-17_065945.sql.gz`
+di VPS, ikut rotasi retensi 7 hari otomatis seperti backup harian lainnya.
+RAM VPS dicek sebelum deploy (832MB available + 1.2GB swap bebas dari 2GB) —
+cukup untuk build image (build sukses tanpa OOM, seperti deploy-deploy
+sebelumnya). Tidak ada kredensial apa pun (termasuk `TELEGRAM_BOT_TOKEN`/
+`TELEGRAM_WEBHOOK_SECRET`, yang memang belum diisi) yang pernah
+terbaca/tertulis ke chat/log/git sepanjang proses.
+
+**Catatan penting (BUKAN bagian migrasi/kode)**: `TELEGRAM_BOT_TOKEN` dan
+`TELEGRAM_WEBHOOK_SECRET` **belum diisi di production** — ini LANGKAH
+MANUAL owner, lihat § "Setup Manual: Notifikasi Telegram" di bawah. Sampai
+langkah itu dikerjakan, modul notifikasi tetap berjalan normal (aturan bisa
+dibuat, event tetap tercatat di `core_notifikasi_log`), cuma pengiriman ke
+Telegram akan gagal dengan status `'gagal'`/`'ditunda'` di log, tidak
+mengganggu fitur lain.
+
+## Setup Manual: Notifikasi Telegram (TELEGRAM_BOT_TOKEN & webhook)
+
+**WAJIB dikerjakan OWNER/OPERATOR sendiri lewat SSH ke VPS — Claude Code
+TIDAK PERNAH membaca atau menulis nilai `TELEGRAM_BOT_TOKEN` maupun
+`TELEGRAM_WEBHOOK_SECRET` (instruksi keras, lihat `CLAUDE.md` dan
+`core/src/notifikasi/telegram.ts`).** Tanpa langkah ini, modul notifikasi
+(Deploy #7) tetap jalan normal — cuma SETIAP pengiriman ke Telegram akan
+gagal dengan pesan jelas di log server, tidak mengganggu fitur lain.
+
+1. **Buat bot Telegram** (sekali saja, kalau belum ada): buka Telegram,
+   chat ke `@BotFather`, kirim `/newbot`, ikuti instruksinya (nama +
+   username bot, mis. `@BurnasOpsBot`). BotFather membalas dengan TOKEN
+   bot (format `123456789:ABC-...`) — simpan sebentar, jangan ditempel ke
+   chat Claude/log/git.
+
+2. **SSH ke VPS**, lalu edit `.env.production` (tambahkan DUA baris baru
+   di akhir file, ganti kedua nilai di bawah sebelum disimpan):
+   ```
+   ssh root@<alamat-vps>
+   cd /root/samsara-backoffice
+   nano .env.production
+   ```
+   Tambahkan:
+   ```
+   TELEGRAM_BOT_TOKEN=<token dari BotFather langkah 1>
+   TELEGRAM_WEBHOOK_SECRET=<string acak panjang buatan sendiri>
+   ```
+   Untuk membuat string acak secret webhook, jalankan di VPS (hasilnya
+   TIDAK perlu dirahasiakan dari diri sendiri, cukup jangan dibagikan ke
+   luar): `openssl rand -hex 32`
+
+3. **Restart HANYA container `api`** supaya `.env.production` yang baru
+   terbaca (`docker restart` saja TIDAK cukup — env file cuma dibaca ulang
+   oleh `up`, bukan `restart`):
+   ```
+   cd /root/samsara-backoffice
+   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-deps api
+   ```
+   Container `web`, `n8n-stack-n8n-1`, `n8n-stack-postgres-1`, dan
+   `burnas-desktop` TIDAK ikut tersentuh oleh perintah ini (`--no-deps`
+   + nama service spesifik).
+
+4. **Daftarkan webhook ke Telegram** — jalankan PERSIS seperti ini supaya
+   token TIDAK PERNAH tertulis literal di layar/history shell (`source`
+   membaca langsung dari file, nilainya cuma dipakai sebagai variabel):
+   ```
+   cd /root/samsara-backoffice
+   set -a; source .env.production; set +a
+   curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+     -d "url=https://burnas-app.duckdns.org/api/telegram/webhook" \
+     -d "secret_token=$TELEGRAM_WEBHOOK_SECRET"
+   ```
+   Respons sukses: `{"ok":true,"result":true,"description":"Webhook was set"}`.
+   Cek ulang statusnya kapan saja dengan:
+   ```
+   curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getWebhookInfo"
+   ```
+   (field `url` harus menunjuk ke `https://burnas-app.duckdns.org/api/telegram/webhook`,
+   `last_error_message` harus kosong).
+
+5. **Uji dengan satu pesan percobaan** (end-to-end, bukan cuma cek API):
+   - Buka aplikasi Backoffice di browser, login dengan akun apa pun, buka
+     menu **Akun Saya**, tekan **Hubungkan Telegram** — muncul kode 6
+     digit.
+   - Buka Telegram, cari bot yang baru dibuat (langkah 1), kirim PERSIS
+     SATU pesan: `/link <kode yang muncul>`.
+   - Bot harus membalas konfirmasi ("Akun Telegram ini berhasil
+     ditautkan...") dalam hitungan detik — itu berarti webhook sudah
+     diterima dan diproses dengan benar ujung ke ujung.
+   - Refresh halaman Akun Saya — status harus berubah jadi "Sudah
+     terhubung".
+   - Kalau TIDAK ada balasan sama sekali: cek `docker logs
+     samsara-backoffice-api-1 --tail 50` untuk pesan error (biasanya
+     `secret_token` di `setWebhook` tidak sama dengan
+     `TELEGRAM_WEBHOOK_SECRET` di `.env.production`, atau container
+     belum di-restart setelah env diisi).
+
+Setelah langkah ini selesai, aktifkan aturan notifikasi yang diinginkan
+lewat **Pengaturan > Notifikasi** (owner saja) — semua aturan baru dibuat
+dalam keadaan AKTIF secara default kecuali dimatikan manual, jadi cukup
+tambahkan aturan yang benar-benar diinginkan.
 
 ## Deploy #6: Mutasi Lain qty positif, kode otomatis, Kartu Stok & Riwayat Semua Jenis, Permintaan ke CK (timeline + Layar CK), perbaikan raw-majoo, kesegaran data (2026-11-14)
 
