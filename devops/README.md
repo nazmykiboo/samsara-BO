@@ -1,8 +1,50 @@
 # Runbook Deploy Production — Samsara Backoffice
 
-Status per 2026-11-17 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
+Status per 2026-11-18 (dicek ulang langsung lewat SSH sungguhan ke VPS, bukan
 disalin dari versi dokumen sebelumnya). **App sudah LIVE, dipakai owner
-sungguhan, dan sudah melewati Deploy #7** — lihat § "Deploy #7" di bawah.
+sungguhan, dan sudah melewati Deploy #8** — lihat § "Deploy #8" di bawah.
+
+## Deploy #8: Tombol Terima Telegram untuk owner (akuiPermintaan, approval opname nyata), keyboard 1 baris 1 tombol (2026-11-18)
+
+1 migrasi baru (`inventory/0035_tambah_pengakuan_permintaan_transfer`),
+container `api`/`web` di-rebuild & restart (n8n/Postgres/VNC **tidak
+disentuh sama sekali**).
+
+**Pemicu**: owner melaporkan tombol "Terima" di Telegram merespons
+(audit log tercatat) tapi tidak mengubah apa pun di app -- permintaan ke
+CK tetap "menunggu dipenuhi" terus. Owner klarifikasi: untuk sementara CK
+belum ada tim, jadi khusus role **owner**, "Terima" harus benar-benar
+berefek (permintaan_baru_ck -> tanda "diakui", opname_menunggu_persetujuan
+-> approval sungguhan via `decideOpname('setuju')`); role lain TETAP
+acknowledgment generik seperti semula. Sekaligus keyboard Telegram diubah
+jadi 1 baris 1 tombol (termasuk tiap alasan preset Tolak).
+
+**Metodologi** (sama persis Deploy #2-7): `pg_dump` production → restore
+ke `samsara_prod_rehearsal` lokal → migrasi dijalankan → 63 tabel lama
+identik jumlah barisnya (cuma `schema_migrations` +1, TIDAK ada tabel
+baru -- migrasi cuma tambah 2 kolom) → migrasi dites idempoten → database
+lokal dihapus → commit → `rsync` (exclude `.env`/`.env.production`, TANPA
+`--delete`) → `docker compose build` → restart HANYA `api`+`web`.
+
+**Catatan penting**: `.env.production` di VPS TERNYATA sudah diisi owner
+sendiri sejak 2026-11-17 17:52 (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_WEBHOOK_SECRET`,
+dikonfirmasi lewat ukuran file berubah 840→1007 byte DAN webhook sekarang
+membalas `"Secret token tidak valid"` alih-alih 503 "belum dikonfigurasi") --
+sesuai instruksi di § "Setup Manual" di bawah, dikerjakan owner sendiri,
+Claude Code TIDAK PERNAH membaca/menulis nilainya.
+
+**Smoke test production**: `/health` OK (3 modul aktif), login kredensial
+sengaja salah 401, `GET /api/notifikasi/aturan` tanpa token 401, webhook
+Telegram tanpa secret header membalas `{"error":"Secret token tidak
+valid"}` (bukan lagi 503 -- konfirmasi secret SUDAH terisi), kolom
+`diakui_pada`/`diakui_oleh` dikonfirmasi ada lewat `\d
+inventory_permintaan_transfer` di production.
+
+Backup pra-deploy diverifikasi (`gzip -t` valid, permission 600, ukuran
+2.6MB wajar) sebelum migrasi dijalankan, tersimpan sebagai
+`samsara_pre-deploy-terima-owner_2026-11-18_132043.sql.gz` di VPS. RAM
+VPS dicek dulu (782MB available + 977MB swap bebas) -- cukup. Tidak ada
+kredensial yang terbaca/tertulis ke chat/log/git sepanjang proses.
 
 ## Deploy #7: Modul Notifikasi Telegram di core (aturan, log dedup, token aksi, webhook, scheduler) (2026-11-17)
 
