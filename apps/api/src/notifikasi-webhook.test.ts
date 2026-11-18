@@ -26,10 +26,10 @@ let baseUrl: string;
 const testUserIds: number[] = [];
 const testLogIds: number[] = [];
 
-async function createTelegramUser(chatId: string): Promise<number> {
+async function createTelegramUser(chatId: string, role: string = "owner"): Promise<number> {
   const client = await pool.connect();
   try {
-    const { rows: roleRows } = await client.query<{ id: number }>(`SELECT id FROM core_roles WHERE name = 'owner'`);
+    const { rows: roleRows } = await client.query<{ id: number }>(`SELECT id FROM core_roles WHERE name = $1`, [role]);
     const passwordHash = await hashPassword("rahasia123");
     const username = `test_telegram_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const { rows } = await client.query<{ id: string }>(
@@ -45,14 +45,56 @@ async function createTelegramUser(chatId: string): Promise<number> {
   }
 }
 
-async function insertLogRow(userId: number): Promise<number> {
+const testPermintaanIds: number[] = [];
+
+/** Fixture minimal permintaan transfer -- lokasi kitchen/outlet dan item APA PUN yang sudah ada di dev DB (tidak hardcode id tertentu). */
+async function createPermintaanFixture(): Promise<number> {
+  const client = await pool.connect();
+  try {
+    const { rows: ck } = await client.query<{ id: number }>(
+      `SELECT id FROM core_locations WHERE tipe = 'kitchen' AND is_active = true LIMIT 1`,
+    );
+    const { rows: outlet } = await client.query<{ id: number }>(
+      `SELECT id FROM core_locations WHERE tipe = 'outlet' AND is_active = true LIMIT 1`,
+    );
+    const { rows: item } = await client.query<{ id: number }>(`SELECT id FROM inventory_items LIMIT 1`);
+    const kode = `PT-TEST-${Date.now()}`;
+    const { rows } = await client.query<{ id: string }>(
+      `INSERT INTO inventory_permintaan_transfer
+        (kode, location_asal_id, location_tujuan_id, item_id, qty_diminta, status, tanggal_diminta, kelompok_id)
+       VALUES ($1, $2, $3, $4, 1, 'diminta', CURRENT_DATE, 0) RETURNING id`,
+      [kode, ck[0].id, outlet[0].id, item[0].id],
+    );
+    const id = Number(rows[0].id);
+    await client.query(`UPDATE inventory_permintaan_transfer SET kelompok_id = $1 WHERE id = $1`, [id]);
+    testPermintaanIds.push(id);
+    return id;
+  } finally {
+    client.release();
+  }
+}
+
+async function getStatusDanDiakui(id: number): Promise<{ status: string; diakuiPada: string | null }> {
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query<{ status: string; diakui_pada: string | null }>(
+      `SELECT status, diakui_pada FROM inventory_permintaan_transfer WHERE id = $1`,
+      [id],
+    );
+    return { status: rows[0].status, diakuiPada: rows[0].diakui_pada };
+  } finally {
+    client.release();
+  }
+}
+
+async function insertLogRow(userId: number, kejadian: string = "opname_menunggu_persetujuan"): Promise<number> {
   const client = await pool.connect();
   try {
     const { rows } = await client.query<{ id: string }>(
       `INSERT INTO core_notifikasi_log (kejadian, user_id, kanal, dedup_key, status, judul, pesan)
-       VALUES ('opname_menunggu_persetujuan', $1, 'telegram', $2, 'terkirim', 'Judul uji', 'Pesan uji')
+       VALUES ($1, $2, 'telegram', $3, 'terkirim', 'Judul uji', 'Pesan uji')
        RETURNING id`,
-      [userId, `test-webhook-dedup-${Date.now()}-${Math.random()}`],
+      [kejadian, userId, `test-webhook-dedup-${Date.now()}-${Math.random()}`],
     );
     const logId = Number(rows[0].id);
     testLogIds.push(logId);
@@ -103,6 +145,7 @@ after(async () => {
     }
     await client.query(`DELETE FROM core_notifikasi_token_aksi WHERE notifikasi_log_id = ANY($1)`, [testLogIds]);
     await client.query(`DELETE FROM core_notifikasi_log WHERE id = ANY($1)`, [testLogIds]);
+    await client.query(`DELETE FROM inventory_permintaan_transfer WHERE id = ANY($1)`, [testPermintaanIds]);
     for (const userId of testUserIds) {
       await client.query(`DELETE FROM core_users WHERE id = $1`, [userId]);
     }
@@ -172,4 +215,54 @@ test("webhook: tombol yang sama ditekan DUA KALI -- aksi cuma benar-benar dijala
   const tokenRow = await cariTokenAksi(verifyClient, token);
   verifyClient.release();
   assert.ok(tokenRow!.dipakaiPada !== null, "token harus tercatat sudah dipakai setelah tekanan pertama");
+});
+
+test("webhook: tombol Terima oleh OWNER untuk permintaan_transfer benar-benar mengakui (diakui_pada terisi), status TETAP 'diminta'", async () => {
+  const userId = await createTelegramUser("chat-owner-1", "owner");
+  const logId = await insertLogRow(userId, "permintaan_baru_ck");
+  const permintaanId = await createPermintaanFixture();
+  const client = await pool.connect();
+  const { token } = await buatTokenAksi(client, {
+    notifikasiLogId: logId,
+    referensiTipe: "permintaan_transfer",
+    referensiId: permintaanId,
+    userIdTarget: userId,
+    roleTarget: "owner",
+    telegramChatId: "chat-owner-1",
+  });
+  client.release();
+
+  const res = await postWebhook({
+    callback_query: { id: "cb-terima-owner", data: `${token}|terima`, message: { chat: { id: "chat-owner-1" }, message_id: 3 } },
+  });
+  assert.equal(res.status, 200);
+
+  const after = await getStatusDanDiakui(permintaanId);
+  assert.equal(after.status, "diminta", "status TIDAK BOLEH berubah -- Terima bukan pemenuhan, qty belum ditentukan dari Telegram");
+  assert.ok(after.diakuiPada !== null, "diakui_pada HARUS terisi -- inilah perbaikan untuk keluhan 'Terima tidak berfungsi ke app'");
+});
+
+test("webhook: tombol Terima oleh role SELAIN owner (supervisor) TETAP cuma acknowledgment generik -- diakui_pada TIDAK terisi", async () => {
+  const userId = await createTelegramUser("chat-supervisor-1", "supervisor");
+  const logId = await insertLogRow(userId, "permintaan_baru_ck");
+  const permintaanId = await createPermintaanFixture();
+  const client = await pool.connect();
+  const { token } = await buatTokenAksi(client, {
+    notifikasiLogId: logId,
+    referensiTipe: "permintaan_transfer",
+    referensiId: permintaanId,
+    userIdTarget: userId,
+    roleTarget: "supervisor",
+    telegramChatId: "chat-supervisor-1",
+  });
+  client.release();
+
+  const res = await postWebhook({
+    callback_query: { id: "cb-terima-supervisor", data: `${token}|terima`, message: { chat: { id: "chat-supervisor-1" }, message_id: 4 } },
+  });
+  assert.equal(res.status, 200);
+
+  const after = await getStatusDanDiakui(permintaanId);
+  assert.equal(after.status, "diminta");
+  assert.equal(after.diakuiPada, null, "role selain owner TIDAK memicu aksi nyata -- tetap perilaku lama (acknowledgment generik)");
 });

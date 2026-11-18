@@ -152,6 +152,9 @@ export interface PermintaanTransferListItem {
   dikirimPada: string | null;
   diterimaPada: string | null;
   alasanTolak: string | null;
+  /** Penanda "sudah dilihat/diakui" (2026-11-18, cuma diisi lewat tombol Terima Telegram role owner) -- TIDAK berarti dipenuhi, lihat akuiPermintaan. */
+  diakuiPada: string | null;
+  diakuiOlehUsername: string | null;
   createdAt: string;
 }
 
@@ -211,6 +214,8 @@ export async function listPermintaanTransfer(
     dikirim_pada: string | null;
     diterima_pada: string | null;
     alasan_tolak: string | null;
+    diakui_pada: string | null;
+    diakui_oleh_username: string | null;
     created_at: string;
   }>(
     `SELECT p.id, p.kelompok_id, p.kode,
@@ -225,6 +230,7 @@ export async function listPermintaanTransfer(
             p.dijawab_pada, dj.username AS dijawab_oleh_username,
             t.created_at AS dikirim_pada, t.diterima_at AS diterima_pada,
             p.alasan_tolak,
+            p.diakui_pada, dak.username AS diakui_oleh_username,
             p.created_at
      FROM inventory_permintaan_transfer p
      JOIN core_locations la ON la.id = p.location_asal_id
@@ -232,6 +238,7 @@ export async function listPermintaanTransfer(
      JOIN inventory_items i ON i.id = p.item_id
      LEFT JOIN core_users u ON u.id = p.diminta_oleh
      LEFT JOIN core_users dj ON dj.id = p.dijawab_oleh
+     LEFT JOIN core_users dak ON dak.id = p.diakui_oleh
      LEFT JOIN inventory_transaksi_transfer t ON t.permintaan_id = p.id
      ${where}
      ORDER BY p.created_at DESC`,
@@ -266,6 +273,8 @@ export async function listPermintaanTransfer(
     dikirimPada: r.dikirim_pada,
     diterimaPada: r.diterima_pada,
     alasanTolak: r.alasan_tolak,
+    diakuiPada: r.diakui_pada,
+    diakuiOlehUsername: r.diakui_oleh_username,
     createdAt: r.created_at,
   }));
 }
@@ -348,6 +357,36 @@ export async function tolakPermintaan(client: PoolClient, input: TolakPermintaan
   );
 
   return { id: row.id, kode: row.kode, status: "ditolak" };
+}
+
+export interface AkuiPermintaanInput {
+  id: number;
+  userId: number;
+}
+
+export interface AkuiPermintaanResult {
+  id: number;
+  kode: string;
+}
+
+/**
+ * Tandai permintaan "diakui/dilihat" (2026-11-18, Tahap 2 notifikasi) --
+ * KHUSUS dipanggil dari tombol "Terima" Telegram oleh role owner (lihat
+ * `core/src/notifikasi/router.ts` + `notifikasi/register.ts`). SENGAJA
+ * TIDAK mengubah `status` -- permintaan TETAP 'diminta' dan tetap muncul
+ * di Layar CK sampai benar-benar dipenuhi/ditolak lewat jalur yang sudah
+ * ada (qty pengiriman cuma bisa diisi lewat Transfer Kirim sungguhan di
+ * app). Boleh dipanggil berkali-kali (idempoten -- menimpa `diakui_pada`
+ * dengan waktu terbaru), TIDAK ada validasi status seperti `tolakPermintaan`.
+ */
+export async function akuiPermintaan(client: PoolClient, input: AkuiPermintaanInput): Promise<AkuiPermintaanResult> {
+  const { rows } = await client.query<{ id: number; kode: string }>(
+    `UPDATE inventory_permintaan_transfer SET diakui_pada = now(), diakui_oleh = $1 WHERE id = $2 RETURNING id, kode`,
+    [input.userId, input.id],
+  );
+  const row = rows[0];
+  if (!row) throw new Error(`Permintaan transfer id ${input.id} tidak ditemukan`);
+  return { id: row.id, kode: row.kode };
 }
 
 export type StatusStokPermintaan = "cukup" | "kurang" | "habis";

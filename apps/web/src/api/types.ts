@@ -530,6 +530,9 @@ export interface PermintaanTransferListItem {
   dikirimPada: string | null;
   diterimaPada: string | null;
   alasanTolak: string | null;
+  /** 2026-11-18 -- "sudah dilihat/diakui" (BUKAN dipenuhi), saat ini cuma diisi lewat tombol Terima Telegram role owner. */
+  diakuiPada: string | null;
+  diakuiOlehUsername: string | null;
   createdAt: string;
 }
 

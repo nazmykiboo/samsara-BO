@@ -11,7 +11,7 @@ import {
 } from "./telegram.js";
 import { mulaiTautanTelegram, statusTautanTelegram, verifikasiKodeTautan } from "./tautan.js";
 import { cariTokenAksi, pakaiTokenAksi } from "./token.js";
-import { jalankanAksiTolak } from "./aksi-registry.js";
+import { cariHandlerAksiTerima, jalankanAksiTolak } from "./aksi-registry.js";
 import {
   createAturanNotifikasi,
   deleteAturanNotifikasi,
@@ -150,9 +150,25 @@ async function tanganiCallback(
 
   let ringkasan: string;
   if (parsed.aksi === "terima") {
-    // "Terima" TIDAK PERNAH menggerakkan stok (instruksi eksplisit owner) --
-    // murni pengakuan sosial, TIDAK lewat aksi-registry sama sekali.
-    ringkasan = `✅ Diterima oleh ${pengirim.username}`;
+    // "Terima" untuk role SELAIN owner TETAP murni pengakuan sosial (TIDAK
+    // PERNAH menggerakkan apa pun) -- instruksi eksplisit owner. KHUSUS
+    // role owner (2026-11-18, Tahap 2: CK belum ada tim, owner yang
+    // menjalankan semuanya sendiri), cek dulu ada handler terdaftar untuk
+    // referensiTipe ini (lihat modules/inventory/src/notifikasi/register.ts)
+    // -- kalau ADA, jalankan aksi SUNGGUHAN; kalau TIDAK ada handler
+    // terdaftar, jatuh balik ke pengakuan generik yang sama seperti role lain.
+    const handlerTerima = pengirim.role === "owner" ? await cariHandlerAksiTerima(tokenRow.referensiTipe) : null;
+    if (handlerTerima) {
+      const hasil = await handlerTerima({
+        client,
+        referensiId: tokenRow.referensiId,
+        userId: Number(pengirim.id),
+        role: pengirim.role,
+      });
+      ringkasan = `✅ ${hasil.ringkasan} (oleh ${pengirim.username})`;
+    } else {
+      ringkasan = `✅ Diterima oleh ${pengirim.username}`;
+    }
   } else {
     const alasanPreset = tokenRow.alasanPresetTolak?.[parsed.presetIndex ?? 0];
     const hasil = await jalankanAksiTolak(tokenRow.referensiTipe, {
@@ -160,6 +176,7 @@ async function tanganiCallback(
       referensiId: tokenRow.referensiId,
       alasanPreset,
       userId: Number(pengirim.id),
+      role: pengirim.role,
     });
     ringkasan = `❌ ${hasil.ringkasan} (oleh ${pengirim.username})`;
   }

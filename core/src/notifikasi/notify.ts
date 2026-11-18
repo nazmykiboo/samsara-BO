@@ -8,15 +8,16 @@ import { KEJADIAN_AMBANG_JAM, type NotifikasiEvent } from "./types.js";
 
 const APP_BASE_URL = process.env.APP_BASE_URL ?? "https://burnas-app.duckdns.org";
 
+/** 1 baris = 1 tombol (instruksi owner, 2026-11-18) -- termasuk alasan preset Tolak, supaya tiap tombol gampang dibaca/ditekan di layar kecil Telegram. */
 function buildKeyboard(event: NotifikasiEvent, token: string | null): TelegramInlineKeyboard {
   const rows: TelegramInlineButton[][] = [];
   if (token && event.aksi) {
     rows.push([{ text: "✅ Terima", callbackData: `${token}|terima` }]);
     const presets = event.aksi.alasanPresetTolak ?? [];
     if (presets.length > 0) {
-      rows.push(
-        presets.map((label, i) => ({ text: `❌ ${label}`, callbackData: `${token}|tolak|${i}` })),
-      );
+      for (const [i, label] of presets.entries()) {
+        rows.push([{ text: `❌ ${label}`, callbackData: `${token}|tolak|${i}` }]);
+      }
     } else {
       rows.push([{ text: "❌ Tolak", callbackData: `${token}|tolak|0` }]);
     }

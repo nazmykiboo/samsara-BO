@@ -197,6 +197,12 @@ export function PermintaanMasukPanel() {
                           {r.status === "ditolak" && r.alasanTolak ? (
                             <p className="mt-1 text-xs text-red-600">Alasan ditolak: {r.alasanTolak}</p>
                           ) : null}
+                          {r.status === "diminta" && r.diakuiPada ? (
+                            <p className="mt-1 text-xs text-slate-400">
+                              Diakui {formatWaktu(r.diakuiPada)}{r.diakuiOlehUsername ? ` oleh ${r.diakuiOlehUsername}` : ""}
+                              {" "}(belum dipenuhi -- siapkan & kirim lewat tombol Penuhi)
+                            </p>
+                          ) : null}
                           {r.status !== "diminta" ? (
                             <p className="mt-1 text-xs text-slate-400">
                               {r.dijawabPada ? `Dijawab ${formatWaktu(r.dijawabPada)}${r.dijawabOlehUsername ? ` oleh ${r.dijawabOlehUsername}` : ""}` : null}

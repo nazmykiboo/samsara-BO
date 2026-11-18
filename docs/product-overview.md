@@ -318,14 +318,29 @@ untuk Burnas (`burnas-ops.duckdns.org`, lihat `CLAUDE.md`) tidak disentuh.
   (`POST /api/telegram/webhook`, header `X-Telegram-Bot-Api-Secret-Token`)
   verifikasi pengirim (chat id HARUS sama dengan target token) DAN role
   terkini user di database (bukan snapshot token) sebelum menjalankan apa
-  pun. **"Terima" SENGAJA TIDAK PERNAH menggerakkan stok** (murni
-  pengakuan sosial + audit log `source='telegram'`) — approval sungguhan
-  tetap lewat tombol "Buka di app". "Tolak" (dengan alasan preset) memang
-  menjalankan aksi nyata (`tolakPermintaan`/`decideOpname` 'tolak') lewat
-  pola registry `registerAksiNotifikasi` (modul bisnis mendaftar handler
-  saat boot, core TIDAK PERNAH import modul bisnis — arah dependency
-  tetap modul→core) karena "tolak" tidak pernah menggerakkan stok sama
-  sekali di kedua domain itu, jadi aman dieksekusi dari Telegram.
+  pun. "Tolak" (dengan alasan preset) SELALU menjalankan aksi nyata
+  (`tolakPermintaan`/`decideOpname` 'tolak') untuk semua role yang
+  berwenang, lewat pola registry `registerAksiNotifikasi` (modul bisnis
+  mendaftar handler saat boot, core TIDAK PERNAH import modul bisnis —
+  arah dependency tetap modul→core) — aman karena "tolak" tidak pernah
+  menggerakkan stok di kedua domain yang terdaftar.
+  **"Terima" dibedakan per role (2026-11-18, Tahap 2)**: untuk role
+  SELAIN owner, tetap murni pengakuan sosial seperti semula (TIDAK PERNAH
+  menggerakkan apa pun). **Untuk role owner** (CK belum ada tim, owner
+  menjalankan semuanya sendiri) — "Terima" sekarang benar-benar berefek
+  sesuai domainnya: untuk `opname_menunggu_persetujuan`, memanggil
+  `decideOpname('setuju')` sungguhan (approval nyata, posting ledger —
+  aman karena angka fisik/sistem sudah direkam lengkap saat opname
+  dibuat, "setuju" cuma mengunci angka yang SUDAH ADA, bukan angka baru
+  dari Telegram); untuk `permintaan_baru_ck`, memanggil `akuiPermintaan`
+  (migrasi inventory 0035, kolom `diakui_pada`/`diakui_oleh`) yang
+  **SENGAJA TIDAK mengubah status/menggerakkan stok** — qty pengiriman
+  tetap wajib lewat Transfer Kirim sungguhan di app (tombol "Buka di
+  app"), cuma menandai "sudah dilihat owner" supaya permintaan tidak lagi
+  terasa "tidak berfungsi ke app" walau status Layar CK-nya tetap
+  'diminta' sampai benar-benar dikirim. Keyboard Telegram sekarang SELALU
+  1 baris 1 tombol (termasuk tiap alasan preset Tolak), bukan beberapa
+  tombol digabung sebaris.
 - **Kanal email cuma antarmuka** (`core/src/notifikasi/kanal/email.ts`) —
   implementasi SMTP SENGAJA ditunda (instruksi eksplisit owner), status
   log `'ditunda'` (beda dari `'gagal'`) sampai diimplementasikan.
